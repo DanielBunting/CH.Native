@@ -19,7 +19,7 @@ public class BulkInsertComparisonBenchmarks
     private string _httpConnectionString = null!;
     private InsertRow[] _testData = null!;
 
-    [Params(1_000, 10_000, 100_000)]
+    [Params(10_000, 100_000, 1_000_000)]
     public int RowCount { get; set; }
 
     [GlobalSetup]
@@ -78,6 +78,9 @@ public class BulkInsertComparisonBenchmarks
             BatchSize = 10_000
         };
 
+        // Initialize column metadata first
+        await bulkCopy.InitAsync();
+
         // Convert to object[][] format required by ClickHouseBulkCopy
         var rows = _testData.Select(r => new object[] { r.Id, r.Name, r.Value });
         await bulkCopy.WriteToServerAsync(rows);
@@ -120,6 +123,9 @@ public class BulkInsertComparisonBenchmarks
             DestinationTableName = TestDataGenerator.InsertTable,
             BatchSize = 10_000
         };
+
+        // Initialize column metadata first
+        await bulkCopy.InitAsync();
 
         await bulkCopy.WriteToServerAsync(GenerateRows());
 

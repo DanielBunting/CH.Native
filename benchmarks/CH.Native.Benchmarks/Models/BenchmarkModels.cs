@@ -1,3 +1,5 @@
+using CH.Native.Mapping;
+
 namespace CH.Native.Benchmarks.Models;
 
 /// <summary>
@@ -44,8 +46,13 @@ public class ComplexRow
 /// </summary>
 public class InsertRow
 {
+    [ClickHouseColumn(Name = "id", Order = 0)]
     public long Id { get; set; }
+
+    [ClickHouseColumn(Name = "name", Order = 1)]
     public string Name { get; set; } = string.Empty;
+
+    [ClickHouseColumn(Name = "value", Order = 2)]
     public double Value { get; set; }
 }
 

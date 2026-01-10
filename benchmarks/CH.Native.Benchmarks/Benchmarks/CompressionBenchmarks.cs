@@ -22,6 +22,9 @@ public class CompressionBenchmarks
 
     private string _query = null!;
 
+    [Params(100_000, 1_000_000)]
+    public int RowCount { get; set; }
+
     [GlobalSetup]
     public async Task GlobalSetup()
     {
@@ -50,8 +53,12 @@ public class CompressionBenchmarks
         _httpGzip = new HttpConnection(
             $"{manager.HttpConnectionString};Compression=true");
         await _httpGzip.OpenAsync();
+    }
 
-        _query = $"SELECT * FROM {TestDataGenerator.LargeTable} LIMIT 100000";
+    [IterationSetup]
+    public void IterationSetup()
+    {
+        _query = $"SELECT * FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}";
     }
 
     [GlobalCleanup]
@@ -66,7 +73,7 @@ public class CompressionBenchmarks
 
     // --- Native without compression ---
 
-    [Benchmark(Description = "100K rows - Native (no compression)")]
+    [Benchmark(Description = "Native (no compression)")]
     public async Task<int> Native_NoCompression()
     {
         int count = 0;
@@ -79,7 +86,7 @@ public class CompressionBenchmarks
 
     // --- Native with LZ4 ---
 
-    [Benchmark(Description = "100K rows - Native (LZ4)")]
+    [Benchmark(Description = "Native (LZ4)")]
     public async Task<int> Native_LZ4()
     {
         int count = 0;
@@ -92,7 +99,7 @@ public class CompressionBenchmarks
 
     // --- Native with Zstd ---
 
-    [Benchmark(Description = "100K rows - Native (Zstd)")]
+    [Benchmark(Description = "Native (Zstd)")]
     public async Task<int> Native_Zstd()
     {
         int count = 0;
@@ -105,7 +112,7 @@ public class CompressionBenchmarks
 
     // --- HTTP without compression ---
 
-    [Benchmark(Description = "100K rows - HTTP (no compression)")]
+    [Benchmark(Description = "HTTP (no compression)")]
     public async Task<int> Http_NoCompression()
     {
         using var cmd = _httpNoCompression.CreateCommand();
@@ -122,7 +129,7 @@ public class CompressionBenchmarks
 
     // --- HTTP with gzip ---
 
-    [Benchmark(Description = "100K rows - HTTP (gzip)")]
+    [Benchmark(Description = "HTTP (gzip)")]
     public async Task<int> Http_Gzip()
     {
         using var cmd = _httpGzip.CreateCommand();
