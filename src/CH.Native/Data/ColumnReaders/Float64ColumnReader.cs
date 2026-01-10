@@ -1,0 +1,41 @@
+using System.Buffers;
+using System.Buffers.Binary;
+using CH.Native.Protocol;
+
+namespace CH.Native.Data.ColumnReaders;
+
+/// <summary>
+/// Column reader for Float64 (double) values.
+/// </summary>
+public sealed class Float64ColumnReader : IColumnReader<double>
+{
+    /// <inheritdoc />
+    public string TypeName => "Float64";
+
+    /// <inheritdoc />
+    public Type ClrType => typeof(double);
+
+    /// <inheritdoc />
+    public double ReadValue(ref ProtocolReader reader)
+    {
+        var bytes = reader.ReadBytes(sizeof(double));
+        return BinaryPrimitives.ReadDoubleLittleEndian(bytes.Span);
+    }
+
+    /// <inheritdoc />
+    public TypedColumn<double> ReadTypedColumn(ref ProtocolReader reader, int rowCount)
+    {
+        var pool = ArrayPool<double>.Shared;
+        var values = pool.Rent(rowCount);
+        for (int i = 0; i < rowCount; i++)
+        {
+            values[i] = ReadValue(ref reader);
+        }
+        return new TypedColumn<double>(values, rowCount, pool);
+    }
+
+    ITypedColumn IColumnReader.ReadTypedColumn(ref ProtocolReader reader, int rowCount)
+    {
+        return ReadTypedColumn(ref reader, rowCount);
+    }
+}

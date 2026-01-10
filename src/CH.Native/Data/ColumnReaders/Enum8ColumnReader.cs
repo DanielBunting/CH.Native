@@ -1,0 +1,40 @@
+using System.Buffers;
+using CH.Native.Protocol;
+
+namespace CH.Native.Data.ColumnReaders;
+
+/// <summary>
+/// Column reader for Enum8 values.
+/// Enum8 is stored as an Int8 (sbyte) on the wire.
+/// </summary>
+public sealed class Enum8ColumnReader : IColumnReader<sbyte>
+{
+    /// <inheritdoc />
+    public string TypeName => "Enum8";
+
+    /// <inheritdoc />
+    public Type ClrType => typeof(sbyte);
+
+    /// <inheritdoc />
+    public sbyte ReadValue(ref ProtocolReader reader)
+    {
+        return (sbyte)reader.ReadByte();
+    }
+
+    /// <inheritdoc />
+    public TypedColumn<sbyte> ReadTypedColumn(ref ProtocolReader reader, int rowCount)
+    {
+        var pool = ArrayPool<sbyte>.Shared;
+        var values = pool.Rent(rowCount);
+        for (int i = 0; i < rowCount; i++)
+        {
+            values[i] = (sbyte)reader.ReadByte();
+        }
+        return new TypedColumn<sbyte>(values, rowCount, pool);
+    }
+
+    ITypedColumn IColumnReader.ReadTypedColumn(ref ProtocolReader reader, int rowCount)
+    {
+        return ReadTypedColumn(ref reader, rowCount);
+    }
+}
