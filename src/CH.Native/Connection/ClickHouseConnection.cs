@@ -2051,9 +2051,9 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 }
             }
 
-            // Compress and write
-            var compressed = CompressedBlock.Compress(uncompressedBuffer.WrittenSpan, compressor);
-            writer.WriteBytes(compressed);
+            // Compress and write (using pooled buffers to reduce GC pressure)
+            using var compressed = CompressedBlock.CompressPooled(uncompressedBuffer.WrittenSpan, compressor);
+            writer.WriteBytes(compressed.Span);
         }
         finally
         {

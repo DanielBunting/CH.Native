@@ -433,9 +433,9 @@ public sealed class Block
             var tempWriter = new ProtocolWriter(uncompressedBuffer);
             WriteBlockDataWithoutTableName(ref tempWriter, BlockInfo.Default, 0, 0);
 
-            // Compress and write
-            var compressed = CompressedBlock.Compress(uncompressedBuffer.WrittenSpan, compressor);
-            writer.WriteBytes(compressed);
+            // Compress and write (using pooled buffers to reduce GC pressure)
+            using var compressed = CompressedBlock.CompressPooled(uncompressedBuffer.WrittenSpan, compressor);
+            writer.WriteBytes(compressed.Span);
         }
     }
 
@@ -566,8 +566,8 @@ public sealed class Block
             }
         }
 
-        // Compress and write
-        var compressed = CompressedBlock.Compress(uncompressedBuffer.WrittenSpan, compressor);
-        writer.WriteBytes(compressed);
+        // Compress and write (using pooled buffers to reduce GC pressure)
+        using var compressed = CompressedBlock.CompressPooled(uncompressedBuffer.WrittenSpan, compressor);
+        writer.WriteBytes(compressed.Span);
     }
 }

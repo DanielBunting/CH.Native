@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using CH.Native.Protocol;
 
@@ -24,10 +25,54 @@ public static class CompressedBlock
 
     /// <summary>
     /// Compresses data and wraps it in the ClickHouse compressed block format.
+    /// Returns a pooled result that must be disposed after use.
+    /// </summary>
+    /// <param name="data">The uncompressed data.</param>
+    /// <param name="compressor">The compressor to use.</param>
+    /// <returns>The compressed block including checksum and header. Must be disposed after use.</returns>
+    public static CompressedResult CompressPooled(ReadOnlySpan<byte> data, ICompressor compressor)
+    {
+        // Get maximum compressed size and rent buffer from pool
+        var maxCompressedSize = compressor.GetMaxCompressedSize(data.Length);
+        var compressedBuffer = ArrayPool<byte>.Shared.Rent(maxCompressedSize);
+
+        try
+        {
+            // Compress the data
+            var compressedLength = compressor.Compress(data, compressedBuffer);
+
+            // Build the result: checksum (16) + header (9) + compressed data
+            var totalSize = ChecksumSize + HeaderSize + compressedLength;
+            var result = ArrayPool<byte>.Shared.Rent(totalSize);
+
+            // Write header after checksum space (at offset 16)
+            // Header format: algorithm (1) + compressed_size (4) + uncompressed_size (4)
+            result[ChecksumSize] = compressor.AlgorithmId;
+            BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(ChecksumSize + 1), (uint)(HeaderSize + compressedLength));
+            BinaryPrimitives.WriteUInt32LittleEndian(result.AsSpan(ChecksumSize + 5), (uint)data.Length);
+
+            // Copy compressed data
+            compressedBuffer.AsSpan(0, compressedLength).CopyTo(result.AsSpan(ChecksumSize + HeaderSize));
+
+            // Calculate and write checksum (hash of everything after checksum)
+            CityHash128.HashBytes(result.AsSpan(ChecksumSize, totalSize - ChecksumSize), result.AsSpan(0, ChecksumSize));
+
+            return new CompressedResult(result, totalSize);
+        }
+        finally
+        {
+            // Return the temporary compression buffer immediately
+            ArrayPool<byte>.Shared.Return(compressedBuffer);
+        }
+    }
+
+    /// <summary>
+    /// Compresses data and wraps it in the ClickHouse compressed block format.
     /// </summary>
     /// <param name="data">The uncompressed data.</param>
     /// <param name="compressor">The compressor to use.</param>
     /// <returns>The compressed block including checksum and header.</returns>
+    [Obsolete("Use CompressPooled for better performance. This method allocates new arrays.")]
     public static byte[] Compress(ReadOnlySpan<byte> data, ICompressor compressor)
     {
         // Get maximum compressed size and allocate buffer
@@ -191,5 +236,46 @@ public static class CompressedBlock
             CompressionMethod.Zstd => ZstdCompressor.Instance,
             _ => throw new ArgumentOutOfRangeException(nameof(method), method, "Unknown compression method")
         };
+    }
+}
+
+/// <summary>
+/// Represents a compressed block result using a pooled byte array.
+/// Must be disposed after use to return the buffer to the pool.
+/// </summary>
+public readonly struct CompressedResult : IDisposable
+{
+    private readonly byte[] _buffer;
+
+    /// <summary>
+    /// Gets the length of the actual compressed data (may be less than buffer length).
+    /// </summary>
+    public int Length { get; }
+
+    /// <summary>
+    /// Gets the compressed data as a span.
+    /// </summary>
+    public ReadOnlySpan<byte> Span => _buffer.AsSpan(0, Length);
+
+    /// <summary>
+    /// Gets the compressed data as memory.
+    /// </summary>
+    public ReadOnlyMemory<byte> Memory => _buffer.AsMemory(0, Length);
+
+    internal CompressedResult(byte[] buffer, int length)
+    {
+        _buffer = buffer;
+        Length = length;
+    }
+
+    /// <summary>
+    /// Returns the buffer to the array pool.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_buffer != null)
+        {
+            ArrayPool<byte>.Shared.Return(_buffer);
+        }
     }
 }
