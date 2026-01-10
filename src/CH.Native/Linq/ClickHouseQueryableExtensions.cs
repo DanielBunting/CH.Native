@@ -13,7 +13,7 @@ public static class ClickHouseQueryableExtensions
 
     /// <summary>
     /// Creates a queryable for the specified entity type.
-    /// Table name is resolved from [ClickHouseTable] attribute or snake_case type name.
+    /// Table name is resolved using snake_case conversion of the type name.
     /// </summary>
     /// <typeparam name="T">The entity type. Must have a parameterless constructor for result mapping.</typeparam>
     /// <param name="connection">The connection to query against.</param>
@@ -31,8 +31,7 @@ public static class ClickHouseQueryableExtensions
             throw new InvalidOperationException("Connection must be open before creating a queryable.");
 
         var tableName = TableNameResolver.Resolve<T>();
-        var columnNames = TableNameResolver.GetColumnNames<T>();
-        var context = new ClickHouseQueryContext(connection, tableName, typeof(T), columnNames);
+        var context = new ClickHouseQueryContext(connection, tableName, typeof(T), columnNames: null);
 
         return new ClickHouseQueryable<T>(context);
     }
@@ -51,8 +50,7 @@ public static class ClickHouseQueryableExtensions
 
         ArgumentException.ThrowIfNullOrWhiteSpace(tableName);
 
-        var columnNames = TableNameResolver.GetColumnNames<T>();
-        var context = new ClickHouseQueryContext(connection, tableName, typeof(T), columnNames);
+        var context = new ClickHouseQueryContext(connection, tableName, typeof(T), columnNames: null);
 
         return new ClickHouseQueryable<T>(context);
     }

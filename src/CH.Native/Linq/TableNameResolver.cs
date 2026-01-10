@@ -1,50 +1,26 @@
 using System.Text;
-using CH.Native.Mapping;
 
 namespace CH.Native.Linq;
 
 /// <summary>
 /// Resolves ClickHouse table and column names for entity types.
-/// Uses generated mappers when available, falls back to snake_case convention.
+/// Uses snake_case convention for name conversion.
 /// </summary>
 internal static class TableNameResolver
 {
     /// <summary>
-    /// Resolves the table name for type T.
-    /// Priority:
-    /// 1. Generated mapper's TableName (from [ClickHouseTable] attribute)
-    /// 2. Snake_case conversion of type name
+    /// Resolves the table name for type T using snake_case conversion.
     /// </summary>
     public static string Resolve<T>()
     {
-        if (GeneratedMapperHelper.TryGetTableName<T>(out var tableName) && tableName is not null)
-        {
-            return tableName;
-        }
-
         return ToSnakeCase(typeof(T).Name);
     }
 
     /// <summary>
-    /// Gets column names from generated mapper if available.
-    /// </summary>
-    public static string[]? GetColumnNames<T>()
-    {
-        if (GeneratedMapperHelper.TryGetColumnNames<T>(out var columnNames))
-        {
-            return columnNames;
-        }
-        return null;
-    }
-
-    /// <summary>
-    /// Resolves a property name to a column name.
-    /// Uses generated mapper column names if available, otherwise converts to snake_case.
+    /// Resolves a property name to a column name using snake_case conversion.
     /// </summary>
     public static string ResolveColumnName<T>(string propertyName)
     {
-        // For now, use snake_case conversion
-        // In the future, we could add property-to-column mapping from generated mapper
         return ToSnakeCase(propertyName);
     }
 

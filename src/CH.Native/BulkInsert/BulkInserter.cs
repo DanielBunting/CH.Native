@@ -33,10 +33,6 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     private IColumnExtractor<T>[]? _extractors;
     private bool _useDirectPath;
 
-    // Generated mapper support
-    private MethodInfo? _writeRowMethod;
-    private bool _useGeneratedMapper;
-
     /// <summary>
     /// Creates a new bulk inserter for the specified table.
     /// </summary>
@@ -220,32 +216,11 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
 
     private List<PropertyMapping> GetPropertyMappings()
     {
-        // Check for generated mapper first
-        if (GeneratedMapperHelper.TryGetColumnNames<T>(out var generatedColumnNames) &&
-            GeneratedMapperHelper.TryGetWriteRowMethod<T>(out _writeRowMethod))
-        {
-            _useGeneratedMapper = true;
-
-            // Create property mappings from generated column names
-            // Note: For generated mappers, we just need the column names - actual value extraction
-            // is done by the generated WriteRow method
-            return generatedColumnNames!.Select(name => new PropertyMapping
-            {
-                Property = null, // Not needed for generated mapper path
-                ColumnName = name,
-                Order = 0
-            }).ToList();
-        }
-
-        // Fall back to reflection-based mapping
+        // Use reflection-based mapping
         var properties = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.CanRead)
             .Select(p =>
             {
-                // Check new ClickHouseIgnoreAttribute first
-                if (p.GetCustomAttribute<ClickHouseIgnoreAttribute>() != null)
-                    return null;
-
                 // Check deprecated ColumnAttribute
 #pragma warning disable CS0618 // Type or member is obsolete
                 var legacyAttr = p.GetCustomAttribute<ColumnAttribute>();
@@ -293,7 +268,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         var matchedTypes = new List<string>();
         var matchedGetters = new List<Func<T, object?>>();
         var matchedExtractors = new List<IColumnExtractor<T>>();
-        var canUseDirectPath = !_useGeneratedMapper; // Don't use direct path if using generated mapper
+        var canUseDirectPath = true;
 
         foreach (var mapping in propertyMappings)
         {
@@ -307,10 +282,6 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
 
             matchedNames.Add(mapping.ColumnName);
             matchedTypes.Add(schemaInfo.Type);
-
-            // Skip getter creation for generated mapper path
-            if (_useGeneratedMapper)
-                continue;
 
             matchedGetters.Add(CreateGetter(mapping.Property!));
 
@@ -332,16 +303,12 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
 
         _columnNames = matchedNames.ToArray();
         _columnTypes = matchedTypes.ToArray();
+        _getters = matchedGetters.ToArray();
 
-        if (!_useGeneratedMapper)
+        if (canUseDirectPath && matchedExtractors.Count == matchedNames.Count)
         {
-            _getters = matchedGetters.ToArray();
-
-            if (canUseDirectPath && matchedExtractors.Count == matchedNames.Count)
-            {
-                _extractors = matchedExtractors.ToArray();
-                _useDirectPath = true;
-            }
+            _extractors = matchedExtractors.ToArray();
+            _useDirectPath = true;
         }
     }
 
@@ -367,38 +334,13 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             columnData[col] = new object?[rowCount];
         }
 
-        if (_useGeneratedMapper && _writeRowMethod != null)
+        // Extract values row by row using reflection-based getters
+        for (int row = 0; row < rowCount; row++)
         {
-            // Use generated mapper's WriteRow method
-            var values = new object?[columnCount];
-            var parameters = new object?[2];
-            parameters[1] = values;
-
-            for (int row = 0; row < rowCount; row++)
+            var item = _buffer[row];
+            for (int col = 0; col < columnCount; col++)
             {
-                var item = _buffer[row];
-                parameters[0] = item;
-
-                // WriteRow(T row, object?[] values)
-                _writeRowMethod.Invoke(null, parameters);
-
-                // Copy from row-major (values) to column-major (columnData)
-                for (int col = 0; col < columnCount; col++)
-                {
-                    columnData[col][row] = values[col];
-                }
-            }
-        }
-        else
-        {
-            // Extract values row by row using reflection-based getters
-            for (int row = 0; row < rowCount; row++)
-            {
-                var item = _buffer[row];
-                for (int col = 0; col < columnCount; col++)
-                {
-                    columnData[col][row] = _getters![col](item);
-                }
+                columnData[col][row] = _getters![col](item);
             }
         }
 

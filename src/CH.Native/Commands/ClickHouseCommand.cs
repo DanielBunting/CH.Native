@@ -116,31 +116,16 @@ public sealed class ClickHouseCommand : IAsyncDisposable
         if (!await reader.ReadAsync(cancellationToken))
             yield break;
 
-        // Try to use generated mapper first (AOT-compatible, no reflection during mapping)
-        if (GeneratedMapperHelper.TryGetReadRow<T>(out var readRow))
-        {
-            // Map the first row using generated mapper
-            yield return readRow!(reader);
+        // Use reflection-based TypeMapper
+        var mapper = new TypeMapper<T>(reader);
 
-            // Map remaining rows
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                yield return readRow(reader);
-            }
-        }
-        else
-        {
-            // Fall back to reflection-based TypeMapper
-            var mapper = new TypeMapper<T>(reader);
+        // Map the first row
+        yield return mapper.Map(reader);
 
-            // Map the first row
+        // Map remaining rows
+        while (await reader.ReadAsync(cancellationToken))
+        {
             yield return mapper.Map(reader);
-
-            // Map remaining rows
-            while (await reader.ReadAsync(cancellationToken))
-            {
-                yield return mapper.Map(reader);
-            }
         }
     }
 

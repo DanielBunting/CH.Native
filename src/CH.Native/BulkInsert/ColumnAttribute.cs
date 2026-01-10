@@ -4,10 +4,9 @@ namespace CH.Native.BulkInsert;
 /// Specifies column mapping metadata for bulk insert operations.
 /// </summary>
 /// <remarks>
-/// This attribute is deprecated. Use <see cref="CH.Native.Mapping.ClickHouseColumnAttribute"/> instead
-/// for source-generated mapping, or <see cref="CH.Native.Mapping.ClickHouseIgnoreAttribute"/> to ignore properties.
+/// This attribute is deprecated. Use <see cref="CH.Native.Mapping.ClickHouseColumnAttribute"/> instead.
 /// </remarks>
-[Obsolete("Use CH.Native.Mapping.ClickHouseColumnAttribute instead for source-generated mapping.")]
+[Obsolete("Use CH.Native.Mapping.ClickHouseColumnAttribute instead.")]
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false)]
 public sealed class ColumnAttribute : Attribute
 {
