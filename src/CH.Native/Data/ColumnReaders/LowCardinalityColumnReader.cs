@@ -1,3 +1,4 @@
+using System.Buffers;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnReaders;
@@ -92,7 +93,74 @@ public sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
         // Read dictionary size
         var dictSize = reader.ReadUInt64();
 
-        // Read dictionary values
+        // Read dictionary values - keep the column alive during index resolution
+        using var dictColumn = dictSize > 0
+            ? _innerReader.ReadTypedColumn(ref reader, (int)dictSize)
+            : null;
+
+        // Read number of indices (should match rowCount)
+        var indexCount = reader.ReadUInt64();
+
+        // Use pooled array for the result
+        var pool = ArrayPool<T>.Shared;
+        var result = pool.Rent(rowCount);
+
+        // Read indices and resolve to actual values directly from dictColumn
+        for (int i = 0; i < rowCount; i++)
+        {
+            var index = indexType switch
+            {
+                IndexTypeUInt8 => reader.ReadByte(),
+                IndexTypeUInt16 => reader.ReadUInt16(),
+                IndexTypeUInt32 => reader.ReadUInt32(),
+                IndexTypeUInt64 => reader.ReadUInt64(),
+                _ => throw new NotSupportedException($"Unknown LowCardinality index type: {indexType}")
+            };
+
+            // Resolve dictionary lookup directly from the inner column
+            if (dictColumn != null && index < (ulong)dictColumn.Count)
+            {
+                result[i] = dictColumn[(int)index];
+            }
+            else
+            {
+                // Index out of range or empty dictionary - this shouldn't happen with valid data
+                result[i] = default!;
+            }
+        }
+
+        return new TypedColumn<T>(result, rowCount, pool);
+    }
+
+    ITypedColumn IColumnReader.ReadTypedColumn(ref ProtocolReader reader, int rowCount)
+    {
+        // Return optimized DictionaryEncodedColumn that preserves dictionary encoding
+        return ReadDictionaryEncodedColumn(ref reader, rowCount);
+    }
+
+    /// <summary>
+    /// Reads LowCardinality column data into a DictionaryEncodedColumn for optimal memory usage.
+    /// This preserves dictionary encoding instead of expanding to full arrays.
+    /// </summary>
+    /// <param name="reader">The protocol reader.</param>
+    /// <param name="rowCount">The number of rows.</param>
+    /// <returns>A dictionary-encoded column with lazy per-row access.</returns>
+    public DictionaryEncodedColumn<T> ReadDictionaryEncodedColumn(ref ProtocolReader reader, int rowCount)
+    {
+        if (rowCount == 0)
+            return new DictionaryEncodedColumn<T>(Array.Empty<T>(), Array.Empty<int>(), 0, null);
+
+        // Read serialization state/version
+        var version = reader.ReadUInt64();
+
+        // Read index type and flags
+        var flags = reader.ReadUInt64();
+        var indexType = (int)(flags & 0xFF);
+
+        // Read dictionary size
+        var dictSize = reader.ReadUInt64();
+
+        // Read dictionary values (small, worth keeping as regular array)
         T[] dictionary;
         if (dictSize > 0)
         {
@@ -111,37 +179,22 @@ public sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
         // Read number of indices (should match rowCount)
         var indexCount = reader.ReadUInt64();
 
-        // Read indices and resolve to actual values
-        var result = new T[rowCount];
+        // Read indices into pooled array
+        var indicesPool = ArrayPool<int>.Shared;
+        var indices = indicesPool.Rent(rowCount);
 
         for (int i = 0; i < rowCount; i++)
         {
-            var index = indexType switch
+            indices[i] = indexType switch
             {
                 IndexTypeUInt8 => reader.ReadByte(),
                 IndexTypeUInt16 => reader.ReadUInt16(),
-                IndexTypeUInt32 => reader.ReadUInt32(),
-                IndexTypeUInt64 => reader.ReadUInt64(),
+                IndexTypeUInt32 => (int)reader.ReadUInt32(),
+                IndexTypeUInt64 => (int)reader.ReadUInt64(),
                 _ => throw new NotSupportedException($"Unknown LowCardinality index type: {indexType}")
             };
-
-            // Resolve dictionary lookup
-            if (index < (ulong)dictionary.Length)
-            {
-                result[i] = dictionary[index];
-            }
-            else
-            {
-                // Index out of range - this shouldn't happen with valid data
-                result[i] = default!;
-            }
         }
 
-        return new TypedColumn<T>(result);
-    }
-
-    ITypedColumn IColumnReader.ReadTypedColumn(ref ProtocolReader reader, int rowCount)
-    {
-        return ReadTypedColumn(ref reader, rowCount);
+        return new DictionaryEncodedColumn<T>(dictionary, indices, rowCount, indicesPool);
     }
 }

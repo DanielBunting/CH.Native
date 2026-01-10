@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Frozen;
 using CH.Native.Data.ColumnSkippers;
 
@@ -10,6 +11,7 @@ namespace CH.Native.Data;
 public sealed class ColumnSkipperRegistry
 {
     private readonly FrozenDictionary<string, IColumnSkipper> _skippers;
+    private readonly ConcurrentDictionary<string, IColumnSkipper> _parameterizedCache = new();
 
     /// <summary>
     /// Gets the default registry with all built-in column skippers.
@@ -29,20 +31,30 @@ public sealed class ColumnSkipperRegistry
     /// <exception cref="NotSupportedException">Thrown if the type is not supported.</exception>
     public IColumnSkipper GetSkipper(string typeName)
     {
-        // Try exact match first
+        // Try exact match first (simple types)
         if (_skippers.TryGetValue(typeName, out var skipper))
         {
             return skipper;
         }
 
-        // Handle parameterized types using the factory
+        // Check parameterized cache (composite types like Array(Int32), Nullable(String))
+        if (_parameterizedCache.TryGetValue(typeName, out skipper))
+        {
+            return skipper;
+        }
+
+        // Handle parameterized types using the factory with caching
         var baseType = ExtractBaseType(typeName);
 
         // Check if this is a composite type that needs factory handling
         if (IsCompositeType(baseType))
         {
-            var factory = new ColumnSkipperFactory(this);
-            return factory.CreateSkipper(typeName);
+            // Use GetOrAdd to ensure thread-safe caching of parameterized type skippers
+            return _parameterizedCache.GetOrAdd(typeName, static (key, registry) =>
+            {
+                var factory = new ColumnSkipperFactory(registry);
+                return factory.CreateSkipper(key);
+            }, this);
         }
 
         // For simple parameterized types (e.g., Enum8('foo' = 1)), try base type lookup
@@ -81,6 +93,88 @@ public sealed class ColumnSkipperRegistry
     public bool TryGetSkipper(string typeName, out IColumnSkipper? skipper)
     {
         return _skippers.TryGetValue(typeName, out skipper);
+    }
+
+    /// <summary>
+    /// Tries to get a column skipper by comparing UTF-8 bytes directly.
+    /// This avoids string allocation during the scan pass for common types.
+    /// </summary>
+    /// <param name="typeNameUtf8">The UTF-8 encoded type name bytes.</param>
+    /// <returns>The skipper if found, null if the type requires string-based lookup.</returns>
+    public IColumnSkipper? TryGetSkipperByBytes(ReadOnlySpan<byte> typeNameUtf8)
+    {
+        // Fast path: check common simple types using byte comparison
+        // These cover the most frequently encountered column types
+
+        // Most common: 8-byte and 4-byte numeric types
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Int64))
+            return _skippers["Int64"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Int32))
+            return _skippers["Int32"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.UInt64))
+            return _skippers["UInt64"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.UInt32))
+            return _skippers["UInt32"];
+
+        // String is very common
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.String))
+            return _skippers["String"];
+
+        // Float types
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Float64))
+            return _skippers["Float64"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Float32))
+            return _skippers["Float32"];
+
+        // Date/time types
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.DateTime))
+            return _skippers["DateTime"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Date))
+            return _skippers["Date"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Date32))
+            return _skippers["Date32"];
+
+        // Smaller numeric types
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Int16))
+            return _skippers["Int16"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.UInt16))
+            return _skippers["UInt16"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Int8))
+            return _skippers["Int8"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.UInt8))
+            return _skippers["UInt8"];
+
+        // Large numeric types
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Int128))
+            return _skippers["Int128"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.UInt128))
+            return _skippers["UInt128"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Int256))
+            return _skippers["Int256"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.UInt256))
+            return _skippers["UInt256"];
+
+        // UUID and IP types
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.UUID))
+            return _skippers["UUID"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.IPv4))
+            return _skippers["IPv4"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.IPv6))
+            return _skippers["IPv6"];
+
+        // Bool
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Bool))
+            return _skippers["Bool"];
+
+        // Enum types (base types - parameterized enums fall through to string path)
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Enum8))
+            return _skippers["Enum8"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Enum16))
+            return _skippers["Enum16"];
+
+        // Not a simple type - return null to indicate string-based lookup needed
+        // (for parameterized types like Array(T), Nullable(T), etc.)
+        return null;
     }
 
     private static ColumnSkipperRegistry CreateDefault()

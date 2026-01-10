@@ -1,3 +1,4 @@
+using System.Buffers;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnReaders;
@@ -71,49 +72,115 @@ public sealed class ArrayColumnReader<T> : IColumnReader<T[]>
         if (rowCount == 0)
             return new TypedColumn<T[]>(Array.Empty<T[]>());
 
-        // Step 1: Read offsets (cumulative counts) - UInt64 per row
-        var offsets = new ulong[rowCount];
-        for (int i = 0; i < rowCount; i++)
+        // Step 1: Read offsets (cumulative counts) into pooled array - UInt64 per row
+        var offsetsPool = ArrayPool<int>.Shared;
+        var offsets = offsetsPool.Rent(rowCount);
+
+        try
         {
-            offsets[i] = reader.ReadUInt64();
-        }
-
-        // Step 2: Calculate total elements and read them all
-        var totalElements = rowCount > 0 ? (int)offsets[rowCount - 1] : 0;
-
-        // Step 3: Split into arrays per row
-        var result = new T[rowCount][];
-
-        if (totalElements > 0)
-        {
-            using var allElements = _elementReader.ReadTypedColumn(ref reader, totalElements);
-
-            var start = 0;
             for (int i = 0; i < rowCount; i++)
             {
-                var end = (int)offsets[i];
-                var length = end - start;
-                result[i] = new T[length];
-                for (int j = 0; j < length; j++)
+                offsets[i] = (int)reader.ReadUInt64();
+            }
+
+            // Step 2: Calculate total elements and read them all
+            var totalElements = rowCount > 0 ? offsets[rowCount - 1] : 0;
+
+            // Step 3: Use pooled array for result
+            var resultPool = ArrayPool<T[]>.Shared;
+            var result = resultPool.Rent(rowCount);
+
+            if (totalElements > 0)
+            {
+                using var allElements = _elementReader.ReadTypedColumn(ref reader, totalElements);
+                var elementsSpan = allElements.Values;
+
+                var start = 0;
+                for (int i = 0; i < rowCount; i++)
                 {
-                    result[i][j] = allElements[start + j];
-                }
-                start = end;
-            }
-        }
-        else
-        {
-            for (int i = 0; i < rowCount; i++)
-            {
-                result[i] = Array.Empty<T>();
-            }
-        }
+                    var end = offsets[i];
+                    var length = end - start;
 
-        return new TypedColumn<T[]>(result);
+                    if (length == 0)
+                    {
+                        result[i] = Array.Empty<T>();
+                    }
+                    else
+                    {
+                        result[i] = new T[length];
+                        elementsSpan.Slice(start, length).CopyTo(result[i]);
+                    }
+                    start = end;
+                }
+            }
+            else
+            {
+                for (int i = 0; i < rowCount; i++)
+                {
+                    result[i] = Array.Empty<T>();
+                }
+            }
+
+            return new TypedColumn<T[]>(result, rowCount, resultPool);
+        }
+        finally
+        {
+            offsetsPool.Return(offsets);
+        }
     }
 
     ITypedColumn IColumnReader.ReadTypedColumn(ref ProtocolReader reader, int rowCount)
     {
-        return ReadTypedColumn(ref reader, rowCount);
+        // Return optimized FlattenedArrayColumn that avoids per-row allocation
+        return ReadFlattenedColumn(ref reader, rowCount);
+    }
+
+    /// <summary>
+    /// Reads array column data into a FlattenedArrayColumn for optimal memory usage.
+    /// This avoids allocating a separate T[] for each row.
+    /// </summary>
+    /// <param name="reader">The protocol reader.</param>
+    /// <param name="rowCount">The number of rows.</param>
+    /// <returns>A flattened array column with lazy per-row access.</returns>
+    public FlattenedArrayColumn<T> ReadFlattenedColumn(ref ProtocolReader reader, int rowCount)
+    {
+        if (rowCount == 0)
+            return new FlattenedArrayColumn<T>(
+                Array.Empty<T>(), 0,
+                Array.Empty<int>(), 0,
+                null, null);
+
+        // Step 1: Read offsets (cumulative counts) into pooled array
+        var offsetsPool = ArrayPool<int>.Shared;
+        var offsets = offsetsPool.Rent(rowCount);
+
+        for (int i = 0; i < rowCount; i++)
+        {
+            offsets[i] = (int)reader.ReadUInt64();
+        }
+
+        var totalElements = rowCount > 0 ? offsets[rowCount - 1] : 0;
+
+        if (totalElements == 0)
+        {
+            // All arrays are empty
+            return new FlattenedArrayColumn<T>(
+                Array.Empty<T>(), 0,
+                offsets, rowCount,
+                null, offsetsPool);
+        }
+
+        // Step 2: Read all elements at once
+        using var innerColumn = _elementReader.ReadTypedColumn(ref reader, totalElements);
+
+        // Step 3: Copy elements to our pooled array
+        var elementsPool = ArrayPool<T>.Shared;
+        var elements = elementsPool.Rent(totalElements);
+        innerColumn.Values.CopyTo(elements);
+
+        return new FlattenedArrayColumn<T>(
+            elements, totalElements,
+            offsets, rowCount,
+            elementsPool, offsetsPool);
     }
 }

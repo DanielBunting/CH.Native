@@ -61,24 +61,44 @@ public sealed class NullableColumnReader<T> : IColumnReader<T?>
     /// <inheritdoc />
     public TypedColumn<T?> ReadTypedColumn(ref ProtocolReader reader, int rowCount)
     {
-        // Step 1: Read null bitmap (1 byte per row)
-        var nullBitmap = new bool[rowCount];
-        for (int i = 0; i < rowCount; i++)
+        if (rowCount == 0)
+            return new TypedColumn<T?>(Array.Empty<T?>());
+
+        // Use stackalloc for small bitmaps to avoid allocation
+        const int StackAllocThreshold = 256;
+
+        // Step 1: Read null bitmap - stackalloc for small counts, pool for larger
+        byte[]? rentedBitmap = null;
+        Span<byte> nullBitmap = rowCount <= StackAllocThreshold
+            ? stackalloc byte[rowCount]
+            : (rentedBitmap = ArrayPool<byte>.Shared.Rent(rowCount)).AsSpan(0, rowCount);
+
+        try
         {
-            nullBitmap[i] = reader.ReadByte() != 0;
+            for (int i = 0; i < rowCount; i++)
+            {
+                nullBitmap[i] = reader.ReadByte();
+            }
+
+            // Step 2: Read ALL values (including slots for null rows)
+            using var innerValues = _innerReader.ReadTypedColumn(ref reader, rowCount);
+
+            // Step 3: Apply null mask using pooled result array
+            var resultPool = ArrayPool<T?>.Shared;
+            var result = resultPool.Rent(rowCount);
+
+            for (int i = 0; i < rowCount; i++)
+            {
+                result[i] = nullBitmap[i] != 0 ? null : innerValues[i];
+            }
+
+            return new TypedColumn<T?>(result, rowCount, resultPool);
         }
-
-        // Step 2: Read ALL values (including slots for null rows)
-        using var innerValues = _innerReader.ReadTypedColumn(ref reader, rowCount);
-
-        // Step 3: Apply null mask
-        var result = new T?[rowCount];
-        for (int i = 0; i < rowCount; i++)
+        finally
         {
-            result[i] = nullBitmap[i] ? null : innerValues[i];
+            if (rentedBitmap != null)
+                ArrayPool<byte>.Shared.Return(rentedBitmap);
         }
-
-        return new TypedColumn<T?>(result);
     }
 
     ITypedColumn IColumnReader.ReadTypedColumn(ref ProtocolReader reader, int rowCount)
@@ -145,24 +165,44 @@ public sealed class NullableRefColumnReader<T> : IColumnReader<T?>
     /// <inheritdoc />
     public TypedColumn<T?> ReadTypedColumn(ref ProtocolReader reader, int rowCount)
     {
-        // Step 1: Read null bitmap (1 byte per row)
-        var nullBitmap = new bool[rowCount];
-        for (int i = 0; i < rowCount; i++)
+        if (rowCount == 0)
+            return new TypedColumn<T?>(Array.Empty<T?>());
+
+        // Use stackalloc for small bitmaps to avoid allocation
+        const int StackAllocThreshold = 256;
+
+        // Step 1: Read null bitmap - stackalloc for small counts, pool for larger
+        byte[]? rentedBitmap = null;
+        Span<byte> nullBitmap = rowCount <= StackAllocThreshold
+            ? stackalloc byte[rowCount]
+            : (rentedBitmap = ArrayPool<byte>.Shared.Rent(rowCount)).AsSpan(0, rowCount);
+
+        try
         {
-            nullBitmap[i] = reader.ReadByte() != 0;
+            for (int i = 0; i < rowCount; i++)
+            {
+                nullBitmap[i] = reader.ReadByte();
+            }
+
+            // Step 2: Read ALL values (including slots for null rows)
+            using var innerValues = _innerReader.ReadTypedColumn(ref reader, rowCount);
+
+            // Step 3: Apply null mask using pooled result array
+            var resultPool = ArrayPool<T?>.Shared;
+            var result = resultPool.Rent(rowCount);
+
+            for (int i = 0; i < rowCount; i++)
+            {
+                result[i] = nullBitmap[i] != 0 ? null : innerValues[i];
+            }
+
+            return new TypedColumn<T?>(result, rowCount, resultPool);
         }
-
-        // Step 2: Read ALL values (including slots for null rows)
-        using var innerValues = _innerReader.ReadTypedColumn(ref reader, rowCount);
-
-        // Step 3: Apply null mask
-        var result = new T?[rowCount];
-        for (int i = 0; i < rowCount; i++)
+        finally
         {
-            result[i] = nullBitmap[i] ? null : innerValues[i];
+            if (rentedBitmap != null)
+                ArrayPool<byte>.Shared.Return(rentedBitmap);
         }
-
-        return new TypedColumn<T?>(result);
     }
 
     ITypedColumn IColumnReader.ReadTypedColumn(ref ProtocolReader reader, int rowCount)

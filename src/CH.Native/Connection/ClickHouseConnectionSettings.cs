@@ -51,6 +51,12 @@ public sealed class ClickHouseConnectionSettings
     public int SendBufferSize { get; }
 
     /// <summary>
+    /// Gets the PipeReader buffer size in bytes.
+    /// Larger buffers reduce memory fragmentation and improve parsing performance.
+    /// </summary>
+    public int PipeBufferSize { get; }
+
+    /// <summary>
     /// Gets the client name sent to the server.
     /// </summary>
     public string ClientName { get; }
@@ -129,6 +135,7 @@ public sealed class ClickHouseConnectionSettings
         TimeSpan connectTimeout,
         int receiveBufferSize,
         int sendBufferSize,
+        int pipeBufferSize,
         string clientName,
         bool compress,
         CompressionMethod compressionMethod,
@@ -150,6 +157,7 @@ public sealed class ClickHouseConnectionSettings
         ConnectTimeout = connectTimeout;
         ReceiveBufferSize = receiveBufferSize;
         SendBufferSize = sendBufferSize;
+        PipeBufferSize = pipeBufferSize;
         ClientName = clientName;
         Compress = compress;
         CompressionMethod = compressionMethod;

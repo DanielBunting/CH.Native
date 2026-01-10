@@ -17,4 +17,8 @@
     <ProjectReference Include="..\..\src\CH.Native\CH.Native.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Folder Include="BenchmarkDotNet.Artifacts\results\" />
+  </ItemGroup>
+
 </Project>

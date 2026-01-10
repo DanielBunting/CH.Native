@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnReaders;
@@ -18,7 +19,7 @@ public sealed class Float64ColumnReader : IColumnReader<double>
     /// <inheritdoc />
     public double ReadValue(ref ProtocolReader reader)
     {
-        var bytes = reader.ReadBytes(sizeof(double));
+        using var bytes = reader.ReadPooledBytes(sizeof(double));
         return BinaryPrimitives.ReadDoubleLittleEndian(bytes.Span);
     }
 
@@ -27,10 +28,23 @@ public sealed class Float64ColumnReader : IColumnReader<double>
     {
         var pool = ArrayPool<double>.Shared;
         var values = pool.Rent(rowCount);
-        for (int i = 0; i < rowCount; i++)
+        var byteCount = rowCount * sizeof(double);
+
+        // Fast path: bulk copy if data is contiguous
+        if (reader.TryGetContiguousSpan(byteCount, out var span))
         {
-            values[i] = ReadValue(ref reader);
+            MemoryMarshal.Cast<byte, double>(span).CopyTo(values);
+            reader.Advance(byteCount);
         }
+        else
+        {
+            // Fallback: per-value read
+            for (int i = 0; i < rowCount; i++)
+            {
+                values[i] = ReadValue(ref reader);
+            }
+        }
+
         return new TypedColumn<double>(values, rowCount, pool);
     }
 

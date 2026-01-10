@@ -5,6 +5,58 @@ using System.Text;
 namespace CH.Native.Protocol;
 
 /// <summary>
+/// A disposable wrapper for byte data that may be pooled.
+/// When the data is contiguous in the source buffer, no allocation occurs.
+/// When fragmented, an array is rented from ArrayPool and returned on dispose.
+/// </summary>
+public readonly struct PooledBytes : IDisposable
+{
+    /// <summary>
+    /// An empty PooledBytes instance.
+    /// </summary>
+    public static readonly PooledBytes Empty = new(ReadOnlyMemory<byte>.Empty, null, null);
+
+    /// <summary>
+    /// The byte data.
+    /// </summary>
+    public readonly ReadOnlyMemory<byte> Memory;
+
+    private readonly ArrayPool<byte>? _pool;
+    private readonly byte[]? _array;
+
+    /// <summary>
+    /// Creates a PooledBytes from the specified memory, optionally with pool info for disposal.
+    /// </summary>
+    public PooledBytes(ReadOnlyMemory<byte> memory, ArrayPool<byte>? pool, byte[]? array)
+    {
+        Memory = memory;
+        _pool = pool;
+        _array = array;
+    }
+
+    /// <summary>
+    /// Gets the byte data as a span.
+    /// </summary>
+    public ReadOnlySpan<byte> Span => Memory.Span;
+
+    /// <summary>
+    /// Gets the length of the data.
+    /// </summary>
+    public int Length => Memory.Length;
+
+    /// <summary>
+    /// Returns the pooled array if one was used.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_pool != null && _array != null)
+        {
+            _pool.Return(_array);
+        }
+    }
+}
+
+/// <summary>
 /// High-performance binary reader for the ClickHouse native protocol.
 /// Wraps a <see cref="SequenceReader{T}"/> for efficient parsing of fragmented network buffers.
 /// </summary>
@@ -171,7 +223,7 @@ public ref struct ProtocolReader
     /// </summary>
     public System.Numerics.BigInteger ReadInt256()
     {
-        var bytes = ReadBytes(32);
+        using var bytes = ReadPooledBytes(32);
         return new System.Numerics.BigInteger(bytes.Span, isUnsigned: false, isBigEndian: false);
     }
 
@@ -180,7 +232,7 @@ public ref struct ProtocolReader
     /// </summary>
     public System.Numerics.BigInteger ReadUInt256()
     {
-        var bytes = ReadBytes(32);
+        using var bytes = ReadPooledBytes(32);
         return new System.Numerics.BigInteger(bytes.Span, isUnsigned: true, isBigEndian: false);
     }
 
@@ -193,7 +245,7 @@ public ref struct ProtocolReader
         if (length == 0)
             return string.Empty;
 
-        var bytes = ReadBytes(length);
+        using var bytes = ReadPooledBytes(length);
         return Encoding.UTF8.GetString(bytes.Span);
     }
 
@@ -219,6 +271,34 @@ public ref struct ProtocolReader
         var array = new byte[count];
         slice.CopyTo(array);
         return array;
+    }
+
+    /// <summary>
+    /// Reads the specified number of bytes, using ArrayPool for fragmented sequences.
+    /// The caller must dispose the returned PooledBytes to return the array to the pool.
+    /// </summary>
+    /// <param name="count">The number of bytes to read.</param>
+    /// <returns>A PooledBytes containing the data. Must be disposed after use.</returns>
+    public PooledBytes ReadPooledBytes(int count)
+    {
+        if (count == 0)
+            return PooledBytes.Empty;
+
+        if (_reader.Remaining < count)
+            throw new InvalidOperationException($"Unexpected end of data while reading {count} bytes, only {_reader.Remaining} available.");
+
+        var slice = _reader.UnreadSequence.Slice(0, count);
+        _reader.Advance(count);
+
+        // If the slice is contiguous, return it directly without allocation
+        if (slice.IsSingleSegment)
+            return new PooledBytes(slice.First, pool: null, array: null);
+
+        // Otherwise, rent from the pool and copy
+        var pool = ArrayPool<byte>.Shared;
+        var array = pool.Rent(count);
+        slice.CopyTo(array);
+        return new PooledBytes(array.AsMemory(0, count), pool, array);
     }
 
     /// <summary>
@@ -323,6 +403,22 @@ public ref struct ProtocolReader
     }
 
     /// <summary>
+    /// Tries to read a 32-bit signed integer without throwing.
+    /// </summary>
+    /// <param name="value">The value read, or 0 if not enough data.</param>
+    /// <returns>True if successfully read; false if not enough data available.</returns>
+    public bool TryReadInt32(out int value)
+    {
+        value = 0;
+        Span<byte> buffer = stackalloc byte[sizeof(int)];
+        if (!_reader.TryCopyTo(buffer))
+            return false;
+        _reader.Advance(sizeof(int));
+        value = BinaryPrimitives.ReadInt32LittleEndian(buffer);
+        return true;
+    }
+
+    /// <summary>
     /// Tries to read a 64-bit unsigned integer without throwing.
     /// </summary>
     /// <param name="value">The value read, or 0 if not enough data.</param>
@@ -336,6 +432,45 @@ public ref struct ProtocolReader
         _reader.Advance(sizeof(ulong));
         value = BinaryPrimitives.ReadUInt64LittleEndian(buffer);
         return true;
+    }
+
+    #endregion
+
+    #region Bulk Read Methods
+
+    /// <summary>
+    /// Tries to get a contiguous span of the next N bytes without copying.
+    /// Only succeeds if the data is in a single memory segment.
+    /// </summary>
+    /// <param name="count">The number of bytes to read.</param>
+    /// <param name="span">The contiguous span, if available.</param>
+    /// <returns>True if the data is contiguous and span is valid; false otherwise.</returns>
+    public bool TryGetContiguousSpan(int count, out ReadOnlySpan<byte> span)
+    {
+        if (_reader.Remaining < count)
+        {
+            span = default;
+            return false;
+        }
+
+        var slice = _reader.UnreadSequence.Slice(0, count);
+        if (slice.IsSingleSegment)
+        {
+            span = slice.FirstSpan;
+            return true;
+        }
+
+        span = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Advances the reader by the specified number of bytes.
+    /// </summary>
+    /// <param name="count">The number of bytes to advance.</param>
+    public void Advance(int count)
+    {
+        _reader.Advance(count);
     }
 
     #endregion

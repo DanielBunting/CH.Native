@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Runtime.InteropServices;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnReaders;
@@ -25,10 +26,23 @@ public sealed class Int64ColumnReader : IColumnReader<long>
     {
         var pool = ArrayPool<long>.Shared;
         var values = pool.Rent(rowCount);
-        for (int i = 0; i < rowCount; i++)
+        var byteCount = rowCount * sizeof(long);
+
+        // Fast path: bulk copy if data is contiguous
+        if (reader.TryGetContiguousSpan(byteCount, out var span))
         {
-            values[i] = reader.ReadInt64();
+            MemoryMarshal.Cast<byte, long>(span).CopyTo(values);
+            reader.Advance(byteCount);
         }
+        else
+        {
+            // Fallback: per-value read
+            for (int i = 0; i < rowCount; i++)
+            {
+                values[i] = reader.ReadInt64();
+            }
+        }
+
         return new TypedColumn<long>(values, rowCount, pool);
     }
 

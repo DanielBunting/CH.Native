@@ -8,6 +8,24 @@ namespace CH.Native.Data.ColumnReaders;
 /// </summary>
 public sealed class StringColumnReader : IColumnReader<string>
 {
+    /// <summary>
+    /// Thread-local pooled dictionary for string interning.
+    /// Avoids allocating a new dictionary per column read.
+    /// </summary>
+    [ThreadStatic]
+    private static Dictionary<string, string>? s_internPool;
+
+    private static Dictionary<string, string> GetInternDictionary()
+    {
+        var dict = s_internPool;
+        if (dict != null)
+        {
+            dict.Clear();
+            return dict;
+        }
+        return s_internPool = new Dictionary<string, string>(1024, StringComparer.Ordinal);
+    }
+
     /// <inheritdoc />
     public string TypeName => "String";
 
@@ -29,7 +47,7 @@ public sealed class StringColumnReader : IColumnReader<string>
         // Use interning for larger columns to deduplicate repeated values
         if (rowCount >= 100)
         {
-            var intern = new Dictionary<string, string>(StringComparer.Ordinal);
+            var intern = GetInternDictionary();
             const int maxInternedStrings = 10000;
 
             for (int i = 0; i < rowCount; i++)

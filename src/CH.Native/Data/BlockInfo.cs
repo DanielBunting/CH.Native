@@ -64,6 +64,51 @@ public readonly struct BlockInfo
     }
 
     /// <summary>
+    /// Tries to read BlockInfo from the protocol reader without throwing.
+    /// </summary>
+    /// <param name="reader">The protocol reader.</param>
+    /// <param name="info">The parsed BlockInfo if successful.</param>
+    /// <returns>True if successfully read; false if not enough data available.</returns>
+    public static bool TryRead(ref ProtocolReader reader, out BlockInfo info)
+    {
+        info = default;
+        bool isOverflows = false;
+        int bucketNum = -1;
+
+        while (true)
+        {
+            if (!reader.TryReadVarInt(out var fieldNum))
+                return false;
+
+            if (fieldNum == 0)
+                break;
+
+            switch (fieldNum)
+            {
+                case 1:
+                    if (!reader.TryReadByte(out var overflow))
+                        return false;
+                    isOverflows = overflow != 0;
+                    break;
+                case 2:
+                    if (!reader.TryReadInt32(out bucketNum))
+                        return false;
+                    break;
+                default:
+                    // Unknown field, skip
+                    break;
+            }
+        }
+
+        info = new BlockInfo
+        {
+            IsOverflows = isOverflows,
+            BucketNum = bucketNum
+        };
+        return true;
+    }
+
+    /// <summary>
     /// Writes BlockInfo to the protocol writer.
     /// </summary>
     /// <param name="writer">The protocol writer.</param>

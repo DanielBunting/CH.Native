@@ -152,7 +152,11 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             _networkStream = await EstablishTlsAsync(_networkStream, timeoutCts.Token);
         }
 
-        _pipeReader = PipeReader.Create(_networkStream);
+        // Use larger buffer sizes to reduce fragmentation and improve IsSingleSegment hit rate
+        var pipeReaderOptions = new StreamPipeReaderOptions(
+            bufferSize: _settings.PipeBufferSize,
+            minimumReadSize: _settings.PipeBufferSize / 4);
+        _pipeReader = PipeReader.Create(_networkStream, pipeReaderOptions);
         _pipeWriter = PipeWriter.Create(_networkStream);
     }
 
@@ -859,10 +863,36 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     {
                         // Create a scanner positioned after the message type
                         var scanBuffer = buffer.Slice(reader.Consumed);
-                        if (!TryScanUncompressedDataMessage(scanBuffer))
+                        if (!TryScanUncompressedDataMessage(scanBuffer, out var messageLength))
                         {
                             // Not enough data yet - don't consume buffer, wait for more
                             return false;
+                        }
+
+                        // Buffer into contiguous memory if fragmented for faster parsing
+                        // This matches what the compressed path does after decompression
+                        if (!scanBuffer.IsSingleSegment)
+                        {
+                            var pool = ArrayPool<byte>.Shared;
+                            var contiguous = pool.Rent((int)messageLength);
+                            try
+                            {
+                                scanBuffer.Slice(0, messageLength).CopyTo(contiguous);
+                                var contiguousSeq = new ReadOnlySequence<byte>(contiguous, 0, (int)messageLength);
+                                var contiguousReader = new ProtocolReader(contiguousSeq);
+
+                                // Read table name and block from contiguous buffer
+                                var tableName = contiguousReader.ReadString();
+                                typedBlock = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion);
+
+                                // Advance original buffer past message type + message content
+                                buffer = buffer.Slice(reader.Consumed + messageLength);
+                                return true;
+                            }
+                            finally
+                            {
+                                pool.Return(contiguous);
+                            }
                         }
                     }
 
@@ -897,7 +927,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     if (!_compressionEnabled)
                     {
                         var scanBuffer = buffer.Slice(reader.Consumed);
-                        if (!TryScanUncompressedDataMessage(scanBuffer))
+                        if (!TryScanUncompressedDataMessage(scanBuffer, out _))
                             return false;
                     }
                     ReadDataMessage(ref reader, registry);
@@ -911,8 +941,31 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     if (!_compressionEnabled)
                     {
                         var scanBuffer = buffer.Slice(reader.Consumed);
-                        if (!TryScanUncompressedDataMessage(scanBuffer))
+                        if (!TryScanUncompressedDataMessage(scanBuffer, out var totalsMessageLength))
                             return false;
+
+                        // Buffer into contiguous memory if fragmented for faster parsing
+                        if (!scanBuffer.IsSingleSegment)
+                        {
+                            var pool = ArrayPool<byte>.Shared;
+                            var contiguous = pool.Rent((int)totalsMessageLength);
+                            try
+                            {
+                                scanBuffer.Slice(0, totalsMessageLength).CopyTo(contiguous);
+                                var contiguousSeq = new ReadOnlySequence<byte>(contiguous, 0, (int)totalsMessageLength);
+                                var contiguousReader = new ProtocolReader(contiguousSeq);
+
+                                var tableName = contiguousReader.ReadString();
+                                typedBlock = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion);
+
+                                buffer = buffer.Slice(reader.Consumed + totalsMessageLength);
+                                return true;
+                            }
+                            finally
+                            {
+                                pool.Return(contiguous);
+                            }
+                        }
                     }
                     typedBlock = ReadTypedDataMessage(ref reader, registry);
                     buffer = buffer.Slice(reader.Consumed);
@@ -934,9 +987,11 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// This is the first pass of two-pass parsing for uncompressed data.
     /// </summary>
     /// <param name="buffer">The buffer positioned after the message type.</param>
+    /// <param name="messageLength">The total length of the message in bytes.</param>
     /// <returns>True if the entire message is available; false if not enough data.</returns>
-    private bool TryScanUncompressedDataMessage(ReadOnlySequence<byte> buffer)
+    private bool TryScanUncompressedDataMessage(ReadOnlySequence<byte> buffer, out long messageLength)
     {
+        messageLength = 0;
         var scanner = new ProtocolReader(buffer);
 
         // Skip table name
@@ -956,6 +1011,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             return false;
         }
 
+        messageLength = scanner.Consumed;
         return true;
     }
 
@@ -1322,9 +1378,33 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     if (!_compressionEnabled)
                     {
                         var scanBuffer = buffer.Slice(reader.Consumed);
-                        if (!TryScanUncompressedDataMessage(scanBuffer))
+                        if (!TryScanUncompressedDataMessage(scanBuffer, out var dataMessageLength))
                         {
                             return false;
+                        }
+
+                        // Buffer into contiguous memory if fragmented for faster parsing
+                        if (!scanBuffer.IsSingleSegment)
+                        {
+                            var pool = ArrayPool<byte>.Shared;
+                            var contiguous = pool.Rent((int)dataMessageLength);
+                            try
+                            {
+                                scanBuffer.Slice(0, dataMessageLength).CopyTo(contiguous);
+                                var contiguousSeq = new ReadOnlySequence<byte>(contiguous, 0, (int)dataMessageLength);
+                                var contiguousReader = new ProtocolReader(contiguousSeq);
+
+                                var tableName = contiguousReader.ReadString();
+                                var block = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion);
+
+                                buffer = buffer.Slice(reader.Consumed + dataMessageLength);
+                                message = new DataMessage { Block = block };
+                                return true;
+                            }
+                            finally
+                            {
+                                pool.Return(contiguous);
+                            }
                         }
                     }
 
@@ -1363,7 +1443,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     if (!_compressionEnabled)
                     {
                         var scanBuffer = buffer.Slice(reader.Consumed);
-                        if (!TryScanUncompressedDataMessage(scanBuffer))
+                        if (!TryScanUncompressedDataMessage(scanBuffer, out _))
                             return false;
                     }
                     var profileEventsBlock = ReadDataMessage(ref reader, registry);
@@ -1378,8 +1458,32 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     if (!_compressionEnabled)
                     {
                         var scanBuffer = buffer.Slice(reader.Consumed);
-                        if (!TryScanUncompressedDataMessage(scanBuffer))
+                        if (!TryScanUncompressedDataMessage(scanBuffer, out var specialMessageLength))
                             return false;
+
+                        // Buffer into contiguous memory if fragmented for faster parsing
+                        if (!scanBuffer.IsSingleSegment)
+                        {
+                            var pool = ArrayPool<byte>.Shared;
+                            var contiguous = pool.Rent((int)specialMessageLength);
+                            try
+                            {
+                                scanBuffer.Slice(0, specialMessageLength).CopyTo(contiguous);
+                                var contiguousSeq = new ReadOnlySequence<byte>(contiguous, 0, (int)specialMessageLength);
+                                var contiguousReader = new ProtocolReader(contiguousSeq);
+
+                                var tableName = contiguousReader.ReadString();
+                                var block = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion);
+
+                                buffer = buffer.Slice(reader.Consumed + specialMessageLength);
+                                message = new DataMessage { Block = block };
+                                return true;
+                            }
+                            finally
+                            {
+                                pool.Return(contiguous);
+                            }
+                        }
                     }
                     var specialData = ReadDataMessage(ref reader, registry);
                     buffer = buffer.Slice(reader.Consumed);
@@ -1649,7 +1753,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     if (!_compressionEnabled)
                     {
                         var scanBuffer = buffer.Slice(reader.Consumed);
-                        if (!TryScanUncompressedDataMessage(scanBuffer))
+                        if (!TryScanUncompressedDataMessage(scanBuffer, out _))
                         {
                             // Not enough data yet
                             _pipeReader.AdvanceTo(buffer.Start, buffer.End);
@@ -2005,7 +2109,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                         if (!_compressionEnabled)
                         {
                             var scanBuffer = buffer.Slice(reader.Consumed);
-                            if (!TryScanUncompressedDataMessage(scanBuffer))
+                            if (!TryScanUncompressedDataMessage(scanBuffer, out _))
                             {
                                 _pipeReader.AdvanceTo(buffer.Start, buffer.End);
                                 continue;
@@ -2025,7 +2129,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                         if (!_compressionEnabled)
                         {
                             var scanBuffer = buffer.Slice(reader.Consumed);
-                            if (!TryScanUncompressedDataMessage(scanBuffer))
+                            if (!TryScanUncompressedDataMessage(scanBuffer, out _))
                             {
                                 _pipeReader.AdvanceTo(buffer.Start, buffer.End);
                                 continue;

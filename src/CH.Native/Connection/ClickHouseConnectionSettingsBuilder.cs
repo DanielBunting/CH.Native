@@ -17,8 +17,9 @@ public sealed class ClickHouseConnectionSettingsBuilder
     private string _username = "default";
     private string _password = "";
     private TimeSpan _connectTimeout = TimeSpan.FromSeconds(10);
-    private int _receiveBufferSize = 65536;
-    private int _sendBufferSize = 65536;
+    private int _receiveBufferSize = 262144;  // 256 KB - larger buffers reduce fragmentation
+    private int _sendBufferSize = 131072;    // 128 KB
+    private int _pipeBufferSize = 262144;    // 256 KB - PipeReader buffer for reduced segment boundaries
     private string _clientName = "CH.Native";
     private bool _compress = true;
     private CompressionMethod _compressionMethod = CompressionMethod.Lz4;
@@ -136,6 +137,20 @@ public sealed class ClickHouseConnectionSettingsBuilder
         if (size < 1)
             throw new ArgumentOutOfRangeException(nameof(size), "Buffer size must be positive.");
         _sendBufferSize = size;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the PipeReader buffer size. Larger buffers reduce memory fragmentation
+    /// and improve parsing performance for large result sets.
+    /// </summary>
+    /// <param name="size">The buffer size in bytes (minimum 4096).</param>
+    /// <returns>This builder for chaining.</returns>
+    public ClickHouseConnectionSettingsBuilder WithPipeBufferSize(int size)
+    {
+        if (size < 4096)
+            throw new ArgumentOutOfRangeException(nameof(size), "Pipe buffer size must be at least 4096 bytes.");
+        _pipeBufferSize = size;
         return this;
     }
 
@@ -351,6 +366,7 @@ public sealed class ClickHouseConnectionSettingsBuilder
             _connectTimeout,
             _receiveBufferSize,
             _sendBufferSize,
+            _pipeBufferSize,
             _clientName,
             _compress,
             _compressionMethod,

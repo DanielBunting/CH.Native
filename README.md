@@ -117,14 +117,25 @@ var users = await connection.QueryAsync<User>("SELECT * FROM users");
 
 CH.Native uses the native binary protocol (port 9000) instead of HTTP, resulting in lower latency and significantly reduced memory allocations.
 
+### Query Performance
+
 | Benchmark | Native TCP | HTTP | Improvement |
 |-----------|-----------|------|-------------|
-| SELECT 1 | 591 us | 746 us | 1.3x faster |
-| SELECT 100 rows | 632 us | 2,081 us | 3.3x faster |
-| COUNT(*) 1M rows | 1,079 us | 1,381 us | 1.3x faster |
-| Memory (SELECT 1) | 14 KB | 545 KB | 39x less |
+| SELECT 1 | 544 μs | 733 μs | 1.3x faster |
+| SELECT 100 rows | 668 μs | 1,036 μs | 1.6x faster |
+| COUNT(*) 1M rows | 948 μs | 1,170 μs | 1.2x faster |
+| Read 1M rows (streaming) | 123 ms | 296 ms | **2.4x faster** |
+| Bulk insert 1M rows | 93 ms | 180 ms | 1.9x faster |
 
-*Benchmarks run on Apple M3, .NET 8.0, ClickHouse 24.1*
+### Memory Efficiency
+
+| Benchmark | Native TCP | HTTP | Improvement |
+|-----------|-----------|------|-------------|
+| SELECT 1 | 266 KB | 545 KB | 2x less |
+| Read 1M rows | 143 MB | 191 MB | 25% less |
+| Bulk insert 1M rows | 44 MB | 120 MB | **2.7x less** |
+
+*Benchmarks run on Apple M5, .NET 8.0, ClickHouse 24.8*
 
 ## Requirements
 

@@ -116,23 +116,21 @@ public sealed class Block
     /// <returns>The block header, or null if insufficient data is available.</returns>
     public static BlockHeader? TryReadBlockHeader(ref ProtocolReader reader)
     {
-        try
-        {
-            var info = BlockInfo.Read(ref reader);
-            var columnCount = (int)reader.ReadVarInt();
-            var rowCount = (int)reader.ReadVarInt();
-
-            return new BlockHeader
-            {
-                ColumnCount = columnCount,
-                RowCount = rowCount
-            };
-        }
-        catch (InvalidOperationException)
-        {
-            // Not enough data to read header
+        // Use non-throwing Try* methods to avoid exception overhead for incomplete data
+        if (!BlockInfo.TryRead(ref reader, out _))
             return null;
-        }
+
+        if (!reader.TryReadVarInt(out var columnCount))
+            return null;
+
+        if (!reader.TryReadVarInt(out var rowCount))
+            return null;
+
+        return new BlockHeader
+        {
+            ColumnCount = (int)columnCount,
+            RowCount = (int)rowCount
+        };
     }
 
     /// <summary>
@@ -186,9 +184,8 @@ public sealed class Block
             if (reader.Remaining < (long)typeLength)
                 return false;
 
-            // We must read the type string to look up the skipper
+            // Read type bytes - try byte-based lookup first to avoid string allocation
             var typeBytes = reader.ReadBytes((int)typeLength);
-            var columnType = System.Text.Encoding.UTF8.GetString(typeBytes.Span);
 
             // Skip custom serialization metadata for protocol >= WithCustomSerialization
             if (protocolVersion >= ProtocolVersion.WithCustomSerialization)
@@ -207,7 +204,14 @@ public sealed class Block
             // Skip column data
             if (rowCount > 0)
             {
-                var skipper = skipperRegistry.GetSkipper(columnType);
+                // Try byte-based lookup first (avoids string allocation for common types)
+                var skipper = skipperRegistry.TryGetSkipperByBytes(typeBytes.Span);
+                if (skipper == null)
+                {
+                    // Fallback to string-based lookup for complex/parameterized types
+                    var columnType = System.Text.Encoding.UTF8.GetString(typeBytes.Span);
+                    skipper = skipperRegistry.GetSkipper(columnType);
+                }
                 if (!skipper.TrySkipColumn(ref reader, rowCount))
                     return false;
             }
