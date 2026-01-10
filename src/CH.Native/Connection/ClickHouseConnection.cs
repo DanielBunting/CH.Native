@@ -442,7 +442,13 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     {
         await using var inserter = CreateBulkInserter<T>(tableName, options);
         await inserter.InitAsync(cancellationToken);
-        await inserter.AddRangeAsync(rows, cancellationToken);
+
+        // Use streaming path when preferred (default) for reduced GC pressure
+        if (options?.PreferDirectStreaming ?? true)
+            await inserter.AddRangeStreamingAsync(rows, cancellationToken);
+        else
+            await inserter.AddRangeAsync(rows, cancellationToken);
+
         await inserter.CompleteAsync(cancellationToken);
     }
 
@@ -463,10 +469,20 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     {
         await using var inserter = CreateBulkInserter<T>(tableName, options);
         await inserter.InitAsync(cancellationToken);
-        await foreach (var row in rows.WithCancellation(cancellationToken))
+
+        // Use streaming path when preferred (default) for reduced GC pressure
+        if (options?.PreferDirectStreaming ?? true)
         {
-            await inserter.AddAsync(row, cancellationToken);
+            await inserter.AddRangeStreamingAsync(rows, cancellationToken);
         }
+        else
+        {
+            await foreach (var row in rows.WithCancellation(cancellationToken))
+            {
+                await inserter.AddAsync(row, cancellationToken);
+            }
+        }
+
         await inserter.CompleteAsync(cancellationToken);
     }
 

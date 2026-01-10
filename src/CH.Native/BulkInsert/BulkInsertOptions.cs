@@ -19,6 +19,20 @@ public sealed class BulkInsertOptions
     public bool IncludeNullColumns { get; set; } = true;
 
     /// <summary>
+    /// Gets or sets whether to use pooled arrays for column data extraction in the fallback path.
+    /// When true (default), arrays are reused across batch flushes to reduce GC pressure.
+    /// </summary>
+    public bool UsePooledArrays { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets whether to prefer direct-to-wire streaming when inserting from an IEnumerable.
+    /// When true (default), rows are accumulated in a pooled array and sent directly to the server
+    /// without copying to an intermediate List buffer. This reduces Gen1 GC collections for
+    /// large streaming inserts.
+    /// </summary>
+    public bool PreferDirectStreaming { get; set; } = true;
+
+    /// <summary>
     /// Gets the default options instance.
     /// </summary>
     public static BulkInsertOptions Default { get; } = new();

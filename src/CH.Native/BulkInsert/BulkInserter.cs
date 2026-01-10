@@ -125,6 +125,141 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     }
 
     /// <summary>
+    /// Adds multiple items using direct-to-wire streaming with reduced GC pressure.
+    /// This method bypasses the internal List buffer and uses pooled arrays instead,
+    /// reducing Gen1 GC collections for large streaming inserts.
+    /// </summary>
+    /// <param name="items">The items to add.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async ValueTask AddRangeStreamingAsync(IEnumerable<T> items, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_initialized)
+            throw new InvalidOperationException("BulkInserter must be initialized before adding items.");
+        if (_completed)
+            throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
+
+        // If we don't have the direct path available, fall back to regular AddRangeAsync
+        if (!_useDirectPath || _extractors == null)
+        {
+            await AddRangeAsync(items, cancellationToken);
+            return;
+        }
+
+        // Use pooled array to accumulate rows without long-lived List<T> references
+        var batchSize = _options.BatchSize;
+        var batch = ArrayPool<T>.Shared.Rent(batchSize);
+
+        try
+        {
+            var batchIndex = 0;
+
+            foreach (var item in items)
+            {
+                batch[batchIndex++] = item;
+
+                if (batchIndex >= batchSize)
+                {
+                    // Send directly without copying to List<T>
+                    await _connection.SendDataBlockDirectAsync(
+                        _extractors,
+                        batch,
+                        batchIndex,
+                        cancellationToken);
+
+                    // Clear references immediately to allow GC of row objects
+                    Array.Clear(batch, 0, batchIndex);
+                    batchIndex = 0;
+                }
+            }
+
+            // Flush any remaining rows
+            if (batchIndex > 0)
+            {
+                await _connection.SendDataBlockDirectAsync(
+                    _extractors,
+                    batch,
+                    batchIndex,
+                    cancellationToken);
+            }
+        }
+        finally
+        {
+            // Return pooled array with clearing to release object references
+            ArrayPool<T>.Shared.Return(batch, clearArray: true);
+        }
+    }
+
+    /// <summary>
+    /// Adds multiple items from an async enumerable using direct-to-wire streaming with reduced GC pressure.
+    /// This method bypasses the internal List buffer and uses pooled arrays instead,
+    /// reducing Gen1 GC collections for large streaming inserts.
+    /// </summary>
+    /// <param name="items">The async enumerable of items to add.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async ValueTask AddRangeStreamingAsync(IAsyncEnumerable<T> items, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_initialized)
+            throw new InvalidOperationException("BulkInserter must be initialized before adding items.");
+        if (_completed)
+            throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
+
+        // If we don't have the direct path available, fall back to adding one by one
+        if (!_useDirectPath || _extractors == null)
+        {
+            await foreach (var item in items.WithCancellation(cancellationToken))
+            {
+                await AddAsync(item, cancellationToken);
+            }
+            return;
+        }
+
+        // Use pooled array to accumulate rows without long-lived List<T> references
+        var batchSize = _options.BatchSize;
+        var batch = ArrayPool<T>.Shared.Rent(batchSize);
+
+        try
+        {
+            var batchIndex = 0;
+
+            await foreach (var item in items.WithCancellation(cancellationToken))
+            {
+                batch[batchIndex++] = item;
+
+                if (batchIndex >= batchSize)
+                {
+                    // Send directly without copying to List<T>
+                    await _connection.SendDataBlockDirectAsync(
+                        _extractors,
+                        batch,
+                        batchIndex,
+                        cancellationToken);
+
+                    // Clear references immediately to allow GC of row objects
+                    Array.Clear(batch, 0, batchIndex);
+                    batchIndex = 0;
+                }
+            }
+
+            // Flush any remaining rows
+            if (batchIndex > 0)
+            {
+                await _connection.SendDataBlockDirectAsync(
+                    _extractors,
+                    batch,
+                    batchIndex,
+                    cancellationToken);
+            }
+        }
+        finally
+        {
+            // Return pooled array with clearing to release object references
+            ArrayPool<T>.Shared.Return(batch, clearArray: true);
+        }
+    }
+
+    /// <summary>
     /// Flushes the current buffer to the server.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -327,12 +462,8 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         var columnCount = _columnNames!.Length;
         var rowCount = _buffer.Count;
 
-        // Create exact-size arrays (column writers use values.Length)
-        var columnData = new object?[columnCount][];
-        for (int col = 0; col < columnCount; col++)
-        {
-            columnData[col] = new object?[rowCount];
-        }
+        // Use pooled arrays to reduce GC pressure
+        EnsurePooledArrays(columnCount, rowCount);
 
         // Extract values row by row using reflection-based getters
         for (int row = 0; row < rowCount; row++)
@@ -340,11 +471,11 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             var item = _buffer[row];
             for (int col = 0; col < columnCount; col++)
             {
-                columnData[col][row] = _getters![col](item);
+                _pooledColumnData![col][row] = _getters![col](item);
             }
         }
 
-        return columnData;
+        return _pooledColumnData!;
     }
 
     private void EnsurePooledArrays(int columnCount, int rowCount)
