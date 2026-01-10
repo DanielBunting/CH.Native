@@ -235,4 +235,108 @@ public ref struct ProtocolReader
         var slice = _reader.UnreadSequence.Slice(offset, 1);
         return slice.First.Span[0];
     }
+
+    #region TrySkip Methods (Non-allocating validation)
+
+    /// <summary>
+    /// Tries to skip a variable-length encoded unsigned integer without allocation.
+    /// Used for validating data completeness before parsing.
+    /// </summary>
+    /// <returns>True if successfully skipped; false if not enough data available.</returns>
+    public bool TrySkipVarInt()
+    {
+        byte b;
+        do
+        {
+            if (!_reader.TryRead(out b))
+                return false;
+        } while ((b & 0x80) != 0);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Tries to read a variable-length encoded unsigned integer without throwing.
+    /// </summary>
+    /// <param name="value">The value read, or 0 if not enough data.</param>
+    /// <returns>True if successfully read; false if not enough data available.</returns>
+    public bool TryReadVarInt(out ulong value)
+    {
+        value = 0;
+        int shift = 0;
+
+        byte b;
+        do
+        {
+            if (!_reader.TryRead(out b))
+                return false;
+
+            value |= (ulong)(b & 0x7F) << shift;
+            shift += 7;
+        } while ((b & 0x80) != 0);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Tries to skip the specified number of bytes without allocation.
+    /// Used for validating data completeness before parsing.
+    /// </summary>
+    /// <param name="count">The number of bytes to skip.</param>
+    /// <returns>True if successfully skipped; false if not enough data available.</returns>
+    public bool TrySkipBytes(long count)
+    {
+        if (count == 0)
+            return true;
+
+        if (_reader.Remaining < count)
+            return false;
+
+        _reader.Advance(count);
+        return true;
+    }
+
+    /// <summary>
+    /// Tries to skip a string (VarInt length prefix + bytes) without allocation.
+    /// Used for validating data completeness before parsing.
+    /// </summary>
+    /// <returns>True if successfully skipped; false if not enough data available.</returns>
+    public bool TrySkipString()
+    {
+        if (!TryReadVarInt(out var length))
+            return false;
+
+        if (length == 0)
+            return true;
+
+        return TrySkipBytes((long)length);
+    }
+
+    /// <summary>
+    /// Tries to read a single byte without throwing.
+    /// </summary>
+    /// <param name="value">The byte read, or 0 if not enough data.</param>
+    /// <returns>True if successfully read; false if not enough data available.</returns>
+    public bool TryReadByte(out byte value)
+    {
+        return _reader.TryRead(out value);
+    }
+
+    /// <summary>
+    /// Tries to read a 64-bit unsigned integer without throwing.
+    /// </summary>
+    /// <param name="value">The value read, or 0 if not enough data.</param>
+    /// <returns>True if successfully read; false if not enough data available.</returns>
+    public bool TryReadUInt64(out ulong value)
+    {
+        value = 0;
+        Span<byte> buffer = stackalloc byte[sizeof(ulong)];
+        if (!_reader.TryCopyTo(buffer))
+            return false;
+        _reader.Advance(sizeof(ulong));
+        value = BinaryPrimitives.ReadUInt64LittleEndian(buffer);
+        return true;
+    }
+
+    #endregion
 }

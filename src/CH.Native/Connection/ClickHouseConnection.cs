@@ -853,6 +853,19 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             switch (messageType)
             {
                 case ServerMessageType.Data:
+                    // For uncompressed data, do a non-allocating scan pass first
+                    // to validate block completeness before parsing
+                    if (!_compressionEnabled)
+                    {
+                        // Create a scanner positioned after the message type
+                        var scanBuffer = buffer.Slice(reader.Consumed);
+                        if (!TryScanUncompressedDataMessage(scanBuffer))
+                        {
+                            // Not enough data yet - don't consume buffer, wait for more
+                            return false;
+                        }
+                    }
+
                     typedBlock = ReadTypedDataMessage(ref reader, registry);
                     buffer = buffer.Slice(reader.Consumed);
                     return true;
@@ -880,6 +893,13 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
                 case ServerMessageType.ProfileEvents:
                     // ProfileEvents - read and discard using regular block (not typed)
+                    // For uncompressed data, do a scan pass first
+                    if (!_compressionEnabled)
+                    {
+                        var scanBuffer = buffer.Slice(reader.Consumed);
+                        if (!TryScanUncompressedDataMessage(scanBuffer))
+                            return false;
+                    }
                     ReadDataMessage(ref reader, registry);
                     buffer = buffer.Slice(reader.Consumed);
                     return TryReadTypedMessage(ref buffer, registry, out message, out typedBlock);
@@ -887,6 +907,13 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 case ServerMessageType.Totals:
                 case ServerMessageType.Extremes:
                     // These are data blocks - read as typed
+                    // For uncompressed data, do a scan pass first
+                    if (!_compressionEnabled)
+                    {
+                        var scanBuffer = buffer.Slice(reader.Consumed);
+                        if (!TryScanUncompressedDataMessage(scanBuffer))
+                            return false;
+                    }
                     typedBlock = ReadTypedDataMessage(ref reader, registry);
                     buffer = buffer.Slice(reader.Consumed);
                     return true;
@@ -902,33 +929,44 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Scans an uncompressed data message without allocating arrays.
+    /// This is the first pass of two-pass parsing for uncompressed data.
+    /// </summary>
+    /// <param name="buffer">The buffer positioned after the message type.</param>
+    /// <returns>True if the entire message is available; false if not enough data.</returns>
+    private bool TryScanUncompressedDataMessage(ReadOnlySequence<byte> buffer)
+    {
+        var scanner = new ProtocolReader(buffer);
+
+        // Skip table name
+        if (!scanner.TrySkipString())
+            return false;
+
+        // Read block header (BlockInfo, columnCount, rowCount)
+        var header = Block.TryReadBlockHeader(ref scanner);
+        if (header == null)
+            return false;
+
+        // Skip all column data
+        var skipperRegistry = ColumnSkipperRegistry.Default;
+        if (!Block.TrySkipBlockColumns(ref scanner, skipperRegistry,
+            header.Value.ColumnCount, header.Value.RowCount, NegotiatedProtocolVersion))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
     private TypedBlock ReadTypedDataMessage(ref ProtocolReader reader, ColumnReaderRegistry registry)
     {
         if (!_compressionEnabled)
         {
-            // For uncompressed data, first read block header to validate we have enough buffer
-            // This prevents wasteful allocations when parsing fails due to incomplete data
-
-            // Table name comes first in the message
+            // Scan pass already validated completeness in TryReadTypedMessage
+            // Just parse directly now - we know we have all the data
             var tableName = reader.ReadString();
-
-            // Read block header (BlockInfo, columnCount, rowCount) without allocating columns
-            var header = Block.TryReadBlockHeader(ref reader);
-            if (header == null)
-                throw new InvalidOperationException("Not enough data for block header");
-
-            // Calculate minimum buffer size needed based on column/row counts
-            // Conservative estimate: at least 1 byte per cell (minimum for Int8, Bool, etc.)
-            var minDataSize = Block.EstimateMinBlockSize(header.Value.RowCount, header.Value.ColumnCount);
-            if (minDataSize > 0 && reader.Remaining < minDataSize)
-            {
-                throw new InvalidOperationException(
-                    $"Not enough data for block: need at least {minDataSize} bytes for {header.Value.RowCount} rows x {header.Value.ColumnCount} columns, have {reader.Remaining}");
-            }
-
-            // Continue reading from current position (after header) with the pre-read header info
-            return Block.ReadColumnsWithHeader(ref reader, registry, tableName,
-                header.Value.ColumnCount, header.Value.RowCount, NegotiatedProtocolVersion);
+            return Block.ReadTypedBlockWithTableName(ref reader, registry, tableName, NegotiatedProtocolVersion);
         }
 
         // Table name is read OUTSIDE the compressed block
@@ -1279,6 +1317,17 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             switch (messageType)
             {
                 case ServerMessageType.Data:
+                    // For uncompressed data, do a non-allocating scan pass first
+                    // to validate block completeness before parsing
+                    if (!_compressionEnabled)
+                    {
+                        var scanBuffer = buffer.Slice(reader.Consumed);
+                        if (!TryScanUncompressedDataMessage(scanBuffer))
+                        {
+                            return false;
+                        }
+                    }
+
                     var dataMessage = ReadDataMessage(ref reader, registry);
                     buffer = buffer.Slice(reader.Consumed);
                     message = dataMessage;
@@ -1310,6 +1359,13 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 case ServerMessageType.ProfileEvents:
                     // ProfileEvents is a data block containing profiling information
                     // Read and discard it
+                    // For uncompressed data, do a scan pass first
+                    if (!_compressionEnabled)
+                    {
+                        var scanBuffer = buffer.Slice(reader.Consumed);
+                        if (!TryScanUncompressedDataMessage(scanBuffer))
+                            return false;
+                    }
                     var profileEventsBlock = ReadDataMessage(ref reader, registry);
                     buffer = buffer.Slice(reader.Consumed);
                     // Continue reading next message
@@ -1318,6 +1374,13 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 case ServerMessageType.Totals:
                 case ServerMessageType.Extremes:
                     // These are data blocks, read them
+                    // For uncompressed data, do a scan pass first
+                    if (!_compressionEnabled)
+                    {
+                        var scanBuffer = buffer.Slice(reader.Consumed);
+                        if (!TryScanUncompressedDataMessage(scanBuffer))
+                            return false;
+                    }
                     var specialData = ReadDataMessage(ref reader, registry);
                     buffer = buffer.Slice(reader.Consumed);
                     message = specialData;
@@ -1338,29 +1401,10 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     {
         if (!_compressionEnabled)
         {
-            // For uncompressed data, first read block header to validate we have enough buffer
-            // This prevents wasteful allocations when parsing fails due to incomplete data
-
-            // Table name comes first in the message
+            // Scan pass already validated completeness in TryReadMessage
+            // Just parse directly now - we know we have all the data
             var tableName = reader.ReadString();
-
-            // Read block header (BlockInfo, columnCount, rowCount) without allocating columns
-            var header = Block.TryReadBlockHeader(ref reader);
-            if (header == null)
-                throw new InvalidOperationException("Not enough data for block header");
-
-            // Calculate minimum buffer size needed based on column/row counts
-            // Conservative estimate: at least 1 byte per cell (minimum for Int8, Bool, etc.)
-            var minDataSize = Block.EstimateMinBlockSize(header.Value.RowCount, header.Value.ColumnCount);
-            if (minDataSize > 0 && reader.Remaining < minDataSize)
-            {
-                throw new InvalidOperationException(
-                    $"Not enough data for block: need at least {minDataSize} bytes for {header.Value.RowCount} rows x {header.Value.ColumnCount} columns, have {reader.Remaining}");
-            }
-
-            // Continue reading from current position (after header) with the pre-read header info
-            var block = Block.ReadColumnsWithHeader(ref reader, registry, tableName,
-                header.Value.ColumnCount, header.Value.RowCount, NegotiatedProtocolVersion);
+            var block = Block.ReadTypedBlockWithTableName(ref reader, registry, tableName, NegotiatedProtocolVersion);
             return new DataMessage { Block = block };
         }
 
@@ -1601,6 +1645,18 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
                 if (messageType == ServerMessageType.Data)
                 {
+                    // For uncompressed data, do a scan pass first
+                    if (!_compressionEnabled)
+                    {
+                        var scanBuffer = buffer.Slice(reader.Consumed);
+                        if (!TryScanUncompressedDataMessage(scanBuffer))
+                        {
+                            // Not enough data yet
+                            _pipeReader.AdvanceTo(buffer.Start, buffer.End);
+                            continue;
+                        }
+                    }
+
                     var dataMessage = ReadDataMessage(ref reader, registry);
                     _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
                     return dataMessage.Block;
@@ -1945,6 +2001,16 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
                     case ServerMessageType.Data:
                         // Skip any data messages (e.g., empty confirmation blocks)
+                        // For uncompressed data, do a scan pass first
+                        if (!_compressionEnabled)
+                        {
+                            var scanBuffer = buffer.Slice(reader.Consumed);
+                            if (!TryScanUncompressedDataMessage(scanBuffer))
+                            {
+                                _pipeReader.AdvanceTo(buffer.Start, buffer.End);
+                                continue;
+                            }
+                        }
                         ReadDataMessage(ref reader, registry);
                         _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
                         break;
@@ -1955,6 +2021,16 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                         break;
 
                     case ServerMessageType.ProfileEvents:
+                        // For uncompressed data, do a scan pass first
+                        if (!_compressionEnabled)
+                        {
+                            var scanBuffer = buffer.Slice(reader.Consumed);
+                            if (!TryScanUncompressedDataMessage(scanBuffer))
+                            {
+                                _pipeReader.AdvanceTo(buffer.Start, buffer.End);
+                                continue;
+                            }
+                        }
                         ReadDataMessage(ref reader, registry);
                         _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
                         break;

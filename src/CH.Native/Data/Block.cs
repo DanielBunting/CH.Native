@@ -153,6 +153,70 @@ public sealed class Block
     }
 
     /// <summary>
+    /// Tries to skip block column data without allocating arrays.
+    /// This is the scan pass for two-pass parsing of uncompressed data.
+    /// </summary>
+    /// <param name="reader">The protocol reader positioned after BlockInfo/columnCount/rowCount.</param>
+    /// <param name="skipperRegistry">The column skipper registry.</param>
+    /// <param name="columnCount">The pre-read column count.</param>
+    /// <param name="rowCount">The pre-read row count.</param>
+    /// <param name="protocolVersion">The negotiated protocol version.</param>
+    /// <returns>True if all column data was successfully skipped; false if not enough data available.</returns>
+    public static bool TrySkipBlockColumns(
+        ref ProtocolReader reader,
+        ColumnSkipperRegistry skipperRegistry,
+        int columnCount,
+        int rowCount,
+        int protocolVersion = 0)
+    {
+        if (columnCount == 0)
+            return true;
+
+        for (int i = 0; i < columnCount; i++)
+        {
+            // Skip column name (string)
+            if (!reader.TrySkipString())
+                return false;
+
+            // Read column type (we need to know the type to skip the data correctly)
+            // This allocates a small string but avoids the much larger data allocations
+            if (!reader.TryReadVarInt(out var typeLength))
+                return false;
+
+            if (reader.Remaining < (long)typeLength)
+                return false;
+
+            // We must read the type string to look up the skipper
+            var typeBytes = reader.ReadBytes((int)typeLength);
+            var columnType = System.Text.Encoding.UTF8.GetString(typeBytes.Span);
+
+            // Skip custom serialization metadata for protocol >= WithCustomSerialization
+            if (protocolVersion >= ProtocolVersion.WithCustomSerialization)
+            {
+                if (!reader.TryReadByte(out var hasCustom))
+                    return false;
+
+                if (hasCustom != 0)
+                {
+                    // Custom serialization kind - skip it
+                    if (!reader.TryReadByte(out _))
+                        return false;
+                }
+            }
+
+            // Skip column data
+            if (rowCount > 0)
+            {
+                var skipper = skipperRegistry.GetSkipper(columnType);
+                if (!skipper.TrySkipColumn(ref reader, rowCount))
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Reads column headers and data using pre-read header info.
     /// Use this after TryReadBlockHeader to continue from where it left off.
     /// </summary>
