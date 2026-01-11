@@ -36,6 +36,11 @@ public readonly struct QueryMessage
     public IReadOnlyDictionary<string, string>? Parameters { get; init; }
 
     /// <summary>
+    /// Gets the query settings (sent in the settings section).
+    /// </summary>
+    public IReadOnlyDictionary<string, string>? Settings { get; init; }
+
+    /// <summary>
     /// Creates a new QueryMessage with an auto-generated query ID.
     /// </summary>
     /// <param name="sql">The SQL query to execute.</param>
@@ -44,6 +49,7 @@ public readonly struct QueryMessage
     /// <param name="protocolRevision">The negotiated protocol revision.</param>
     /// <param name="useCompression">Whether to use compression.</param>
     /// <param name="parameters">Optional query parameters.</param>
+    /// <param name="settings">Optional query settings.</param>
     /// <returns>A new QueryMessage instance.</returns>
     public static QueryMessage Create(
         string sql,
@@ -51,7 +57,8 @@ public readonly struct QueryMessage
         string username,
         int protocolRevision,
         bool useCompression = false,
-        IReadOnlyDictionary<string, string>? parameters = null)
+        IReadOnlyDictionary<string, string>? parameters = null,
+        IReadOnlyDictionary<string, string>? settings = null)
     {
         var queryId = Guid.NewGuid().ToString("D");
         return new QueryMessage
@@ -60,6 +67,7 @@ public readonly struct QueryMessage
             QueryText = sql,
             UseCompression = useCompression,
             Parameters = parameters,
+            Settings = settings,
             ClientInfo = ClientInfo.Create(clientName, username, queryId, protocolRevision)
         };
     }
@@ -80,8 +88,19 @@ public readonly struct QueryMessage
         // Client info
         ClientInfo.Write(ref writer, protocolRevision);
 
-        // Settings section - empty for regular queries
-        // (Parameters go in the dedicated parameters section below)
+        // Settings section - send any configured settings
+        // Format: name (string) + flags (varint) + value (string), terminated by empty string
+        if (Settings != null && Settings.Count > 0)
+        {
+            foreach (var (name, value) in Settings)
+            {
+                writer.WriteString(name);
+                // Flags: 1 = settingFlagImportant (for settings)
+                writer.WriteVarInt(1);
+                writer.WriteString(value);
+            }
+        }
+        // Empty string terminates settings list
         writer.WriteString(string.Empty);
 
         // Inter-server secret (empty for regular clients, if protocol supports)

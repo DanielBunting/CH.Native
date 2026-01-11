@@ -45,6 +45,20 @@ if (args.Length > 0)
         case "all":
             RunAllBenchmarks();
             break;
+
+        // JSON benchmarks (requires Docker with ClickHouse 25.6+)
+        case "jsoncolumn":
+            BenchmarkRunner.Run<JsonColumnBenchmarks>();
+            break;
+        case "jsonquery":
+            BenchmarkRunner.Run<JsonQueryBenchmarks>();
+            break;
+        case "jsoninsert":
+            BenchmarkRunner.Run<JsonBulkInsertBenchmarks>();
+            break;
+        case "json":
+            RunJsonBenchmarks();
+            break;
         default:
             PrintUsage();
             break;
@@ -55,8 +69,9 @@ else
     PrintUsage();
 }
 
-// Cleanup container at the end
+// Cleanup containers at the end
 await BenchmarkContainerManager.Instance.DisposeAsync();
+await JsonBenchmarkContainerManager.Instance.DisposeAsync();
 
 static void RunComparisonBenchmarks()
 {
@@ -77,6 +92,16 @@ static void RunAllBenchmarks()
 
     // Protocol comparison benchmarks (requires Docker)
     RunComparisonBenchmarks();
+}
+
+static void RunJsonBenchmarks()
+{
+    // Unit-level JSON benchmarks (no container)
+    BenchmarkRunner.Run<JsonColumnBenchmarks>();
+
+    // Protocol comparison JSON benchmarks (requires Docker with CH 25.6+)
+    BenchmarkRunner.Run<JsonQueryBenchmarks>();
+    BenchmarkRunner.Run<JsonBulkInsertBenchmarks>();
 }
 
 static void PrintUsage()
@@ -100,12 +125,19 @@ static void PrintUsage()
           compare     - Run all protocol comparison benchmarks
           quick       - Quick dev test (SimpleQueryBenchmarks, few iterations)
 
+        JSON Benchmarks (requires Docker with ClickHouse 25.6+):
+          jsoncolumn  - JSON column reader/writer/skipper (unit-level, no Docker)
+          jsonquery   - JSON query benchmarks (Native vs HTTP)
+          jsoninsert  - JSON bulk insert benchmarks (Native vs HTTP)
+          json        - Run all JSON benchmarks
+
         Combined:
           all         - Run all benchmarks (synthetic + comparison)
 
         Examples:
           dotnet run -c Release -- simple
           dotnet run -c Release -- compare
+          dotnet run -c Release -- json
           dotnet run -c Release -- quick
         """);
 }

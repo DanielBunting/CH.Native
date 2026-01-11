@@ -65,9 +65,10 @@ public sealed class ColumnReaderRegistry
 
     private static bool IsCompositeType(string? baseType)
     {
-        return baseType is "Nullable" or "Array" or "Map" or "Tuple" or "LowCardinality"
+        return baseType is "Nullable" or "Array" or "Map" or "Tuple" or "LowCardinality" or "Nested"
             or "FixedString" or "DateTime" or "DateTime64"
-            or "Decimal" or "Decimal32" or "Decimal64" or "Decimal128" or "Decimal256";
+            or "Decimal" or "Decimal32" or "Decimal64" or "Decimal128" or "Decimal256"
+            or "JSON";
     }
 
     /// <summary>
@@ -165,6 +166,9 @@ public sealed class ColumnReaderRegistryBuilder
         // Enum types
         Register(new ColumnReaders.Enum8ColumnReader());
         Register(new ColumnReaders.Enum16ColumnReader());
+
+        // JSON type
+        Register(new ColumnReaders.JsonColumnReader());
 
         return this;
     }
