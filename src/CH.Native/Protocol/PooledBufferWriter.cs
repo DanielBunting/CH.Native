@@ -75,6 +75,25 @@ public sealed class PooledBufferWriter : IBufferWriter<byte>, IDisposable
         }
     }
 
+    /// <summary>
+    /// Ensures the buffer has at least the specified capacity.
+    /// Call this before writing to avoid resize allocations during write operations.
+    /// </summary>
+    /// <param name="capacity">The minimum required capacity.</param>
+    public void EnsureCapacity(int capacity)
+    {
+        if (capacity <= 0)
+            throw new ArgumentOutOfRangeException(nameof(capacity));
+
+        if (capacity > _buffer.Length)
+        {
+            byte[] newBuffer = ArrayPool<byte>.Shared.Rent(capacity);
+            _buffer.AsSpan(0, _index).CopyTo(newBuffer);
+            ArrayPool<byte>.Shared.Return(_buffer);
+            _buffer = newBuffer;
+        }
+    }
+
     /// <inheritdoc />
     public void Advance(int count)
     {
@@ -189,6 +208,39 @@ public sealed class BufferWriterPool
         }
 
         return new PooledBufferWriter(_initialCapacity);
+    }
+
+    /// <summary>
+    /// Rents a buffer writer from the pool with a minimum capacity hint.
+    /// This avoids resize allocations during write operations for large payloads.
+    /// </summary>
+    /// <param name="sizeHint">Estimated size needed. The buffer will be at least this size.</param>
+    public PooledBufferWriter Rent(int sizeHint)
+    {
+        PooledBufferWriter? writer = null;
+
+        lock (_lock)
+        {
+            if (_pool.TryPop(out writer))
+            {
+                writer.Reset();
+            }
+        }
+
+        if (writer == null)
+        {
+            // Create with the larger of initial capacity or size hint
+            var capacity = Math.Max(_initialCapacity, sizeHint);
+            return new PooledBufferWriter(capacity);
+        }
+
+        // Ensure the pooled writer has enough capacity
+        if (sizeHint > 0)
+        {
+            writer.EnsureCapacity(sizeHint);
+        }
+
+        return writer;
     }
 
     /// <summary>

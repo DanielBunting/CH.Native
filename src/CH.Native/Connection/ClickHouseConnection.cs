@@ -1932,7 +1932,11 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         if (!_isOpen)
             throw new InvalidOperationException("Connection is not open.");
 
-        var bufferWriter = BufferWriterPool.Shared.Rent();
+        // Estimate buffer size to avoid resize allocations during serialization
+        // Heuristic: ~32 bytes per column per row + 1KB for protocol overhead
+        // This is conservative but avoids most resize operations
+        var estimatedSize = (rowCount * extractors.Count * 32) + 1024;
+        var bufferWriter = BufferWriterPool.Shared.Rent(estimatedSize);
 
         try
         {
@@ -1952,6 +1956,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             else
             {
                 WriteDataBlockDirect(ref writer, extractors, rows, rowCount);
+            }
+
+            // OPTIMIZATION: Clear row references immediately after serialization, before await.
+            // This allows GC to collect row objects during the network I/O await,
+            // reducing Gen1 GC pressure by ensuring objects don't survive across await boundaries.
+            if (rows is TRow[] rowArray)
+            {
+                Array.Clear(rowArray, 0, rowCount);
             }
 
             // Wire dump for debugging protocol issues
@@ -2017,8 +2029,9 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     {
         // NOTE: Table name is now written by the caller (SendDataBlockDirectAsync) at the Data message level
 
-        // Build uncompressed block data
-        var uncompressedBuffer = BufferWriterPool.Shared.Rent();
+        // Estimate buffer size for uncompressed data to avoid resize allocations
+        var estimatedSize = (rowCount * extractors.Count * 32) + 1024;
+        var uncompressedBuffer = BufferWriterPool.Shared.Rent(estimatedSize);
 
         try
         {

@@ -897,15 +897,15 @@ public static class ColumnExtractorFactory
                     writer.WriteByte(0);
             }
 
-            // Use regular array instead of stackalloc due to ref struct limitations
-            var buffer = new byte[16];
+            // Use stackalloc to avoid heap allocation - ProtocolWriter is a ref struct so this is safe
+            Span<byte> buffer = stackalloc byte[16];
             for (int i = 0; i < rowCount; i++)
             {
                 var value = _getter(rows[i]);
                 value.TryWriteBytes(buffer);
                 // ClickHouse UUID is stored as two UInt64 in big-endian byte order, but reversed
-                writer.WriteBytes(buffer.AsSpan(8, 8)); // Second half first
-                writer.WriteBytes(buffer.AsSpan(0, 8)); // First half second
+                writer.WriteBytes(buffer[8..16]); // Second half first
+                writer.WriteBytes(buffer[0..8]); // First half second
             }
         }
     }
@@ -937,14 +937,15 @@ public static class ColumnExtractorFactory
                 }
             }
 
-            var buffer = new byte[16];
+            // Use stackalloc to avoid heap allocation
+            Span<byte> buffer = stackalloc byte[16];
             for (int i = 0; i < rowCount; i++)
             {
                 var value = _getter(rows[i]);
                 var guid = value ?? Guid.Empty;
                 guid.TryWriteBytes(buffer);
-                writer.WriteBytes(buffer.AsSpan(8, 8));
-                writer.WriteBytes(buffer.AsSpan(0, 8));
+                writer.WriteBytes(buffer[8..16]);
+                writer.WriteBytes(buffer[0..8]);
             }
         }
     }
@@ -992,18 +993,15 @@ public static class ColumnExtractorFactory
                 {
                     writer.WriteInt64((long)scaled);
                 }
+                else if (_precision <= 38)
+                {
+                    // Use allocation-free decimal to Int128 conversion
+                    writer.WriteDecimalAsInt128(scaled);
+                }
                 else
                 {
-                    // Use BigInteger for Decimal128/Decimal256
-                    var bigInt = new BigInteger(scaled);
-                    if (_precision <= 38)
-                    {
-                        writer.WriteInt128((Int128)bigInt);
-                    }
-                    else
-                    {
-                        writer.WriteInt256(bigInt);
-                    }
+                    // Use allocation-free decimal to Int256 conversion
+                    writer.WriteDecimalAsInt256(scaled);
                 }
             }
         }
@@ -1055,17 +1053,15 @@ public static class ColumnExtractorFactory
                 {
                     writer.WriteInt64((long)scaled);
                 }
+                else if (_precision <= 38)
+                {
+                    // Use allocation-free decimal to Int128 conversion
+                    writer.WriteDecimalAsInt128(scaled);
+                }
                 else
                 {
-                    var bigInt = new BigInteger(scaled);
-                    if (_precision <= 38)
-                    {
-                        writer.WriteInt128((Int128)bigInt);
-                    }
-                    else
-                    {
-                        writer.WriteInt256(bigInt);
-                    }
+                    // Use allocation-free decimal to Int256 conversion
+                    writer.WriteDecimalAsInt256(scaled);
                 }
             }
         }
@@ -1100,7 +1096,8 @@ public static class ColumnExtractorFactory
                 }
             }
 
-            var buffer = new byte[16];
+            // Use stackalloc to avoid heap allocation
+            Span<byte> buffer = stackalloc byte[16];
             for (int i = 0; i < rowCount; i++)
             {
                 var value = _getter(rows[i]);
@@ -1112,7 +1109,7 @@ public static class ColumnExtractorFactory
                     }
                     else
                     {
-                        Array.Clear(buffer);
+                        buffer.Clear();
                     }
                     writer.WriteBytes(buffer);
                 }
@@ -1121,7 +1118,7 @@ public static class ColumnExtractorFactory
                     if (value != null)
                     {
                         value.TryWriteBytes(buffer, out _);
-                        writer.WriteBytes(buffer.AsSpan(0, 4));
+                        writer.WriteBytes(buffer[0..4]);
                     }
                     else
                     {
