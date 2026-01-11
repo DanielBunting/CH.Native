@@ -1,5 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <PropertyGroup>
+    <Description>High-performance .NET client for ClickHouse using the native binary TCP protocol. Features include compression (LZ4/Zstd), bulk insert, ADO.NET provider, resilience policies, and OpenTelemetry integration.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="CH.Native.Tests" />
   </ItemGroup>
