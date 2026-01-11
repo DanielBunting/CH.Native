@@ -43,6 +43,7 @@ public sealed class ColumnWriterFactory
             "Map" => CreateMapWriter(type),
             "Tuple" => CreateTupleWriter(type),
             "LowCardinality" => CreateLowCardinalityWriter(type),
+            "JSON" => new JsonColumnWriter(),
 
             // Parameterized simple types
             "FixedString" => CreateFixedStringWriter(type),

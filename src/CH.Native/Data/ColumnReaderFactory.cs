@@ -44,6 +44,7 @@ public sealed class ColumnReaderFactory
             "Tuple" => CreateTupleReader(type),
             "Nested" => CreateNestedReader(type),
             "LowCardinality" => CreateLowCardinalityReader(type),
+            "JSON" => new ColumnReaders.JsonColumnReader(),
 
             // Parameterized simple types
             "FixedString" => CreateFixedStringReader(type),

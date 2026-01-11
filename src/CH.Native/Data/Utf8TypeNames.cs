@@ -45,4 +45,7 @@ internal static class Utf8TypeNames
     // Enum types
     public static ReadOnlySpan<byte> Enum8 => "Enum8"u8;
     public static ReadOnlySpan<byte> Enum16 => "Enum16"u8;
+
+    // JSON type
+    public static ReadOnlySpan<byte> JSON => "JSON"u8;
 }

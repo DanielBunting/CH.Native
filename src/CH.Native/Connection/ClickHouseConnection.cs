@@ -1204,13 +1204,27 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         _compressionEnabled = _settings.Compress;
         _cancellationRequested = false;
 
+        // Build settings dictionary for JSON serialization on CH 25.6+
+        // These settings tell ClickHouse to serialize JSON/Dynamic columns as
+        // length-prefixed strings in the Native protocol instead of complex binary format
+        Dictionary<string, string>? querySettings = null;
+        if (IsClickHouse25_6OrLater())
+        {
+            querySettings = new Dictionary<string, string>
+            {
+                // Recommended by clickhouse-go for JSON type support
+                ["output_format_native_write_json_as_string"] = "1"
+            };
+        }
+
         var queryMessage = QueryMessage.Create(
             sql,
             _settings.ClientName,
             _settings.Username,
             NegotiatedProtocolVersion,
             useCompression: _settings.Compress,
-            parameters: parameters);
+            parameters: parameters,
+            settings: querySettings);
 
         // Track the query ID for cancellation support
         lock (_queryLock)
@@ -1657,6 +1671,17 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
         _disposed = true;
         await CloseInternalAsync();
+    }
+
+    /// <summary>
+    /// Checks if the connected server is ClickHouse 25.6 or later.
+    /// Used to enable JSON flattened serialization format.
+    /// </summary>
+    private bool IsClickHouse25_6OrLater()
+    {
+        if (ServerInfo == null) return false;
+        return ServerInfo.VersionMajor > 25 ||
+               (ServerInfo.VersionMajor == 25 && ServerInfo.VersionMinor >= 6);
     }
 
     #region Bulk Insert Support

@@ -45,6 +45,7 @@ When reading data, CH.Native automatically converts ClickHouse types to their .N
 | Map(K, V) | Dictionary<K, V> | |
 | Tuple(...) | object[] | |
 | LowCardinality(T) | T | Dictionary encoded |
+| JSON | JsonDocument | ClickHouse 25.6+ required |
 
 ## Numeric Types
 
@@ -261,6 +262,87 @@ CREATE TABLE logs (
 ```csharp
 // Reads as regular string - encoding is transparent
 var level = await connection.ExecuteScalarAsync<string>("SELECT level FROM logs LIMIT 1");
+```
+
+### JSON
+
+**Requires ClickHouse 25.6+**
+
+The JSON type stores semi-structured data and maps to `System.Text.Json.JsonDocument`:
+
+| ClickHouse Type | .NET Type | Notes |
+|-----------------|-----------|-------|
+| JSON | JsonDocument | Requires disposal |
+| Nullable(JSON) | JsonDocument? | |
+| Array(JSON) | JsonDocument[] | |
+
+**Basic Usage:**
+
+```csharp
+// Read JSON column
+var doc = await connection.ExecuteScalarAsync<JsonDocument>(
+    "SELECT '{\"name\":\"Alice\",\"age\":30}'::JSON");
+
+using (doc)
+{
+    var name = doc.RootElement.GetProperty("name").GetString();
+    var age = doc.RootElement.GetProperty("age").GetInt32();
+}
+```
+
+**Important:** Always dispose `JsonDocument` to avoid memory leaks.
+
+**Nested JSON Access:**
+
+```csharp
+// Client-side traversal
+var city = doc.RootElement
+    .GetProperty("user")
+    .GetProperty("address")
+    .GetProperty("city")
+    .GetString();
+
+// Server-side path extraction (more efficient)
+await foreach (var row in connection.QueryAsync(
+    "SELECT data.user.address.city::String as city FROM table"))
+{
+    var city = row.GetFieldValue<string>("city");
+}
+```
+
+**Server Settings:**
+
+For best compatibility, add this setting to queries involving JSON columns:
+
+```csharp
+// Ensures JSON is transmitted as string (most compatible format)
+var query = "SELECT data FROM table SETTINGS output_format_native_write_json_as_string=1";
+```
+
+**Writing JSON:**
+
+```csharp
+// From JsonDocument
+await connection.ExecuteNonQueryAsync(
+    "INSERT INTO table VALUES (@id, @data)",
+    new { id = 1, data = JsonDocument.Parse("{\"key\":\"value\"}") });
+
+// From string
+await connection.ExecuteNonQueryAsync(
+    "INSERT INTO table VALUES (1, '{\"key\":\"value\"}'::JSON)");
+```
+
+**Nullable JSON:**
+
+```csharp
+var data = row.GetFieldValue<JsonDocument?>("data");
+if (data != null)
+{
+    using (data)
+    {
+        // Process JSON
+    }
+}
 ```
 
 ## Custom Type Mapping

@@ -67,7 +67,8 @@ public sealed class ColumnWriterRegistry
     {
         return baseType is "Nullable" or "Array" or "Map" or "Tuple" or "LowCardinality" or "Nested"
             or "FixedString" or "DateTime" or "DateTime64"
-            or "Decimal" or "Decimal32" or "Decimal64" or "Decimal128" or "Decimal256";
+            or "Decimal" or "Decimal32" or "Decimal64" or "Decimal128" or "Decimal256"
+            or "JSON";
     }
 
     /// <summary>
@@ -165,6 +166,9 @@ public sealed class ColumnWriterRegistryBuilder
         // Enum types
         Register(new ColumnWriters.Enum8ColumnWriter());
         Register(new ColumnWriters.Enum16ColumnWriter());
+
+        // JSON type
+        Register(new ColumnWriters.JsonColumnWriter());
 
         return this;
     }

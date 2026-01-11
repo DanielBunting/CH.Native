@@ -1,3 +1,5 @@
+using System.Text.Json;
+
 namespace CH.Native.Parameters;
 
 /// <summary>
@@ -42,6 +44,10 @@ public static class ClickHouseTypeMapper
 
         // Network
         { typeof(System.Net.IPAddress), "IPv6" },
+
+        // JSON
+        { typeof(JsonDocument), "JSON" },
+        { typeof(JsonElement), "JSON" },
     };
 
     /// <summary>

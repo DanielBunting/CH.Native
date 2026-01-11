@@ -90,4 +90,21 @@ public class TypeParserBenchmarks
     [Benchmark]
     public ClickHouseType Parse_DeeplyNested()
         => ClickHouseTypeParser.Parse("Map(String, Array(Tuple(id Nullable(UInt64), data LowCardinality(String))))");
+
+    // JSON types
+    [Benchmark]
+    public ClickHouseType Parse_JSON_Simple()
+        => ClickHouseTypeParser.Parse("JSON");
+
+    [Benchmark]
+    public ClickHouseType Parse_JSON_WithParams()
+        => ClickHouseTypeParser.Parse("JSON(max_dynamic_paths=100)");
+
+    [Benchmark]
+    public ClickHouseType Parse_Nullable_JSON()
+        => ClickHouseTypeParser.Parse("Nullable(JSON)");
+
+    [Benchmark]
+    public ClickHouseType Parse_Array_JSON()
+        => ClickHouseTypeParser.Parse("Array(JSON)");
 }

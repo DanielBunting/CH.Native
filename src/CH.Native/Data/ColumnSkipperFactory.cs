@@ -44,6 +44,7 @@ public sealed class ColumnSkipperFactory
             "Tuple" => CreateTupleSkipper(type),
             "Nested" => CreateNestedSkipper(type),
             "LowCardinality" => CreateLowCardinalitySkipper(type),
+            "JSON" => new JsonColumnSkipper(),
 
             // Parameterized simple types
             "FixedString" => CreateFixedStringSkipper(type),

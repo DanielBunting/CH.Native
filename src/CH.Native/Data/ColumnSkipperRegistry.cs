@@ -81,7 +81,8 @@ public sealed class ColumnSkipperRegistry
     {
         return baseType is "Nullable" or "Array" or "Map" or "Tuple" or "LowCardinality"
             or "FixedString" or "DateTime" or "DateTime64" or "Nested"
-            or "Decimal" or "Decimal32" or "Decimal64" or "Decimal128" or "Decimal256";
+            or "Decimal" or "Decimal32" or "Decimal64" or "Decimal128" or "Decimal256"
+            or "JSON";
     }
 
     /// <summary>
@@ -172,6 +173,10 @@ public sealed class ColumnSkipperRegistry
         if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Enum16))
             return _skippers["Enum16"];
 
+        // JSON type
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.JSON))
+            return _skippers["JSON"];
+
         // Not a simple type - return null to indicate string-based lookup needed
         // (for parameterized types like Array(T), Nullable(T), etc.)
         return null;
@@ -253,6 +258,9 @@ public sealed class ColumnSkipperRegistryBuilder
 
         // String type
         Register(new StringColumnSkipper());
+
+        // JSON type
+        Register(new JsonColumnSkipper());
 
         return this;
     }
