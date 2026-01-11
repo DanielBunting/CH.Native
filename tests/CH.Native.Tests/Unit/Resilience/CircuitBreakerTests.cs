@@ -444,8 +444,9 @@ public class CircuitBreakerTests
         breaker.RecordFailure();
         breaker.RecordFailure(); // Should trigger Open
 
-        // Wait for async event dispatch
-        await Task.Delay(50);
+        // Wait for async event dispatch with polling for CI reliability
+        for (int i = 0; i < 50 && stateChanges.Count == 0; i++)
+            await Task.Delay(20);
 
         Assert.Single(stateChanges);
         Assert.Equal(CircuitBreakerState.Closed, stateChanges[0].OldState);
@@ -458,7 +459,7 @@ public class CircuitBreakerTests
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 1,
-            OpenDuration = TimeSpan.FromMilliseconds(10)
+            OpenDuration = TimeSpan.FromMilliseconds(50)
         };
         var breaker = new CircuitBreaker(options);
         var stateChanges = new List<CircuitBreakerStateChangedEventArgs>();
@@ -467,12 +468,18 @@ public class CircuitBreakerTests
 
         breaker.RecordFailure(); // Triggers Open
 
-        await Task.Delay(50); // Wait for HalfOpen transition to become available
+        // Wait for first state change (Closed -> Open) with polling
+        for (int i = 0; i < 50 && stateChanges.Count < 1; i++)
+            await Task.Delay(20);
+
+        // Wait for HalfOpen transition to become available
+        await Task.Delay(100);
 
         _ = breaker.State; // Triggers HalfOpen transition
 
-        // Wait for async event dispatch
-        await Task.Delay(50);
+        // Wait for second state change (Open -> HalfOpen) with polling
+        for (int i = 0; i < 50 && stateChanges.Count < 2; i++)
+            await Task.Delay(20);
 
         Assert.Equal(2, stateChanges.Count);
         Assert.Equal(CircuitBreakerState.Open, stateChanges[1].OldState);
