@@ -617,7 +617,7 @@ public class LinqQueryTests : IAsyncLifetime
         await connection.OpenAsync();
 
         var count = 0;
-        await foreach (var customer in connection.Table<TestCustomer>(_tableName))
+        await foreach (var customer in connection.Table<TestCustomer>(_tableName).AsAsyncEnumerable())
         {
             Assert.NotNull(customer);
             count++;
@@ -632,13 +632,12 @@ public class LinqQueryTests : IAsyncLifetime
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
-        // Cast to IAsyncEnumerable<T> to access GetAsyncEnumerator
-        var query = (IAsyncEnumerable<TestCustomer>)connection.Table<TestCustomer>(_tableName)
+        var query = connection.Table<TestCustomer>(_tableName)
             .Where(c => c.IsActive == 1)
             .OrderBy(c => c.Name);
 
         var names = new List<string>();
-        await foreach (var customer in query)
+        await foreach (var customer in query.AsAsyncEnumerable())
         {
             names.Add(customer.Name);
         }

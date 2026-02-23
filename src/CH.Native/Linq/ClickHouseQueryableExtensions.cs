@@ -25,7 +25,7 @@ public static class ClickHouseQueryableExtensions
     ///     .OrderBy(u => u.Name)
     ///     .ToListAsync();
     /// </example>
-    public static ClickHouseQueryable<T> Table<T>(this ClickHouseConnection connection)
+    public static IQueryable<T> Table<T>(this ClickHouseConnection connection)
     {
         if (!connection.IsOpen)
             throw new InvalidOperationException("Connection must be open before creating a queryable.");
@@ -43,7 +43,7 @@ public static class ClickHouseQueryableExtensions
     /// <param name="connection">The connection to query against.</param>
     /// <param name="tableName">The explicit table name to query.</param>
     /// <returns>A queryable representing the table.</returns>
-    public static ClickHouseQueryable<T> Table<T>(this ClickHouseConnection connection, string tableName)
+    public static IQueryable<T> Table<T>(this ClickHouseConnection connection, string tableName)
     {
         if (!connection.IsOpen)
             throw new InvalidOperationException("Connection must be open before creating a queryable.");
@@ -91,6 +91,24 @@ public static class ClickHouseQueryableExtensions
                 GetMethodInfo(Sample<T>, source, ratio),
                 source.Expression,
                 Expression.Constant(ratio)));
+    }
+
+    /// <summary>
+    /// Returns the query as an <see cref="IAsyncEnumerable{T}"/> for use with <c>await foreach</c>.
+    /// </summary>
+    /// <typeparam name="T">The element type.</typeparam>
+    /// <param name="source">The source queryable. Must be a ClickHouse query.</param>
+    /// <returns>An async enumerable that executes the query and streams results.</returns>
+    /// <exception cref="InvalidOperationException">Thrown if the source is not a ClickHouse query.</exception>
+    public static IAsyncEnumerable<T> AsAsyncEnumerable<T>(this IQueryable<T> source)
+    {
+        if (source is IAsyncEnumerable<T> asyncEnumerable)
+        {
+            return asyncEnumerable;
+        }
+
+        throw new InvalidOperationException(
+            "AsAsyncEnumerable() is only available on ClickHouse queries created via connection.Table<T>().");
     }
 
     /// <summary>

@@ -53,7 +53,7 @@ public class SqlGeneratorTests
     public void Table_UsesSnakeCaseTableName()
     {
         var context = new ClickHouseQueryContext(null!, "test_order", typeof(TestOrder));
-        var queryable = new ClickHouseQueryable<TestOrder>(context);
+        IQueryable<TestOrder> queryable = new ClickHouseQueryable<TestOrder>(context);
 
         var sql = queryable.ToSql();
 
@@ -331,7 +331,7 @@ public class SqlGeneratorTests
     public void First_AddsLimit1()
     {
         var context = new ClickHouseQueryContext(null!, "test_order", typeof(TestOrder));
-        var queryable = new ClickHouseQueryable<TestOrder>(context);
+        IQueryable<TestOrder> queryable = new ClickHouseQueryable<TestOrder>(context);
 
         // We can't call FirstAsync without a connection, but we can test the expression
         var expression = Expression.Call(
@@ -350,7 +350,7 @@ public class SqlGeneratorTests
     public void Single_AddsLimit2()
     {
         var context = new ClickHouseQueryContext(null!, "test_order", typeof(TestOrder));
-        var queryable = new ClickHouseQueryable<TestOrder>(context);
+        IQueryable<TestOrder> queryable = new ClickHouseQueryable<TestOrder>(context);
 
         var expression = Expression.Call(
             typeof(Queryable),
@@ -372,7 +372,7 @@ public class SqlGeneratorTests
     public void Count_GeneratesCountFunction()
     {
         var context = new ClickHouseQueryContext(null!, "test_order", typeof(TestOrder));
-        var queryable = new ClickHouseQueryable<TestOrder>(context);
+        IQueryable<TestOrder> queryable = new ClickHouseQueryable<TestOrder>(context);
 
         var expression = Expression.Call(
             typeof(Queryable),
@@ -390,7 +390,7 @@ public class SqlGeneratorTests
     public void Sum_GeneratesSumFunction()
     {
         var context = new ClickHouseQueryContext(null!, "test_order", typeof(TestOrder));
-        var queryable = new ClickHouseQueryable<TestOrder>(context);
+        IQueryable<TestOrder> queryable = new ClickHouseQueryable<TestOrder>(context);
 
         Expression<Func<TestOrder, decimal>> selector = o => o.Amount;
 
@@ -475,7 +475,7 @@ public class SqlGeneratorTests
     public void Select_SingleProperty_GeneratesColumnName()
     {
         var context = new ClickHouseQueryContext(null, "test_order", typeof(TestOrder));
-        var queryable = new ClickHouseQueryable<TestOrder>(context);
+        IQueryable<TestOrder> queryable = new ClickHouseQueryable<TestOrder>(context);
 
         var projected = queryable.Select(o => o.Id);
         var sql = projected.ToSql();
@@ -488,7 +488,7 @@ public class SqlGeneratorTests
     public void Select_AnonymousType_GeneratesColumnsWithAliases()
     {
         var context = new ClickHouseQueryContext(null, "test_order", typeof(TestOrder));
-        var queryable = new ClickHouseQueryable<TestOrder>(context);
+        IQueryable<TestOrder> queryable = new ClickHouseQueryable<TestOrder>(context);
 
         var projected = queryable.Select(o => new { o.Id, o.CustomerName });
         var sql = projected.ToSql();
@@ -503,7 +503,7 @@ public class SqlGeneratorTests
     public void Select_AnonymousTypeWithRename_GeneratesAliasedColumns()
     {
         var context = new ClickHouseQueryContext(null, "test_order", typeof(TestOrder));
-        var queryable = new ClickHouseQueryable<TestOrder>(context);
+        IQueryable<TestOrder> queryable = new ClickHouseQueryable<TestOrder>(context);
 
         var projected = queryable.Select(o => new { OrderId = o.Id, Name = o.CustomerName });
         var sql = projected.ToSql();
@@ -516,7 +516,7 @@ public class SqlGeneratorTests
     public void Select_MultipleColumns_GeneratesCommaSeparatedList()
     {
         var context = new ClickHouseQueryContext(null, "test_order", typeof(TestOrder));
-        var queryable = new ClickHouseQueryable<TestOrder>(context);
+        IQueryable<TestOrder> queryable = new ClickHouseQueryable<TestOrder>(context);
 
         var projected = queryable.Select(o => new { o.Id, o.Amount, o.Quantity });
         var sql = projected.ToSql();
@@ -530,7 +530,7 @@ public class SqlGeneratorTests
     public void Select_WithWhere_CombinesCorrectly()
     {
         var context = new ClickHouseQueryContext(null, "test_order", typeof(TestOrder));
-        var queryable = new ClickHouseQueryable<TestOrder>(context);
+        IQueryable<TestOrder> queryable = new ClickHouseQueryable<TestOrder>(context);
 
         var projected = queryable
             .Where(o => o.IsActive)
@@ -548,7 +548,7 @@ public class SqlGeneratorTests
     public void Select_WithOrderByAndTake_CombinesCorrectly()
     {
         var context = new ClickHouseQueryContext(null, "test_order", typeof(TestOrder));
-        var queryable = new ClickHouseQueryable<TestOrder>(context);
+        IQueryable<TestOrder> queryable = new ClickHouseQueryable<TestOrder>(context);
 
         var projected = queryable
             .Select(o => new { o.Id, o.Amount })
