@@ -82,6 +82,12 @@ public sealed class ColumnReaderFactory
         var innerType = type.TypeArguments[0];
         var innerReader = CreateReaderForType(innerType);
 
+        // For lazy string mode, use the specialized lazy nullable string reader
+        if (_registry.Strategy == StringMaterialization.Lazy && innerReader is StringColumnReader { IsLazy: true } lazyStringReader)
+        {
+            return new LazyNullableStringColumnReader(lazyStringReader);
+        }
+
         // Use reflection to create the appropriate generic nullable reader
         var innerClrType = innerReader.ClrType;
 

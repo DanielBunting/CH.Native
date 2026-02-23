@@ -25,6 +25,7 @@ namespace CH.Native.Connection;
 public sealed class ClickHouseConnection : IAsyncDisposable
 {
     private readonly ClickHouseConnectionSettings _settings;
+    private readonly ColumnReaderRegistry _columnReaderRegistry;
     private readonly ClickHouseLogger _logger;
     private readonly object _queryLock = new();
     private TcpClient? _tcpClient;
@@ -75,6 +76,9 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     public ClickHouseConnection(ClickHouseConnectionSettings settings)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _columnReaderRegistry = settings.StringMaterialization == StringMaterialization.Lazy
+            ? ColumnReaderRegistry.LazyStrings
+            : ColumnReaderRegistry.Default;
         _logger = new ClickHouseLogger(_settings.Telemetry?.LoggerFactory);
     }
 
@@ -805,7 +809,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private async IAsyncEnumerable<TypedBlock> ReadTypedBlocksAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var registry = ColumnReaderRegistry.Default;
+        var registry = _columnReaderRegistry;
 
         try
         {
@@ -1289,7 +1293,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         if (_pipeReader == null || !_isOpen)
             return;
 
-        var registry = ColumnReaderRegistry.Default;
+        var registry = _columnReaderRegistry;
 
         try
         {
@@ -1341,7 +1345,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private async IAsyncEnumerable<object> ReadServerMessagesAsync(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var registry = ColumnReaderRegistry.Default;
+        var registry = _columnReaderRegistry;
 
         try
         {
@@ -1746,7 +1750,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// <returns>The schema block with column definitions.</returns>
     internal async Task<TypedBlock> ReceiveSchemaBlockAsync(CancellationToken cancellationToken)
     {
-        var registry = ColumnReaderRegistry.Default;
+        var registry = _columnReaderRegistry;
 
         // Wire dump for debugging
         var wireDump = Environment.GetEnvironmentVariable("CH_WIRE_DUMP");
@@ -2105,7 +2109,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// <param name="cancellationToken">Cancellation token.</param>
     internal async Task ReceiveEndOfStreamAsync(CancellationToken cancellationToken)
     {
-        var registry = ColumnReaderRegistry.Default;
+        var registry = _columnReaderRegistry;
 
         // Wire dump for debugging
         var wireDump = Environment.GetEnvironmentVariable("CH_WIRE_DUMP");

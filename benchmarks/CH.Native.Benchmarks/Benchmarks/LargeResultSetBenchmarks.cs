@@ -14,6 +14,7 @@ namespace CH.Native.Benchmarks.Benchmarks;
 public class LargeResultSetBenchmarks
 {
     private NativeConnection _nativeConnection = null!;
+    private NativeConnection _nativeLazyConnection = null!;
     private DriverConnection _driverConnection = null!;
     private OctonicaConnection _octonicaConnection = null!;
 
@@ -31,6 +32,9 @@ public class LargeResultSetBenchmarks
         _nativeConnection = new NativeConnection(manager.NativeConnectionString);
         await _nativeConnection.OpenAsync();
 
+        _nativeLazyConnection = new NativeConnection(manager.NativeConnectionStringLazy);
+        await _nativeLazyConnection.OpenAsync();
+
         _driverConnection = new DriverConnection(manager.DriverConnectionString);
         await _driverConnection.OpenAsync();
 
@@ -42,6 +46,7 @@ public class LargeResultSetBenchmarks
     public async Task GlobalCleanup()
     {
         await _nativeConnection.DisposeAsync();
+        await _nativeLazyConnection.DisposeAsync();
         await _driverConnection.DisposeAsync();
         await _octonicaConnection.DisposeAsync();
     }
@@ -53,6 +58,18 @@ public class LargeResultSetBenchmarks
     {
         long sum = 0;
         await foreach (var row in _nativeConnection.QueryAsync(
+            $"SELECT * FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}"))
+        {
+            sum += row.GetFieldValue<long>("id");
+        }
+        return sum;
+    }
+
+    [Benchmark(Description = "Streaming Read - Native (Lazy)")]
+    public async Task<long> NativeLazy_StreamingRead()
+    {
+        long sum = 0;
+        await foreach (var row in _nativeLazyConnection.QueryAsync(
             $"SELECT * FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}"))
         {
             sum += row.GetFieldValue<long>("id");
@@ -97,6 +114,18 @@ public class LargeResultSetBenchmarks
     {
         var results = new List<LargeTableRow>(RowCount);
         await foreach (var row in _nativeConnection.QueryAsync<LargeTableRow>(
+            $"SELECT id, category, name, value, quantity, created FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}"))
+        {
+            results.Add(row);
+        }
+        return results;
+    }
+
+    [Benchmark(Description = "Materialized Read - Native (Lazy)")]
+    public async Task<List<LargeTableRow>> NativeLazy_MaterializedRead()
+    {
+        var results = new List<LargeTableRow>(RowCount);
+        await foreach (var row in _nativeLazyConnection.QueryAsync<LargeTableRow>(
             $"SELECT id, category, name, value, quantity, created FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}"))
         {
             results.Add(row);

@@ -1,5 +1,6 @@
 using System.Security.Cryptography.X509Certificates;
 using CH.Native.Compression;
+using CH.Native.Data;
 using CH.Native.Resilience;
 using CH.Native.Telemetry;
 
@@ -119,6 +120,11 @@ public sealed class ClickHouseConnectionSettings
     public TelemetrySettings? Telemetry { get; }
 
     /// <summary>
+    /// Gets the string materialization strategy.
+    /// </summary>
+    public StringMaterialization StringMaterialization { get; }
+
+    /// <summary>
     /// Gets the effective port to use for the connection (TlsPort if UseTls, otherwise Port).
     /// </summary>
     public int EffectivePort => UseTls ? TlsPort : Port;
@@ -147,7 +153,8 @@ public sealed class ClickHouseConnectionSettings
         bool allowInsecureTls,
         string? tlsCaCertificatePath,
         X509Certificate2? tlsClientCertificate,
-        TelemetrySettings? telemetry)
+        TelemetrySettings? telemetry,
+        StringMaterialization stringMaterialization)
     {
         Host = host;
         Port = port;
@@ -178,6 +185,9 @@ public sealed class ClickHouseConnectionSettings
 
         // Telemetry settings
         Telemetry = telemetry;
+
+        // String materialization
+        StringMaterialization = stringMaterialization;
     }
 
     /// <summary>
@@ -373,6 +383,12 @@ public sealed class ClickHouseConnectionSettings
                 case "sslca":
                 case "cacert":
                     builder.WithTlsCaCertificate(value);
+                    break;
+
+                case "stringmaterialization":
+                    if (!Enum.TryParse<StringMaterialization>(value, ignoreCase: true, out var materialization))
+                        throw new ArgumentException($"Invalid string materialization value: {value}. Valid values: Eager, Lazy", nameof(connectionString));
+                    builder.WithStringMaterialization(materialization);
                     break;
             }
         }
