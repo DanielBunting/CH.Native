@@ -33,7 +33,9 @@ public class ProtocolComparisonConfig : ManualConfig
         AddColumn(StatisticColumn.P95);
         AddColumn(RankColumn.Arabic);
         AddColumn(new TagColumn("Protocol", name =>
-            name.Contains("Native") ? "Native TCP" : "HTTP"));
+            name.Contains("Octonica") ? "Octonica (TCP)" :
+            name.Contains("Native") ? "CH.Native (TCP)" :
+            name.Contains("Driver") ? "Driver (HTTP)" : "Other"));
 
         // Exporters
         AddExporter(MarkdownExporter.GitHub);

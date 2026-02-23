@@ -1,23 +1,22 @@
 using System.Text;
-using System.Text.Json;
 using BenchmarkDotNet.Attributes;
 using CH.Native.Benchmarks.Infrastructure;
-using ClickHouse.Client.ADO;
-using ClickHouse.Client.Copy;
 using NativeConnection = CH.Native.Connection.ClickHouseConnection;
-using HttpConnection = ClickHouse.Client.ADO.ClickHouseConnection;
+using DriverConnection = ClickHouse.Driver.ADO.ClickHouseConnection;
+using OctonicaConnection = Octonica.ClickHouseClient.ClickHouseConnection;
 
 namespace CH.Native.Benchmarks.Benchmarks;
 
 /// <summary>
-/// Benchmarks comparing CH.Native vs ClickHouse.Client for JSON bulk insert operations.
+/// Benchmarks comparing CH.Native, ClickHouse.Driver, and Octonica for JSON bulk insert operations.
 /// Requires ClickHouse 25.6+ for JSON type support.
 /// </summary>
 [Config(typeof(ProtocolComparisonConfig))]
 public class JsonBulkInsertBenchmarks
 {
     private NativeConnection _nativeConnection = null!;
-    private HttpConnection _httpConnection = null!;
+    private DriverConnection _driverConnection = null!;
+    private OctonicaConnection _octonicaConnection = null!;
     private bool _jsonSupported;
 
     // Pre-generated test data
@@ -46,8 +45,11 @@ public class JsonBulkInsertBenchmarks
         _nativeConnection = new NativeConnection(manager.NativeConnectionString);
         await _nativeConnection.OpenAsync();
 
-        _httpConnection = new HttpConnection(manager.HttpConnectionString);
-        await _httpConnection.OpenAsync();
+        _driverConnection = new DriverConnection(manager.DriverConnectionString);
+        await _driverConnection.OpenAsync();
+
+        _octonicaConnection = new OctonicaConnection(manager.OctonicaConnectionString);
+        await _octonicaConnection.OpenAsync();
 
         // Generate test data
         GenerateTestData();
@@ -78,7 +80,11 @@ public class JsonBulkInsertBenchmarks
         if (_nativeConnection != null)
             await _nativeConnection.DisposeAsync();
 
-        _httpConnection?.Dispose();
+        if (_driverConnection != null)
+            await _driverConnection.DisposeAsync();
+
+        if (_octonicaConnection != null)
+            await _octonicaConnection.DisposeAsync();
     }
 
     [IterationSetup]
@@ -122,8 +128,8 @@ public class JsonBulkInsertBenchmarks
         return inserted;
     }
 
-    [Benchmark(Description = "INSERT simple JSON - HTTP")]
-    public async Task<int> Http_InsertSimpleJson()
+    [Benchmark(Description = "INSERT simple JSON - Driver")]
+    public async Task<int> Driver_InsertSimpleJson()
     {
         if (!_jsonSupported) return 0;
 
@@ -142,8 +148,36 @@ public class JsonBulkInsertBenchmarks
                 sb.Append($"({idx}, '{EscapeJson(_simpleJsonStrings[idx])}')");
             }
 
-            using var cmd = _httpConnection.CreateCommand();
+            using var cmd = _driverConnection.CreateCommand();
             cmd.CommandText = sb.ToString();
+            await cmd.ExecuteNonQueryAsync();
+            inserted += batchSize;
+        }
+
+        return inserted;
+    }
+
+    [Benchmark(Description = "INSERT simple JSON - Octonica")]
+    public async Task<int> Octonica_InsertSimpleJson()
+    {
+        if (!_jsonSupported) return 0;
+
+        const int batchSize = 100;
+        int inserted = 0;
+
+        for (int batch = 0; batch < RowCount / batchSize; batch++)
+        {
+            var sb = new StringBuilder();
+            sb.Append($"INSERT INTO {JsonTestDataGenerator.JsonInsertTable} VALUES ");
+
+            for (int i = 0; i < batchSize; i++)
+            {
+                int idx = batch * batchSize + i;
+                if (i > 0) sb.Append(',');
+                sb.Append($"({idx}, '{EscapeJson(_simpleJsonStrings[idx])}')");
+            }
+
+            using var cmd = _octonicaConnection.CreateCommand(sb.ToString());
             await cmd.ExecuteNonQueryAsync();
             inserted += batchSize;
         }
@@ -182,8 +216,8 @@ public class JsonBulkInsertBenchmarks
         return inserted;
     }
 
-    [Benchmark(Description = "INSERT complex JSON - HTTP")]
-    public async Task<int> Http_InsertComplexJson()
+    [Benchmark(Description = "INSERT complex JSON - Driver")]
+    public async Task<int> Driver_InsertComplexJson()
     {
         if (!_jsonSupported) return 0;
 
@@ -202,7 +236,7 @@ public class JsonBulkInsertBenchmarks
                 sb.Append($"({idx}, '{EscapeJson(_complexJsonStrings[idx])}')");
             }
 
-            using var cmd = _httpConnection.CreateCommand();
+            using var cmd = _driverConnection.CreateCommand();
             cmd.CommandText = sb.ToString();
             await cmd.ExecuteNonQueryAsync();
             inserted += batchSize;
@@ -211,29 +245,32 @@ public class JsonBulkInsertBenchmarks
         return inserted;
     }
 
-    // ============================================================
-    // ClickHouseBulkCopy comparison (HTTP only has this API)
-    // ============================================================
-
-    [Benchmark(Description = "BulkCopy JSON - HTTP")]
-    public async Task<int> Http_BulkCopyJson()
+    [Benchmark(Description = "INSERT complex JSON - Octonica")]
+    public async Task<int> Octonica_InsertComplexJson()
     {
         if (!_jsonSupported) return 0;
 
-        using var bulkCopy = new ClickHouseBulkCopy(_httpConnection)
-        {
-            DestinationTableName = JsonTestDataGenerator.JsonInsertTable,
-            ColumnNames = new[] { "id", "data" }
-        };
+        const int batchSize = 100;
+        int inserted = 0;
 
-        var rows = new List<object[]>(RowCount);
-        for (int i = 0; i < RowCount; i++)
+        for (int batch = 0; batch < RowCount / batchSize; batch++)
         {
-            rows.Add(new object[] { (ulong)i, _simpleJsonStrings[i] });
+            var sb = new StringBuilder();
+            sb.Append($"INSERT INTO {JsonTestDataGenerator.JsonInsertTable} VALUES ");
+
+            for (int i = 0; i < batchSize; i++)
+            {
+                int idx = batch * batchSize + i;
+                if (i > 0) sb.Append(',');
+                sb.Append($"({idx}, '{EscapeJson(_complexJsonStrings[idx])}')");
+            }
+
+            using var cmd = _octonicaConnection.CreateCommand(sb.ToString());
+            await cmd.ExecuteNonQueryAsync();
+            inserted += batchSize;
         }
 
-        await bulkCopy.WriteToServerAsync(rows);
-        return RowCount;
+        return inserted;
     }
 
     // ============================================================
@@ -249,13 +286,23 @@ public class JsonBulkInsertBenchmarks
             $"INSERT INTO {JsonTestDataGenerator.JsonInsertTable} VALUES (0, '{{\"test\": true}}')");
     }
 
-    [Benchmark(Description = "INSERT single JSON - HTTP")]
-    public async Task Http_InsertSingleJson()
+    [Benchmark(Description = "INSERT single JSON - Driver")]
+    public async Task Driver_InsertSingleJson()
     {
         if (!_jsonSupported) return;
 
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = $"INSERT INTO {JsonTestDataGenerator.JsonInsertTable} VALUES (0, '{{\"test\": true}}')";
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    [Benchmark(Description = "INSERT single JSON - Octonica")]
+    public async Task Octonica_InsertSingleJson()
+    {
+        if (!_jsonSupported) return;
+
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"INSERT INTO {JsonTestDataGenerator.JsonInsertTable} VALUES (0, '{{\"test\": true}}')");
         await cmd.ExecuteNonQueryAsync();
     }
 

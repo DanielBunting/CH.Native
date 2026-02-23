@@ -1,8 +1,8 @@
 using BenchmarkDotNet.Attributes;
 using CH.Native.Benchmarks.Infrastructure;
-using ClickHouse.Client.ADO;
 using NativeConnection = CH.Native.Connection.ClickHouseConnection;
-using HttpConnection = ClickHouse.Client.ADO.ClickHouseConnection;
+using DriverConnection = ClickHouse.Driver.ADO.ClickHouseConnection;
+using OctonicaConnection = Octonica.ClickHouseClient.ClickHouseConnection;
 
 namespace CH.Native.Benchmarks.Benchmarks;
 
@@ -13,7 +13,8 @@ namespace CH.Native.Benchmarks.Benchmarks;
 public class SimpleQueryBenchmarks
 {
     private NativeConnection _nativeConnection = null!;
-    private HttpConnection _httpConnection = null!;
+    private DriverConnection _driverConnection = null!;
+    private OctonicaConnection _octonicaConnection = null!;
 
     [GlobalSetup]
     public async Task GlobalSetup()
@@ -23,20 +24,22 @@ public class SimpleQueryBenchmarks
 
         var manager = BenchmarkContainerManager.Instance;
 
-        // Native connection (CH.Native)
         _nativeConnection = new NativeConnection(manager.NativeConnectionString);
         await _nativeConnection.OpenAsync();
 
-        // HTTP connection (ClickHouse.Client)
-        _httpConnection = new HttpConnection(manager.HttpConnectionString);
-        await _httpConnection.OpenAsync();
+        _driverConnection = new DriverConnection(manager.DriverConnectionString);
+        await _driverConnection.OpenAsync();
+
+        _octonicaConnection = new OctonicaConnection(manager.OctonicaConnectionString);
+        await _octonicaConnection.OpenAsync();
     }
 
     [GlobalCleanup]
     public async Task GlobalCleanup()
     {
         await _nativeConnection.DisposeAsync();
-        _httpConnection.Dispose();
+        await _driverConnection.DisposeAsync();
+        await _octonicaConnection.DisposeAsync();
     }
 
     // --- SELECT 1 (Latency Baseline) ---
@@ -47,11 +50,18 @@ public class SimpleQueryBenchmarks
         return await _nativeConnection.ExecuteScalarAsync<int>("SELECT 1");
     }
 
-    [Benchmark(Description = "SELECT 1 - HTTP")]
-    public async Task<object?> Http_Select1()
+    [Benchmark(Description = "SELECT 1 - Driver")]
+    public async Task<object?> Driver_Select1()
     {
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = "SELECT 1";
+        return await cmd.ExecuteScalarAsync();
+    }
+
+    [Benchmark(Description = "SELECT 1 - Octonica")]
+    public async Task<object?> Octonica_Select1()
+    {
+        using var cmd = _octonicaConnection.CreateCommand("SELECT 1");
         return await cmd.ExecuteScalarAsync();
     }
 
@@ -64,11 +74,19 @@ public class SimpleQueryBenchmarks
             $"SELECT count() FROM {TestDataGenerator.LargeTable}");
     }
 
-    [Benchmark(Description = "COUNT(*) 1M rows - HTTP")]
-    public async Task<object?> Http_CountLarge()
+    [Benchmark(Description = "COUNT(*) 1M rows - Driver")]
+    public async Task<object?> Driver_CountLarge()
     {
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = $"SELECT count() FROM {TestDataGenerator.LargeTable}";
+        return await cmd.ExecuteScalarAsync();
+    }
+
+    [Benchmark(Description = "COUNT(*) 1M rows - Octonica")]
+    public async Task<object?> Octonica_CountLarge()
+    {
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"SELECT count() FROM {TestDataGenerator.LargeTable}");
         return await cmd.ExecuteScalarAsync();
     }
 
@@ -86,12 +104,27 @@ public class SimpleQueryBenchmarks
         return count;
     }
 
-    [Benchmark(Description = "SELECT 100 rows - HTTP")]
-    public async Task<int> Http_Select100()
+    [Benchmark(Description = "SELECT 100 rows - Driver")]
+    public async Task<int> Driver_Select100()
     {
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = $"SELECT * FROM {TestDataGenerator.SimpleTable}";
         using var reader = await cmd.ExecuteReaderAsync();
+
+        int count = 0;
+        while (await reader.ReadAsync())
+        {
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "SELECT 100 rows - Octonica")]
+    public async Task<int> Octonica_Select100()
+    {
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"SELECT * FROM {TestDataGenerator.SimpleTable}");
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         int count = 0;
         while (await reader.ReadAsync())

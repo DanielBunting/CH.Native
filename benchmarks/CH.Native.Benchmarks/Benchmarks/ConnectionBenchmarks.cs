@@ -1,8 +1,8 @@
 using BenchmarkDotNet.Attributes;
 using CH.Native.Benchmarks.Infrastructure;
-using ClickHouse.Client.ADO;
 using NativeConnection = CH.Native.Connection.ClickHouseConnection;
-using HttpConnection = ClickHouse.Client.ADO.ClickHouseConnection;
+using DriverConnection = ClickHouse.Driver.ADO.ClickHouseConnection;
+using OctonicaConnection = Octonica.ClickHouseClient.ClickHouseConnection;
 
 namespace CH.Native.Benchmarks.Benchmarks;
 
@@ -13,7 +13,8 @@ namespace CH.Native.Benchmarks.Benchmarks;
 public class ConnectionBenchmarks
 {
     private string _nativeConnectionString = null!;
-    private string _httpConnectionString = null!;
+    private string _driverConnectionString = null!;
+    private string _octonicaConnectionString = null!;
 
     [GlobalSetup]
     public async Task GlobalSetup()
@@ -22,7 +23,8 @@ public class ConnectionBenchmarks
 
         var manager = BenchmarkContainerManager.Instance;
         _nativeConnectionString = manager.NativeConnectionString;
-        _httpConnectionString = manager.HttpConnectionString;
+        _driverConnectionString = manager.DriverConnectionString;
+        _octonicaConnectionString = manager.OctonicaConnectionString;
     }
 
     // --- Connection establishment ---
@@ -34,10 +36,17 @@ public class ConnectionBenchmarks
         await connection.OpenAsync();
     }
 
-    [Benchmark(Description = "Connection Open - HTTP")]
-    public async Task Http_ConnectionOpen()
+    [Benchmark(Description = "Connection Open - Driver")]
+    public async Task Driver_ConnectionOpen()
     {
-        using var connection = new HttpConnection(_httpConnectionString);
+        await using var connection = new DriverConnection(_driverConnectionString);
+        await connection.OpenAsync();
+    }
+
+    [Benchmark(Description = "Connection Open - Octonica")]
+    public async Task Octonica_ConnectionOpen()
+    {
+        await using var connection = new OctonicaConnection(_octonicaConnectionString);
         await connection.OpenAsync();
     }
 
@@ -51,14 +60,24 @@ public class ConnectionBenchmarks
         return await connection.ExecuteScalarAsync<int>("SELECT 1");
     }
 
-    [Benchmark(Description = "Connection + Query - HTTP")]
-    public async Task<object?> Http_ConnectionAndQuery()
+    [Benchmark(Description = "Connection + Query - Driver")]
+    public async Task<object?> Driver_ConnectionAndQuery()
     {
-        using var connection = new HttpConnection(_httpConnectionString);
+        await using var connection = new DriverConnection(_driverConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT 1";
+        return await cmd.ExecuteScalarAsync();
+    }
+
+    [Benchmark(Description = "Connection + Query - Octonica")]
+    public async Task<object?> Octonica_ConnectionAndQuery()
+    {
+        await using var connection = new OctonicaConnection(_octonicaConnectionString);
+        await connection.OpenAsync();
+
+        using var cmd = connection.CreateCommand("SELECT 1");
         return await cmd.ExecuteScalarAsync();
     }
 
@@ -76,16 +95,29 @@ public class ConnectionBenchmarks
         }
     }
 
-    [Benchmark(Description = "10 Sequential Queries - HTTP")]
-    public async Task Http_MultipleQueries()
+    [Benchmark(Description = "10 Sequential Queries - Driver")]
+    public async Task Driver_MultipleQueries()
     {
-        using var connection = new HttpConnection(_httpConnectionString);
+        await using var connection = new DriverConnection(_driverConnectionString);
         await connection.OpenAsync();
 
         for (int i = 0; i < 10; i++)
         {
             using var cmd = connection.CreateCommand();
             cmd.CommandText = $"SELECT {i}";
+            await cmd.ExecuteScalarAsync();
+        }
+    }
+
+    [Benchmark(Description = "10 Sequential Queries - Octonica")]
+    public async Task Octonica_MultipleQueries()
+    {
+        await using var connection = new OctonicaConnection(_octonicaConnectionString);
+        await connection.OpenAsync();
+
+        for (int i = 0; i < 10; i++)
+        {
+            using var cmd = connection.CreateCommand($"SELECT {i}");
             await cmd.ExecuteScalarAsync();
         }
     }
