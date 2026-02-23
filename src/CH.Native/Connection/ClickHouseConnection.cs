@@ -1049,10 +1049,10 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         if (isCompressed)
         {
             // Read and decompress the block data
-            var compressedData = CompressedBlock.ReadFromProtocol(ref reader);
-            var decompressed = CompressedBlock.Decompress(compressedData.Span);
+            using var compressedData = CompressedBlock.ReadFromProtocol(ref reader);
+            using var decompressed = CompressedBlock.DecompressPooled(compressedData.Span);
 
-            var decompressedSequence = new ReadOnlySequence<byte>(decompressed);
+            var decompressedSequence = new ReadOnlySequence<byte>(decompressed.Memory);
             var blockReader = new ProtocolReader(decompressedSequence);
 
             return Block.ReadTypedBlockWithTableName(ref blockReader, registry, tableNameFromCompressed, NegotiatedProtocolVersion);
@@ -1554,11 +1554,11 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         if (isCompressed)
         {
             // Read and decompress the block data (BlockInfo + columns)
-            var compressedData = CompressedBlock.ReadFromProtocol(ref reader);
-            var decompressed = CompressedBlock.Decompress(compressedData.Span);
+            using var compressedData = CompressedBlock.ReadFromProtocol(ref reader);
+            using var decompressed = CompressedBlock.DecompressPooled(compressedData.Span);
 
             // Parse the decompressed block using pre-read table name
-            var decompressedSequence = new ReadOnlySequence<byte>(decompressed);
+            var decompressedSequence = new ReadOnlySequence<byte>(decompressed.Memory);
             var blockReader = new ProtocolReader(decompressedSequence);
 
             return new DataMessage { Block = Block.ReadTypedBlockWithTableName(ref blockReader, registry, compressedTableName, NegotiatedProtocolVersion) };
