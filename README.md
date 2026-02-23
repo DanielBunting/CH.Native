@@ -122,28 +122,28 @@ Three-way comparison against [ClickHouse.Driver](https://github.com/ClickHouse/c
 
 | Benchmark | CH.Native | ClickHouse.Driver | Octonica |
 |-----------|-----------|-------------------|----------|
-| SELECT 1 | **531 μs** | 2,746 μs | 639 μs |
-| COUNT(*) 1M rows | **986 μs** | 1,596 μs | 1,060 μs |
-| SELECT 100 rows | **657 μs** | 1,026 μs | 719 μs |
+| SELECT 1 | **579 μs** | 1,028 μs | 616 μs |
+| COUNT(*) 1M rows | 1,188 μs | 1,632 μs | **1,003 μs** |
+| SELECT 100 rows | **641 μs** | 1,052 μs | 725 μs |
 
 ### Large Result Sets
 
 | Benchmark | CH.Native | ClickHouse.Driver | Octonica |
 |-----------|-----------|-------------------|----------|
-| Stream 1M rows | 174 ms | 271 ms | **86 ms** |
-| Materialize 1M rows | 305 ms | 471 ms | **213 ms** |
+| Stream 1M rows | 125 ms | 301 ms | **59 ms** |
+| Materialize 1M rows | 256 ms | 476 ms | **214 ms** |
 
 ### Bulk Insert
 
 | Benchmark | CH.Native | ClickHouse.Driver | Octonica |
 |-----------|-----------|-------------------|----------|
-| 1M rows | **107 ms** | 230 ms | 1,585 ms |
+| 1M rows | **101 ms** | 227 ms | 1,589 ms |
 
 ### Memory Efficiency (1M rows)
 
 | Benchmark | CH.Native | ClickHouse.Driver | Octonica |
 |-----------|-----------|-------------------|----------|
-| Streaming | 244 MB | 190 MB | **78 MB** |
+| Streaming | 142 MB | 190 MB | **78 MB** |
 | Bulk insert | **0.5 MB** | 95 MB | 27 MB |
 
 *Apple M5, .NET 9.0, ClickHouse 25.3 — run benchmarks with `dotnet run --project benchmarks/CH.Native.Benchmarks -c Release`*

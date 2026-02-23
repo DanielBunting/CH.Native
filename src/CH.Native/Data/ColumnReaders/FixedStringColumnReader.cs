@@ -1,3 +1,4 @@
+using System.Buffers;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnReaders;
@@ -42,12 +43,13 @@ public sealed class FixedStringColumnReader : IColumnReader<byte[]>
     /// <inheritdoc />
     public TypedColumn<byte[]> ReadTypedColumn(ref ProtocolReader reader, int rowCount)
     {
-        var values = new byte[rowCount][];
+        var pool = ArrayPool<byte[]>.Shared;
+        var values = pool.Rent(rowCount);
         for (int i = 0; i < rowCount; i++)
         {
             values[i] = ReadValue(ref reader);
         }
-        return new TypedColumn<byte[]>(values);
+        return new TypedColumn<byte[]>(values, rowCount, pool);
     }
 
     ITypedColumn IColumnReader.ReadTypedColumn(ref ProtocolReader reader, int rowCount)

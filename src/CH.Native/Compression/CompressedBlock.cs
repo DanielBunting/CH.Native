@@ -149,6 +149,55 @@ public static class CompressedBlock
     }
 
     /// <summary>
+    /// Decompresses a ClickHouse compressed block using pooled buffers.
+    /// Returns a pooled result that must be disposed after use.
+    /// </summary>
+    /// <param name="data">The compressed block data (including checksum and header).</param>
+    /// <returns>The decompressed data in a pooled buffer. Must be disposed after use.</returns>
+    /// <exception cref="InvalidDataException">Thrown if checksum validation fails or algorithm is unknown.</exception>
+    public static DecompressedResult DecompressPooled(ReadOnlySpan<byte> data)
+    {
+        if (data.Length < MinBlockSize)
+            throw new InvalidDataException($"Compressed block too small: {data.Length} bytes, minimum {MinBlockSize}");
+
+        // Read and verify checksum
+        var expectedChecksum = data[..ChecksumSize];
+        var payloadSpan = data[ChecksumSize..];
+
+        Span<byte> actualChecksum = stackalloc byte[16];
+        CityHash128.HashBytes(payloadSpan, actualChecksum);
+
+        if (!expectedChecksum.SequenceEqual(actualChecksum))
+            throw new InvalidDataException("Compressed block checksum mismatch");
+
+        // Read header (format: algorithm + compressed_size + uncompressed_size)
+        var algorithm = data[ChecksumSize];
+        var compressedSize = BinaryPrimitives.ReadUInt32LittleEndian(data[(ChecksumSize + 1)..]);
+        var uncompressedSize = BinaryPrimitives.ReadUInt32LittleEndian(data[(ChecksumSize + 5)..]);
+
+        // Validate sizes
+        if (compressedSize < HeaderSize)
+            throw new InvalidDataException($"Invalid compressed size: {compressedSize}");
+
+        var expectedDataLength = ChecksumSize + compressedSize;
+        if (data.Length < expectedDataLength)
+            throw new InvalidDataException($"Incomplete compressed block: expected {expectedDataLength} bytes, got {data.Length}");
+
+        // Get compressor based on algorithm
+        var compressor = GetCompressor(algorithm);
+
+        // Decompress into pooled buffer
+        var pool = ArrayPool<byte>.Shared;
+        var result = pool.Rent((int)uncompressedSize);
+        var compressedData = data[(ChecksumSize + HeaderSize)..];
+        var actualCompressedLength = (int)compressedSize - HeaderSize;
+
+        compressor.Decompress(compressedData[..actualCompressedLength], result, (int)uncompressedSize);
+
+        return new DecompressedResult(result, (int)uncompressedSize);
+    }
+
+    /// <summary>
     /// Gets the total length required to read a complete compressed block from the given data.
     /// </summary>
     /// <param name="data">The start of a compressed block (must be at least 25 bytes).</param>
@@ -167,9 +216,9 @@ public static class CompressedBlock
     /// Reads a compressed block from a ProtocolReader and returns the raw compressed bytes.
     /// </summary>
     /// <param name="reader">The protocol reader.</param>
-    /// <returns>The raw compressed block bytes (checksum + header + data).</returns>
+    /// <returns>The raw compressed block bytes (checksum + header + data). Must be disposed after use.</returns>
     /// <exception cref="InvalidOperationException">Thrown if not enough data is available.</exception>
-    public static ReadOnlyMemory<byte> ReadFromProtocol(ref ProtocolReader reader)
+    public static PooledCompressedData ReadFromProtocol(ref ProtocolReader reader)
     {
         // Read the header to get the compressed size
         // We need at least 25 bytes: 16 (checksum) + 9 (header minimum)
@@ -178,7 +227,7 @@ public static class CompressedBlock
 
         // Peek at compressed size (at offset 17 from current position: 16 checksum + 1 method byte)
         // We can't easily peek in ProtocolReader, so read the full header worth
-        var headerBytes = reader.ReadBytes(MinBlockSize);
+        using var headerBytes = reader.ReadPooledBytes(MinBlockSize);
         var compressedSize = BinaryPrimitives.ReadUInt32LittleEndian(headerBytes.Span[(ChecksumSize + 1)..]);
 
         // Total block size is checksum + compressed size (which includes header)
@@ -188,21 +237,18 @@ public static class CompressedBlock
         if (remainingDataSize < 0)
             throw new InvalidDataException($"Invalid compressed size: {compressedSize}");
 
-        if (remainingDataSize == 0)
+        // Rent from pool and combine header + remaining data
+        var pool = ArrayPool<byte>.Shared;
+        var result = pool.Rent(totalBlockSize);
+        headerBytes.Span.CopyTo(result);
+
+        if (remainingDataSize > 0)
         {
-            // Entire block was in header (empty data case)
-            return headerBytes;
+            using var remainingData = reader.ReadPooledBytes(remainingDataSize);
+            remainingData.Span.CopyTo(result.AsSpan(MinBlockSize));
         }
 
-        // Read remaining data
-        var remainingData = reader.ReadBytes(remainingDataSize);
-
-        // Combine into single array
-        var result = new byte[totalBlockSize];
-        headerBytes.Span.CopyTo(result);
-        remainingData.Span.CopyTo(result.AsSpan(MinBlockSize));
-
-        return result;
+        return new PooledCompressedData(result, totalBlockSize);
     }
 
     /// <summary>
@@ -263,6 +309,83 @@ public readonly struct CompressedResult : IDisposable
     public ReadOnlyMemory<byte> Memory => _buffer.AsMemory(0, Length);
 
     internal CompressedResult(byte[] buffer, int length)
+    {
+        _buffer = buffer;
+        Length = length;
+    }
+
+    /// <summary>
+    /// Returns the buffer to the array pool.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_buffer != null)
+        {
+            ArrayPool<byte>.Shared.Return(_buffer);
+        }
+    }
+}
+
+/// <summary>
+/// Represents a decompressed block result using a pooled byte array.
+/// Must be disposed after use to return the buffer to the pool.
+/// </summary>
+public readonly struct DecompressedResult : IDisposable
+{
+    private readonly byte[] _buffer;
+
+    /// <summary>
+    /// Gets the length of the actual decompressed data (may be less than buffer length).
+    /// </summary>
+    public int Length { get; }
+
+    /// <summary>
+    /// Gets the decompressed data as a span.
+    /// </summary>
+    public ReadOnlySpan<byte> Span => _buffer.AsSpan(0, Length);
+
+    /// <summary>
+    /// Gets the decompressed data as memory.
+    /// </summary>
+    public ReadOnlyMemory<byte> Memory => _buffer.AsMemory(0, Length);
+
+    internal DecompressedResult(byte[] buffer, int length)
+    {
+        _buffer = buffer;
+        Length = length;
+    }
+
+    /// <summary>
+    /// Returns the buffer to the array pool.
+    /// </summary>
+    public void Dispose()
+    {
+        if (_buffer != null)
+        {
+            ArrayPool<byte>.Shared.Return(_buffer);
+        }
+    }
+}
+
+/// <summary>
+/// Represents compressed block data read from a ProtocolReader, using a pooled byte array.
+/// Must be disposed after use to return the buffer to the pool.
+/// </summary>
+public readonly struct PooledCompressedData : IDisposable
+{
+    private readonly byte[] _buffer;
+
+    /// <summary>
+    /// Gets the length of the actual compressed data (may be less than buffer length).
+    /// </summary>
+    public int Length { get; }
+
+    /// <summary>
+    /// Gets the compressed data as a span.
+    /// </summary>
+    public ReadOnlySpan<byte> Span => _buffer.AsSpan(0, Length);
+
+    internal PooledCompressedData(byte[] buffer, int length)
     {
         _buffer = buffer;
         Length = length;

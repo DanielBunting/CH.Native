@@ -275,6 +275,8 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
         }
         finally
         {
+            _currentBlock?.Dispose();
+            _currentBlock = null;
             await _messageEnumerator.DisposeAsync();
             _activity?.Dispose();
         }
@@ -340,11 +342,13 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
                 case DataMessage dataMessage:
                     if (dataMessage.Block.RowCount > 0)
                     {
+                        _currentBlock?.Dispose();
                         _currentBlock = dataMessage.Block;
                         _currentRowIndex = 0;
                         return true;
                     }
-                    // Empty block, continue to next
+                    // Empty block — dispose and continue to next
+                    dataMessage.Block.Dispose();
                     break;
 
                 case EndOfStreamMessage:
