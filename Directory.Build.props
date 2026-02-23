@@ -1,6 +1,6 @@
 <Project>
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
@@ -8,7 +8,7 @@
 
   <!-- NuGet Package Configuration -->
   <PropertyGroup>
-    <VersionPrefix>0.1</VersionPrefix>
+    <VersionPrefix>0.2</VersionPrefix>
     <Authors>Daniel Bunting</Authors>
     <Company>Daniel Bunting</Company>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
