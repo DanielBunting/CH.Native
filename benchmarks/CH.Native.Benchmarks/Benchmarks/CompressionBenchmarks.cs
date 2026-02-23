@@ -1,15 +1,15 @@
 using BenchmarkDotNet.Attributes;
 using CH.Native.Benchmarks.Infrastructure;
-using ClickHouse.Client.ADO;
 using NativeConnection = CH.Native.Connection.ClickHouseConnection;
-using HttpConnection = ClickHouse.Client.ADO.ClickHouseConnection;
+using OctonicaConnection = Octonica.ClickHouseClient.ClickHouseConnection;
 
 namespace CH.Native.Benchmarks.Benchmarks;
 
 /// <summary>
-/// Benchmarks comparing compression options.
-/// Native: LZ4/Zstd native protocol compression
-/// HTTP: gzip HTTP compression
+/// Benchmarks comparing compression options across drivers.
+/// CH.Native: LZ4/Zstd native protocol compression
+/// Octonica: LZ4 native protocol compression
+/// Driver: HTTP (no native compression control)
 /// </summary>
 [Config(typeof(ProtocolComparisonConfig))]
 public class CompressionBenchmarks
@@ -17,8 +17,9 @@ public class CompressionBenchmarks
     private NativeConnection _nativeNoCompression = null!;
     private NativeConnection _nativeLz4 = null!;
     private NativeConnection _nativeZstd = null!;
-    private HttpConnection _httpNoCompression = null!;
-    private HttpConnection _httpGzip = null!;
+    private OctonicaConnection _octonicaNoCompression = null!;
+    private OctonicaConnection _octonicaLz4 = null!;
+    private ClickHouse.Driver.ADO.ClickHouseConnection _driverConnection = null!;
 
     private string _query = null!;
 
@@ -33,7 +34,7 @@ public class CompressionBenchmarks
 
         var manager = BenchmarkContainerManager.Instance;
 
-        // Native connections
+        // CH.Native connections
         _nativeNoCompression = new NativeConnection(
             $"{manager.NativeConnectionString};Compress=false");
         await _nativeNoCompression.OpenAsync();
@@ -46,13 +47,19 @@ public class CompressionBenchmarks
             $"{manager.NativeConnectionString};Compress=true;CompressionMethod=Zstd");
         await _nativeZstd.OpenAsync();
 
-        // HTTP connections
-        _httpNoCompression = new HttpConnection(manager.HttpConnectionString);
-        await _httpNoCompression.OpenAsync();
+        // Octonica connections
+        _octonicaNoCompression = new OctonicaConnection(
+            $"{manager.OctonicaConnectionString};Compress=false");
+        await _octonicaNoCompression.OpenAsync();
 
-        _httpGzip = new HttpConnection(
-            $"{manager.HttpConnectionString};Compression=true");
-        await _httpGzip.OpenAsync();
+        _octonicaLz4 = new OctonicaConnection(
+            $"{manager.OctonicaConnectionString};Compress=true");
+        await _octonicaLz4.OpenAsync();
+
+        // ClickHouse.Driver connection (HTTP)
+        _driverConnection = new ClickHouse.Driver.ADO.ClickHouseConnection(
+            manager.DriverConnectionString);
+        await _driverConnection.OpenAsync();
     }
 
     [IterationSetup]
@@ -67,8 +74,9 @@ public class CompressionBenchmarks
         await _nativeNoCompression.DisposeAsync();
         await _nativeLz4.DisposeAsync();
         await _nativeZstd.DisposeAsync();
-        _httpNoCompression.Dispose();
-        _httpGzip.Dispose();
+        await _octonicaNoCompression.DisposeAsync();
+        await _octonicaLz4.DisposeAsync();
+        await _driverConnection.DisposeAsync();
     }
 
     // --- Native without compression ---
@@ -110,14 +118,13 @@ public class CompressionBenchmarks
         return count;
     }
 
-    // --- HTTP without compression ---
+    // --- Octonica without compression ---
 
-    [Benchmark(Description = "HTTP (no compression)")]
-    public async Task<int> Http_NoCompression()
+    [Benchmark(Description = "Octonica (no compression)")]
+    public async Task<int> Octonica_NoCompression()
     {
-        using var cmd = _httpNoCompression.CreateCommand();
-        cmd.CommandText = _query;
-        using var reader = await cmd.ExecuteReaderAsync();
+        using var cmd = _octonicaNoCompression.CreateCommand(_query);
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         int count = 0;
         while (await reader.ReadAsync())
@@ -127,12 +134,28 @@ public class CompressionBenchmarks
         return count;
     }
 
-    // --- HTTP with gzip ---
+    // --- Octonica with LZ4 ---
 
-    [Benchmark(Description = "HTTP (gzip)")]
-    public async Task<int> Http_Gzip()
+    [Benchmark(Description = "Octonica (LZ4)")]
+    public async Task<int> Octonica_LZ4()
     {
-        using var cmd = _httpGzip.CreateCommand();
+        using var cmd = _octonicaLz4.CreateCommand(_query);
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        int count = 0;
+        while (await reader.ReadAsync())
+        {
+            count++;
+        }
+        return count;
+    }
+
+    // --- Driver (HTTP, no native compression) ---
+
+    [Benchmark(Description = "Driver (HTTP)")]
+    public async Task<int> Driver_Http()
+    {
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = _query;
         using var reader = await cmd.ExecuteReaderAsync();
 

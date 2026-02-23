@@ -1,8 +1,8 @@
 using BenchmarkDotNet.Attributes;
 using CH.Native.Benchmarks.Infrastructure;
-using ClickHouse.Client.ADO;
 using NativeConnection = CH.Native.Connection.ClickHouseConnection;
-using HttpConnection = ClickHouse.Client.ADO.ClickHouseConnection;
+using DriverConnection = ClickHouse.Driver.ADO.ClickHouseConnection;
+using OctonicaConnection = Octonica.ClickHouseClient.ClickHouseConnection;
 
 namespace CH.Native.Benchmarks.Benchmarks;
 
@@ -13,7 +13,8 @@ namespace CH.Native.Benchmarks.Benchmarks;
 public class ComplexQueryBenchmarks
 {
     private NativeConnection _nativeConnection = null!;
-    private HttpConnection _httpConnection = null!;
+    private DriverConnection _driverConnection = null!;
+    private OctonicaConnection _octonicaConnection = null!;
 
     [GlobalSetup]
     public async Task GlobalSetup()
@@ -26,15 +27,19 @@ public class ComplexQueryBenchmarks
         _nativeConnection = new NativeConnection(manager.NativeConnectionString);
         await _nativeConnection.OpenAsync();
 
-        _httpConnection = new HttpConnection(manager.HttpConnectionString);
-        await _httpConnection.OpenAsync();
+        _driverConnection = new DriverConnection(manager.DriverConnectionString);
+        await _driverConnection.OpenAsync();
+
+        _octonicaConnection = new OctonicaConnection(manager.OctonicaConnectionString);
+        await _octonicaConnection.OpenAsync();
     }
 
     [GlobalCleanup]
     public async Task GlobalCleanup()
     {
         await _nativeConnection.DisposeAsync();
-        _httpConnection.Dispose();
+        await _driverConnection.DisposeAsync();
+        await _octonicaConnection.DisposeAsync();
     }
 
     // --- GROUP BY aggregation ---
@@ -61,12 +66,26 @@ public class ComplexQueryBenchmarks
         return count;
     }
 
-    [Benchmark(Description = "GROUP BY Aggregation - HTTP")]
-    public async Task<int> Http_Aggregation()
+    [Benchmark(Description = "GROUP BY Aggregation - Driver")]
+    public async Task<int> Driver_Aggregation()
     {
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = AggregationQuery;
         using var reader = await cmd.ExecuteReaderAsync();
+
+        int count = 0;
+        while (await reader.ReadAsync())
+        {
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "GROUP BY Aggregation - Octonica")]
+    public async Task<int> Octonica_Aggregation()
+    {
+        using var cmd = _octonicaConnection.CreateCommand(AggregationQuery);
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         int count = 0;
         while (await reader.ReadAsync())
@@ -97,12 +116,26 @@ public class ComplexQueryBenchmarks
         return count;
     }
 
-    [Benchmark(Description = "Filtered Query - HTTP")]
-    public async Task<int> Http_FilteredQuery()
+    [Benchmark(Description = "Filtered Query - Driver")]
+    public async Task<int> Driver_FilteredQuery()
     {
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = FilteredQuery;
         using var reader = await cmd.ExecuteReaderAsync();
+
+        int count = 0;
+        while (await reader.ReadAsync())
+        {
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "Filtered Query - Octonica")]
+    public async Task<int> Octonica_FilteredQuery()
+    {
+        using var cmd = _octonicaConnection.CreateCommand(FilteredQuery);
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         int count = 0;
         while (await reader.ReadAsync())
@@ -138,12 +171,26 @@ public class ComplexQueryBenchmarks
         return count;
     }
 
-    [Benchmark(Description = "JOIN Query - HTTP")]
-    public async Task<int> Http_JoinQuery()
+    [Benchmark(Description = "JOIN Query - Driver")]
+    public async Task<int> Driver_JoinQuery()
     {
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = JoinQuery;
         using var reader = await cmd.ExecuteReaderAsync();
+
+        int count = 0;
+        while (await reader.ReadAsync())
+        {
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "JOIN Query - Octonica")]
+    public async Task<int> Octonica_JoinQuery()
+    {
+        using var cmd = _octonicaConnection.CreateCommand(JoinQuery);
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         int count = 0;
         while (await reader.ReadAsync())
@@ -172,12 +219,26 @@ public class ComplexQueryBenchmarks
         return count;
     }
 
-    [Benchmark(Description = "Sorted Query TOP 1000 - HTTP")]
-    public async Task<int> Http_SortedQuery()
+    [Benchmark(Description = "Sorted Query TOP 1000 - Driver")]
+    public async Task<int> Driver_SortedQuery()
     {
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = SortedQuery;
         using var reader = await cmd.ExecuteReaderAsync();
+
+        int count = 0;
+        while (await reader.ReadAsync())
+        {
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "Sorted Query TOP 1000 - Octonica")]
+    public async Task<int> Octonica_SortedQuery()
+    {
+        using var cmd = _octonicaConnection.CreateCommand(SortedQuery);
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         int count = 0;
         while (await reader.ReadAsync())

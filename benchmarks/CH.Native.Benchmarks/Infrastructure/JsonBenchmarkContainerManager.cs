@@ -36,10 +36,16 @@ public sealed class JsonBenchmarkContainerManager : IAsyncDisposable
         $"Host={Host};Port={NativePort};Username={Username};Password={Password}";
 
     /// <summary>
-    /// Connection string for ClickHouse.Client (HTTP protocol).
+    /// Connection string for ClickHouse.Driver (HTTP protocol).
     /// </summary>
-    public string HttpConnectionString =>
+    public string DriverConnectionString =>
         $"Host={Host};Port={HttpPort};Username={Username};Password={Password}";
+
+    /// <summary>
+    /// Connection string for Octonica (native TCP protocol).
+    /// </summary>
+    public string OctonicaConnectionString =>
+        $"Host={Host};Port={NativePort};User={Username};Password={Password}";
 
     /// <summary>
     /// Indicates whether the server supports JSON type (25.6+).

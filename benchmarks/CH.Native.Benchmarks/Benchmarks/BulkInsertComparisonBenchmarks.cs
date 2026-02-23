@@ -2,10 +2,8 @@ using BenchmarkDotNet.Attributes;
 using CH.Native.Benchmarks.Infrastructure;
 using CH.Native.Benchmarks.Models;
 using CH.Native.BulkInsert;
-using ClickHouse.Client.ADO;
-using ClickHouse.Client.Copy;
 using NativeConnection = CH.Native.Connection.ClickHouseConnection;
-using HttpConnection = ClickHouse.Client.ADO.ClickHouseConnection;
+using OctonicaConnection = Octonica.ClickHouseClient.ClickHouseConnection;
 
 namespace CH.Native.Benchmarks.Benchmarks;
 
@@ -16,7 +14,8 @@ namespace CH.Native.Benchmarks.Benchmarks;
 public class BulkInsertComparisonBenchmarks
 {
     private string _nativeConnectionString = null!;
-    private string _httpConnectionString = null!;
+    private string _driverConnectionString = null!;
+    private string _octonicaConnectionString = null!;
     private InsertRow[] _testData = null!;
 
     [Params(10_000, 100_000, 1_000_000)]
@@ -30,7 +29,8 @@ public class BulkInsertComparisonBenchmarks
 
         var manager = BenchmarkContainerManager.Instance;
         _nativeConnectionString = manager.NativeConnectionString;
-        _httpConnectionString = manager.HttpConnectionString;
+        _driverConnectionString = manager.DriverConnectionString;
+        _octonicaConnectionString = manager.OctonicaConnectionString;
 
         // Pre-generate test data
         _testData = Enumerable.Range(0, RowCount)
@@ -64,26 +64,37 @@ public class BulkInsertComparisonBenchmarks
             new BulkInsertOptions { BatchSize = 10_000 });
     }
 
-    // --- HTTP Bulk Insert (ClickHouseBulkCopy) ---
+    // --- Driver Bulk Insert (ClickHouse.Driver InsertBinaryAsync) ---
 
-    [Benchmark(Description = "Bulk Insert - HTTP")]
-    public async Task Http_BulkInsert()
+    [Benchmark(Description = "Bulk Insert - Driver")]
+    public async Task Driver_BulkInsert()
     {
-        using var connection = new HttpConnection(_httpConnectionString);
+        using var client = new ClickHouse.Driver.ClickHouseClient(_driverConnectionString);
+
+        var columns = new[] { "id", "name", "value" };
+        var rows = _testData.Select(r => new object[] { r.Id, r.Name, r.Value });
+        await client.InsertBinaryAsync(TestDataGenerator.InsertTable, columns, rows);
+    }
+
+    // --- Octonica Bulk Insert (columnar API) ---
+
+    [Benchmark(Description = "Bulk Insert - Octonica")]
+    public async Task Octonica_BulkInsert()
+    {
+        await using var connection = new OctonicaConnection(_octonicaConnectionString);
         await connection.OpenAsync();
 
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
-        {
-            DestinationTableName = TestDataGenerator.InsertTable,
-            BatchSize = 10_000
-        };
+        var ids = _testData.Select(r => r.Id).ToList();
+        var names = _testData.Select(r => r.Name).ToList();
+        var values = _testData.Select(r => r.Value).ToList();
 
-        // Initialize column metadata first
-        await bulkCopy.InitAsync();
-
-        // Convert to object[][] format required by ClickHouseBulkCopy
-        var rows = _testData.Select(r => new object[] { r.Id, r.Name, r.Value });
-        await bulkCopy.WriteToServerAsync(rows);
+        await using var writer = await connection.CreateColumnWriterAsync(
+            $"INSERT INTO {TestDataGenerator.InsertTable}(id, name, value) VALUES",
+            CancellationToken.None);
+        await writer.WriteTableAsync(
+            new object[] { ids, names, values },
+            _testData.Length,
+            CancellationToken.None);
     }
 
     // --- Native with streaming source ---
@@ -110,24 +121,15 @@ public class BulkInsertComparisonBenchmarks
         }
     }
 
-    // --- HTTP with streaming source ---
+    // --- Driver with streaming source ---
 
-    [Benchmark(Description = "Bulk Insert Streaming - HTTP")]
-    public async Task Http_BulkInsertStreaming()
+    [Benchmark(Description = "Bulk Insert Streaming - Driver")]
+    public async Task Driver_BulkInsertStreaming()
     {
-        using var connection = new HttpConnection(_httpConnectionString);
-        await connection.OpenAsync();
+        using var client = new ClickHouse.Driver.ClickHouseClient(_driverConnectionString);
 
-        using var bulkCopy = new ClickHouseBulkCopy(connection)
-        {
-            DestinationTableName = TestDataGenerator.InsertTable,
-            BatchSize = 10_000
-        };
-
-        // Initialize column metadata first
-        await bulkCopy.InitAsync();
-
-        await bulkCopy.WriteToServerAsync(GenerateRows());
+        var columns = new[] { "id", "name", "value" };
+        await client.InsertBinaryAsync(TestDataGenerator.InsertTable, columns, GenerateRows());
 
         IEnumerable<object[]> GenerateRows()
         {

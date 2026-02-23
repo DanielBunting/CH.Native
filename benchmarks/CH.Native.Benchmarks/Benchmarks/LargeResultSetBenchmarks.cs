@@ -1,9 +1,9 @@
 using BenchmarkDotNet.Attributes;
 using CH.Native.Benchmarks.Infrastructure;
 using CH.Native.Benchmarks.Models;
-using ClickHouse.Client.ADO;
 using NativeConnection = CH.Native.Connection.ClickHouseConnection;
-using HttpConnection = ClickHouse.Client.ADO.ClickHouseConnection;
+using DriverConnection = ClickHouse.Driver.ADO.ClickHouseConnection;
+using OctonicaConnection = Octonica.ClickHouseClient.ClickHouseConnection;
 
 namespace CH.Native.Benchmarks.Benchmarks;
 
@@ -14,7 +14,8 @@ namespace CH.Native.Benchmarks.Benchmarks;
 public class LargeResultSetBenchmarks
 {
     private NativeConnection _nativeConnection = null!;
-    private HttpConnection _httpConnection = null!;
+    private DriverConnection _driverConnection = null!;
+    private OctonicaConnection _octonicaConnection = null!;
 
     [Params(10_000, 100_000, 1_000_000)]
     public int RowCount { get; set; }
@@ -30,15 +31,19 @@ public class LargeResultSetBenchmarks
         _nativeConnection = new NativeConnection(manager.NativeConnectionString);
         await _nativeConnection.OpenAsync();
 
-        _httpConnection = new HttpConnection(manager.HttpConnectionString);
-        await _httpConnection.OpenAsync();
+        _driverConnection = new DriverConnection(manager.DriverConnectionString);
+        await _driverConnection.OpenAsync();
+
+        _octonicaConnection = new OctonicaConnection(manager.OctonicaConnectionString);
+        await _octonicaConnection.OpenAsync();
     }
 
     [GlobalCleanup]
     public async Task GlobalCleanup()
     {
         await _nativeConnection.DisposeAsync();
-        _httpConnection.Dispose();
+        await _driverConnection.DisposeAsync();
+        await _octonicaConnection.DisposeAsync();
     }
 
     // --- Streaming read (row-by-row) ---
@@ -55,12 +60,27 @@ public class LargeResultSetBenchmarks
         return sum;
     }
 
-    [Benchmark(Description = "Streaming Read - HTTP")]
-    public async Task<long> Http_StreamingRead()
+    [Benchmark(Description = "Streaming Read - Driver")]
+    public async Task<long> Driver_StreamingRead()
     {
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = $"SELECT * FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}";
         using var reader = await cmd.ExecuteReaderAsync();
+
+        long sum = 0;
+        while (await reader.ReadAsync())
+        {
+            sum += reader.GetInt64(0); // id column
+        }
+        return sum;
+    }
+
+    [Benchmark(Description = "Streaming Read - Octonica")]
+    public async Task<long> Octonica_StreamingRead()
+    {
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"SELECT * FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}");
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         long sum = 0;
         while (await reader.ReadAsync())
@@ -84,12 +104,35 @@ public class LargeResultSetBenchmarks
         return results;
     }
 
-    [Benchmark(Description = "Materialized Read - HTTP")]
-    public async Task<List<LargeTableRow>> Http_MaterializedRead()
+    [Benchmark(Description = "Materialized Read - Driver")]
+    public async Task<List<LargeTableRow>> Driver_MaterializedRead()
     {
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = $"SELECT id, category, name, value, quantity, created FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}";
         using var reader = await cmd.ExecuteReaderAsync();
+
+        var results = new List<LargeTableRow>(RowCount);
+        while (await reader.ReadAsync())
+        {
+            results.Add(new LargeTableRow
+            {
+                Id = reader.GetInt64(0),
+                Category = reader.GetString(1),
+                Name = reader.GetString(2),
+                Value = reader.GetDouble(3),
+                Quantity = reader.GetInt32(4),
+                Created = reader.GetDateTime(5)
+            });
+        }
+        return results;
+    }
+
+    [Benchmark(Description = "Materialized Read - Octonica")]
+    public async Task<List<LargeTableRow>> Octonica_MaterializedRead()
+    {
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"SELECT id, category, name, value, quantity, created FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}");
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         var results = new List<LargeTableRow>(RowCount);
         while (await reader.ReadAsync())

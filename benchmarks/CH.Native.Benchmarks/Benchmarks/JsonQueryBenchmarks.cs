@@ -1,21 +1,22 @@
 using System.Text.Json;
 using BenchmarkDotNet.Attributes;
 using CH.Native.Benchmarks.Infrastructure;
-using ClickHouse.Client.ADO;
 using NativeConnection = CH.Native.Connection.ClickHouseConnection;
-using HttpConnection = ClickHouse.Client.ADO.ClickHouseConnection;
+using DriverConnection = ClickHouse.Driver.ADO.ClickHouseConnection;
+using OctonicaConnection = Octonica.ClickHouseClient.ClickHouseConnection;
 
 namespace CH.Native.Benchmarks.Benchmarks;
 
 /// <summary>
-/// Benchmarks comparing CH.Native (Native TCP) vs ClickHouse.Client (HTTP) for JSON operations.
+/// Benchmarks comparing CH.Native, ClickHouse.Driver, and Octonica for JSON operations.
 /// Requires ClickHouse 25.6+ for JSON type support.
 /// </summary>
 [Config(typeof(ProtocolComparisonConfig))]
 public class JsonQueryBenchmarks
 {
     private NativeConnection _nativeConnection = null!;
-    private HttpConnection _httpConnection = null!;
+    private DriverConnection _driverConnection = null!;
+    private OctonicaConnection _octonicaConnection = null!;
     private bool _jsonSupported;
 
     [GlobalSetup]
@@ -37,8 +38,11 @@ public class JsonQueryBenchmarks
         _nativeConnection = new NativeConnection(manager.NativeConnectionString);
         await _nativeConnection.OpenAsync();
 
-        _httpConnection = new HttpConnection(manager.HttpConnectionString);
-        await _httpConnection.OpenAsync();
+        _driverConnection = new DriverConnection(manager.DriverConnectionString);
+        await _driverConnection.OpenAsync();
+
+        _octonicaConnection = new OctonicaConnection(manager.OctonicaConnectionString);
+        await _octonicaConnection.OpenAsync();
     }
 
     [GlobalCleanup]
@@ -47,7 +51,11 @@ public class JsonQueryBenchmarks
         if (_nativeConnection != null)
             await _nativeConnection.DisposeAsync();
 
-        _httpConnection?.Dispose();
+        if (_driverConnection != null)
+            await _driverConnection.DisposeAsync();
+
+        if (_octonicaConnection != null)
+            await _octonicaConnection.DisposeAsync();
     }
 
     // ============================================================
@@ -66,16 +74,32 @@ public class JsonQueryBenchmarks
         return name;
     }
 
-    [Benchmark(Description = "SELECT JSON literal - HTTP")]
-    public async Task<string?> Http_SelectJsonLiteral()
+    [Benchmark(Description = "SELECT JSON literal - Driver")]
+    public async Task<string?> Driver_SelectJsonLiteral()
     {
         if (!_jsonSupported) return "{}";
 
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = "SELECT '{\"name\":\"test\",\"value\":42}'::JSON";
         var result = await cmd.ExecuteScalarAsync();
 
-        // HTTP client returns JSON as string
+        if (result is string jsonStr)
+        {
+            using var doc = JsonDocument.Parse(jsonStr);
+            return doc.RootElement.GetProperty("name").GetString();
+        }
+        return null;
+    }
+
+    [Benchmark(Description = "SELECT JSON literal - Octonica")]
+    public async Task<string?> Octonica_SelectJsonLiteral()
+    {
+        if (!_jsonSupported) return "{}";
+
+        using var cmd = _octonicaConnection.CreateCommand(
+            "SELECT '{\"name\":\"test\",\"value\":42}'::JSON");
+        var result = await cmd.ExecuteScalarAsync();
+
         if (result is string jsonStr)
         {
             using var doc = JsonDocument.Parse(jsonStr);
@@ -105,14 +129,34 @@ public class JsonQueryBenchmarks
         return count;
     }
 
-    [Benchmark(Description = "SELECT 100 JSON rows - HTTP")]
-    public async Task<int> Http_Select100JsonRows()
+    [Benchmark(Description = "SELECT 100 JSON rows - Driver")]
+    public async Task<int> Driver_Select100JsonRows()
     {
         if (!_jsonSupported) return 0;
 
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = $"SELECT id, profile FROM {JsonTestDataGenerator.SimpleJsonTable}";
         using var reader = await cmd.ExecuteReaderAsync();
+
+        int count = 0;
+        while (await reader.ReadAsync())
+        {
+            var jsonStr = reader.GetString(1);
+            using var doc = JsonDocument.Parse(jsonStr);
+            _ = doc.RootElement.GetProperty("name").GetString();
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "SELECT 100 JSON rows - Octonica")]
+    public async Task<int> Octonica_Select100JsonRows()
+    {
+        if (!_jsonSupported) return 0;
+
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"SELECT id, profile FROM {JsonTestDataGenerator.SimpleJsonTable}");
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         int count = 0;
         while (await reader.ReadAsync())
@@ -148,14 +192,36 @@ public class JsonQueryBenchmarks
         return count;
     }
 
-    [Benchmark(Description = "SELECT 1K complex JSON - HTTP")]
-    public async Task<int> Http_Select1KComplexJson()
+    [Benchmark(Description = "SELECT 1K complex JSON - Driver")]
+    public async Task<int> Driver_Select1KComplexJson()
     {
         if (!_jsonSupported) return 0;
 
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = $"SELECT id, event_data FROM {JsonTestDataGenerator.ComplexJsonTable}";
         using var reader = await cmd.ExecuteReaderAsync();
+
+        int count = 0;
+        while (await reader.ReadAsync())
+        {
+            var jsonStr = reader.GetString(1);
+            using var doc = JsonDocument.Parse(jsonStr);
+            _ = doc.RootElement.GetProperty("event_type").GetString();
+            _ = doc.RootElement.GetProperty("user_name").GetString();
+            _ = doc.RootElement.GetProperty("browser").GetString();
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "SELECT 1K complex JSON - Octonica")]
+    public async Task<int> Octonica_Select1KComplexJson()
+    {
+        if (!_jsonSupported) return 0;
+
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"SELECT id, event_data FROM {JsonTestDataGenerator.ComplexJsonTable}");
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         int count = 0;
         while (await reader.ReadAsync())
@@ -197,14 +263,39 @@ public class JsonQueryBenchmarks
         return sum;
     }
 
-    [Benchmark(Description = "SELECT 100K JSON rows - HTTP")]
-    public async Task<long> Http_Select100KJsonRows()
+    [Benchmark(Description = "SELECT 100K JSON rows - Driver")]
+    public async Task<long> Driver_Select100KJsonRows()
     {
         if (!_jsonSupported) return 0;
 
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = $"SELECT id, data FROM {JsonTestDataGenerator.LargeJsonTable}";
         using var reader = await cmd.ExecuteReaderAsync();
+
+        long sum = 0;
+        while (await reader.ReadAsync())
+        {
+            var jsonStr = reader.GetString(1);
+            using var doc = JsonDocument.Parse(jsonStr);
+            if (doc.RootElement.TryGetProperty("x", out var xProp))
+            {
+                if (xProp.ValueKind == JsonValueKind.String && int.TryParse(xProp.GetString(), out var x))
+                    sum += x;
+                else if (xProp.ValueKind == JsonValueKind.Number)
+                    sum += xProp.GetInt32();
+            }
+        }
+        return sum;
+    }
+
+    [Benchmark(Description = "SELECT 100K JSON rows - Octonica")]
+    public async Task<long> Octonica_Select100KJsonRows()
+    {
+        if (!_jsonSupported) return 0;
+
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"SELECT id, data FROM {JsonTestDataGenerator.LargeJsonTable}");
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         long sum = 0;
         while (await reader.ReadAsync())
@@ -240,14 +331,31 @@ public class JsonQueryBenchmarks
         return count;
     }
 
-    [Benchmark(Description = "JSON path extraction - HTTP")]
-    public async Task<int> Http_JsonPathExtraction()
+    [Benchmark(Description = "JSON path extraction - Driver")]
+    public async Task<int> Driver_JsonPathExtraction()
     {
         if (!_jsonSupported) return 0;
 
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = $"SELECT id, event_data.event_type::String as event_type, event_data.user_name::String as user_name FROM {JsonTestDataGenerator.ComplexJsonTable}";
         using var reader = await cmd.ExecuteReaderAsync();
+
+        int count = 0;
+        while (await reader.ReadAsync())
+        {
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "JSON path extraction - Octonica")]
+    public async Task<int> Octonica_JsonPathExtraction()
+    {
+        if (!_jsonSupported) return 0;
+
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"SELECT id, event_data.event_type::String as event_type, event_data.user_name::String as user_name FROM {JsonTestDataGenerator.ComplexJsonTable}");
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         int count = 0;
         while (await reader.ReadAsync())
@@ -275,14 +383,31 @@ public class JsonQueryBenchmarks
         return count;
     }
 
-    [Benchmark(Description = "COUNT by JSON field - HTTP")]
-    public async Task<int> Http_CountByJsonField()
+    [Benchmark(Description = "COUNT by JSON field - Driver")]
+    public async Task<int> Driver_CountByJsonField()
     {
         if (!_jsonSupported) return 0;
 
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = $"SELECT event_data.event_type::String as event_type, count() as cnt FROM {JsonTestDataGenerator.ComplexJsonTable} GROUP BY event_type";
         using var reader = await cmd.ExecuteReaderAsync();
+
+        int count = 0;
+        while (await reader.ReadAsync())
+        {
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "COUNT by JSON field - Octonica")]
+    public async Task<int> Octonica_CountByJsonField()
+    {
+        if (!_jsonSupported) return 0;
+
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"SELECT event_data.event_type::String as event_type, count() as cnt FROM {JsonTestDataGenerator.ComplexJsonTable} GROUP BY event_type");
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         int count = 0;
         while (await reader.ReadAsync())
@@ -310,14 +435,31 @@ public class JsonQueryBenchmarks
         return count;
     }
 
-    [Benchmark(Description = "Nested 3-level path - HTTP")]
-    public async Task<int> Http_Nested3LevelPath()
+    [Benchmark(Description = "Nested 3-level path - Driver")]
+    public async Task<int> Driver_Nested3LevelPath()
     {
         if (!_jsonSupported) return 0;
 
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = $"SELECT id, data.user.profile.address.city::String as city FROM {JsonTestDataGenerator.NestedJsonTable}";
         using var reader = await cmd.ExecuteReaderAsync();
+
+        int count = 0;
+        while (await reader.ReadAsync())
+        {
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "Nested 3-level path - Octonica")]
+    public async Task<int> Octonica_Nested3LevelPath()
+    {
+        if (!_jsonSupported) return 0;
+
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"SELECT id, data.user.profile.address.city::String as city FROM {JsonTestDataGenerator.NestedJsonTable}");
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         int count = 0;
         while (await reader.ReadAsync())
@@ -354,14 +496,39 @@ public class JsonQueryBenchmarks
         return count;
     }
 
-    [Benchmark(Description = "SELECT 1K nested JSON - HTTP")]
-    public async Task<int> Http_Select1KNestedJson()
+    [Benchmark(Description = "SELECT 1K nested JSON - Driver")]
+    public async Task<int> Driver_Select1KNestedJson()
     {
         if (!_jsonSupported) return 0;
 
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = $"SELECT id, data FROM {JsonTestDataGenerator.NestedJsonTable}";
         using var reader = await cmd.ExecuteReaderAsync();
+
+        int count = 0;
+        while (await reader.ReadAsync())
+        {
+            var jsonStr = reader.GetString(1);
+            using var doc = JsonDocument.Parse(jsonStr);
+            _ = doc.RootElement
+                .GetProperty("user")
+                .GetProperty("profile")
+                .GetProperty("address")
+                .GetProperty("city")
+                .GetString();
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "SELECT 1K nested JSON - Octonica")]
+    public async Task<int> Octonica_Select1KNestedJson()
+    {
+        if (!_jsonSupported) return 0;
+
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"SELECT id, data FROM {JsonTestDataGenerator.NestedJsonTable}");
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         int count = 0;
         while (await reader.ReadAsync())
@@ -397,14 +564,31 @@ public class JsonQueryBenchmarks
         return count;
     }
 
-    [Benchmark(Description = "Filter nested field - HTTP")]
-    public async Task<int> Http_FilterNestedField()
+    [Benchmark(Description = "Filter nested field - Driver")]
+    public async Task<int> Driver_FilterNestedField()
     {
         if (!_jsonSupported) return 0;
 
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = $"SELECT id FROM {JsonTestDataGenerator.NestedJsonTable} WHERE data.user.profile.address.city::String = 'NYC'";
         using var reader = await cmd.ExecuteReaderAsync();
+
+        int count = 0;
+        while (await reader.ReadAsync())
+        {
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "Filter nested field - Octonica")]
+    public async Task<int> Octonica_FilterNestedField()
+    {
+        if (!_jsonSupported) return 0;
+
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"SELECT id FROM {JsonTestDataGenerator.NestedJsonTable} WHERE data.user.profile.address.city::String = 'NYC'");
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         int count = 0;
         while (await reader.ReadAsync())
@@ -432,14 +616,31 @@ public class JsonQueryBenchmarks
         return count;
     }
 
-    [Benchmark(Description = "GROUP BY nested field - HTTP")]
-    public async Task<int> Http_GroupByNestedField()
+    [Benchmark(Description = "GROUP BY nested field - Driver")]
+    public async Task<int> Driver_GroupByNestedField()
     {
         if (!_jsonSupported) return 0;
 
-        using var cmd = _httpConnection.CreateCommand();
+        using var cmd = _driverConnection.CreateCommand();
         cmd.CommandText = $"SELECT data.user.profile.address.city::String as city, count() as cnt FROM {JsonTestDataGenerator.NestedJsonTable} GROUP BY city";
         using var reader = await cmd.ExecuteReaderAsync();
+
+        int count = 0;
+        while (await reader.ReadAsync())
+        {
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "GROUP BY nested field - Octonica")]
+    public async Task<int> Octonica_GroupByNestedField()
+    {
+        if (!_jsonSupported) return 0;
+
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"SELECT data.user.profile.address.city::String as city, count() as cnt FROM {JsonTestDataGenerator.NestedJsonTable} GROUP BY city");
+        await using var reader = await cmd.ExecuteReaderAsync();
 
         int count = 0;
         while (await reader.ReadAsync())

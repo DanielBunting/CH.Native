@@ -121,14 +121,14 @@ static void PrintUsage()
           insert      - Bulk insert comparison (1K, 10K, 100K rows)
           complex     - Complex queries (aggregations, JOINs, filters)
           connection  - Connection establishment overhead
-          compression - Compression comparison (LZ4, Zstd, gzip)
+          compression - Compression comparison (LZ4, Zstd, native vs HTTP)
           compare     - Run all protocol comparison benchmarks
           quick       - Quick dev test (SimpleQueryBenchmarks, few iterations)
 
         JSON Benchmarks (requires Docker with ClickHouse 25.6+):
           jsoncolumn  - JSON column reader/writer/skipper (unit-level, no Docker)
-          jsonquery   - JSON query benchmarks (Native vs HTTP)
-          jsoninsert  - JSON bulk insert benchmarks (Native vs HTTP)
+          jsonquery   - JSON query benchmarks (Native vs Driver vs Octonica)
+          jsoninsert  - JSON bulk insert benchmarks (Native vs Driver vs Octonica)
           json        - Run all JSON benchmarks
 
         Combined:

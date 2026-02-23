@@ -33,8 +33,14 @@ public sealed class BenchmarkContainerManager : IAsyncDisposable
     /// <summary>
     /// Connection string for ClickHouse.Driver (HTTP protocol).
     /// </summary>
-    public string HttpConnectionString =>
+    public string DriverConnectionString =>
         $"Host={Host};Port={HttpPort};Username={Username};Password={Password}";
+
+    /// <summary>
+    /// Connection string for Octonica (native TCP protocol).
+    /// </summary>
+    public string OctonicaConnectionString =>
+        $"Host={Host};Port={NativePort};User={Username};Password={Password}";
 
     private BenchmarkContainerManager() { }
 
@@ -48,7 +54,7 @@ public sealed class BenchmarkContainerManager : IAsyncDisposable
             if (_initialized) return;
 
             _container = new ClickHouseBuilder()
-                .WithImage("clickhouse/clickhouse-server:24.1")
+                .WithImage("clickhouse/clickhouse-server:25.3")
                 .WithUsername(Username)
                 .WithPassword(Password)
                 .WithPortBinding(9000, true)
@@ -64,6 +70,9 @@ public sealed class BenchmarkContainerManager : IAsyncDisposable
             NativePort = _container.GetMappedPublicPort(9000);
             HttpPort = _container.GetMappedPublicPort(8123);
 
+            // Wait for ClickHouse to be ready to accept connections
+            await WaitForServerReadyAsync();
+
             _initialized = true;
 
             Console.WriteLine($"[BenchmarkContainer] Started - Native: {Host}:{NativePort}, HTTP: {Host}:{HttpPort}");
@@ -71,6 +80,28 @@ public sealed class BenchmarkContainerManager : IAsyncDisposable
         finally
         {
             _initLock.Release();
+        }
+    }
+
+    private async Task WaitForServerReadyAsync()
+    {
+        const int maxRetries = 20;
+        const int delayMs = 500;
+
+        for (int attempt = 1; attempt <= maxRetries; attempt++)
+        {
+            try
+            {
+                await using var connection = new CH.Native.Connection.ClickHouseConnection(NativeConnectionString);
+                await connection.OpenAsync();
+                return;
+            }
+            catch
+            {
+                if (attempt == maxRetries)
+                    throw;
+                await Task.Delay(delayMs);
+            }
         }
     }
 

@@ -116,27 +116,37 @@ var users = await connection.QueryAsync<User>("SELECT * FROM users");
 
 ## Performance
 
-CH.Native uses the native binary protocol (port 9000) instead of HTTP, resulting in lower latency and significantly reduced memory allocations.
+Three-way comparison against [ClickHouse.Driver](https://github.com/ClickHouse/clickhouse-cs) (HTTP) and [Octonica](https://github.com/Octonica/ClickHouseClient) (native TCP).
 
-### Query Performance
+### Query Latency
 
-| Benchmark | Native TCP | HTTP | Improvement |
-|-----------|-----------|------|-------------|
-| SELECT 1 | 544 μs | 733 μs | 1.3x faster |
-| SELECT 100 rows | 668 μs | 1,036 μs | 1.6x faster |
-| COUNT(*) 1M rows | 948 μs | 1,170 μs | 1.2x faster |
-| Read 1M rows (streaming) | 123 ms | 296 ms | **2.4x faster** |
-| Bulk insert 1M rows | 93 ms | 180 ms | 1.9x faster |
+| Benchmark | CH.Native | ClickHouse.Driver | Octonica |
+|-----------|-----------|-------------------|----------|
+| SELECT 1 | **531 μs** | 2,746 μs | 639 μs |
+| COUNT(*) 1M rows | **986 μs** | 1,596 μs | 1,060 μs |
+| SELECT 100 rows | **657 μs** | 1,026 μs | 719 μs |
 
-### Memory Efficiency
+### Large Result Sets
 
-| Benchmark | Native TCP | HTTP | Improvement |
-|-----------|-----------|------|-------------|
-| SELECT 1 | 266 KB | 545 KB | 2x less |
-| Read 1M rows | 143 MB | 191 MB | 25% less |
-| Bulk insert 1M rows | 44 MB | 120 MB | **2.7x less** |
+| Benchmark | CH.Native | ClickHouse.Driver | Octonica |
+|-----------|-----------|-------------------|----------|
+| Stream 1M rows | 174 ms | 271 ms | **86 ms** |
+| Materialize 1M rows | 305 ms | 471 ms | **213 ms** |
 
-*Benchmarks run on Apple M5, .NET 8.0, ClickHouse 24.8*
+### Bulk Insert
+
+| Benchmark | CH.Native | ClickHouse.Driver | Octonica |
+|-----------|-----------|-------------------|----------|
+| 1M rows | **107 ms** | 230 ms | 1,585 ms |
+
+### Memory Efficiency (1M rows)
+
+| Benchmark | CH.Native | ClickHouse.Driver | Octonica |
+|-----------|-----------|-------------------|----------|
+| Streaming | 244 MB | 190 MB | **78 MB** |
+| Bulk insert | **0.5 MB** | 95 MB | 27 MB |
+
+*Apple M5, .NET 9.0, ClickHouse 25.3 — run benchmarks with `dotnet run --project benchmarks/CH.Native.Benchmarks -c Release`*
 
 ## Requirements
 
