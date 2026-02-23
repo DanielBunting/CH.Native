@@ -1,5 +1,6 @@
 using CH.Native.Compression;
 using CH.Native.Connection;
+using CH.Native.Data;
 using Xunit;
 
 namespace CH.Native.Tests.Unit.Connection;
@@ -598,5 +599,67 @@ public class ClickHouseConnectionSettingsTests
 
         Assert.DoesNotContain("UseTls", str);
         Assert.DoesNotContain("TlsPort", str);
+    }
+
+    // String Materialization Tests
+
+    [Fact]
+    public void Builder_DefaultStringMaterialization_IsEager()
+    {
+        var settings = ClickHouseConnectionSettings.CreateBuilder()
+            .WithHost("localhost")
+            .Build();
+
+        Assert.Equal(StringMaterialization.Eager, settings.StringMaterialization);
+    }
+
+    [Fact]
+    public void Builder_WithStringMaterialization_SetsValue()
+    {
+        var settings = ClickHouseConnectionSettings.CreateBuilder()
+            .WithHost("localhost")
+            .WithStringMaterialization(StringMaterialization.Lazy)
+            .Build();
+
+        Assert.Equal(StringMaterialization.Lazy, settings.StringMaterialization);
+    }
+
+    [Fact]
+    public void Parse_WithStringMaterializationLazy_SetsLazy()
+    {
+        var settings = ClickHouseConnectionSettings.Parse("Host=localhost;StringMaterialization=Lazy");
+
+        Assert.Equal(StringMaterialization.Lazy, settings.StringMaterialization);
+    }
+
+    [Fact]
+    public void Parse_WithStringMaterializationEager_SetsEager()
+    {
+        var settings = ClickHouseConnectionSettings.Parse("Host=localhost;StringMaterialization=Eager");
+
+        Assert.Equal(StringMaterialization.Eager, settings.StringMaterialization);
+    }
+
+    [Fact]
+    public void Parse_WithStringMaterializationCaseInsensitive_Works()
+    {
+        var settings = ClickHouseConnectionSettings.Parse("Host=localhost;StringMaterialization=lazy");
+
+        Assert.Equal(StringMaterialization.Lazy, settings.StringMaterialization);
+    }
+
+    [Fact]
+    public void Parse_WithInvalidStringMaterialization_ThrowsArgumentException()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            ClickHouseConnectionSettings.Parse("Host=localhost;StringMaterialization=invalid"));
+    }
+
+    [Fact]
+    public void Parse_WithoutStringMaterialization_DefaultsToEager()
+    {
+        var settings = ClickHouseConnectionSettings.Parse("Host=localhost");
+
+        Assert.Equal(StringMaterialization.Eager, settings.StringMaterialization);
     }
 }

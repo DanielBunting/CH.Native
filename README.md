@@ -128,10 +128,10 @@ Three-way comparison against [ClickHouse.Driver](https://github.com/ClickHouse/c
 
 ### Large Result Sets
 
-| Benchmark | CH.Native | ClickHouse.Driver | Octonica |
-|-----------|-----------|-------------------|----------|
-| Stream 1M rows | 125 ms | 301 ms | **59 ms** |
-| Materialize 1M rows | 256 ms | 476 ms | **214 ms** |
+| Benchmark | CH.Native | CH.Native (Lazy) | ClickHouse.Driver | Octonica |
+|-----------|-----------|------------------|-------------------|----------|
+| Stream 1M rows | 123 ms | **70 ms** | 279 ms | 75 ms |
+| Materialize 1M rows | 268 ms | 356 ms | 471 ms | **216 ms** |
 
 ### Bulk Insert
 
@@ -141,10 +141,12 @@ Three-way comparison against [ClickHouse.Driver](https://github.com/ClickHouse/c
 
 ### Memory Efficiency (1M rows)
 
-| Benchmark | CH.Native | ClickHouse.Driver | Octonica |
-|-----------|-----------|-------------------|----------|
-| Streaming | 142 MB | 190 MB | **78 MB** |
-| Bulk insert | **0.5 MB** | 95 MB | 27 MB |
+| Benchmark | CH.Native | CH.Native (Lazy) | ClickHouse.Driver | Octonica |
+|-----------|-----------|------------------|-------------------|----------|
+| Streaming | 146 MB | **45 MB** | 195 MB | 80 MB |
+| Bulk insert | **0.5 MB** | — | 95 MB | 27 MB |
+
+Enable lazy string materialization via connection string (`StringMaterialization=Lazy`) or builder (`.WithStringMaterialization(StringMaterialization.Lazy)`). Lazy mode defers UTF-8 string decoding until values are accessed, reducing memory by ~70% for streaming reads. Best for `ExecuteReaderAsync` / `QueryAsync` workloads; typed queries (`QueryAsync<T>`) always use eager decoding.
 
 *Apple M5, .NET 9.0, ClickHouse 25.3 — run benchmarks with `dotnet run --project benchmarks/CH.Native.Benchmarks -c Release`*
 

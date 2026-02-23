@@ -10,13 +10,24 @@ public sealed class ColumnReaderRegistry
     private readonly FrozenDictionary<string, IColumnReader> _readers;
 
     /// <summary>
-    /// Gets the default registry with all built-in column readers.
+    /// Gets the default registry with all built-in column readers (eager string materialization).
     /// </summary>
     public static ColumnReaderRegistry Default { get; } = CreateDefault();
 
-    internal ColumnReaderRegistry(FrozenDictionary<string, IColumnReader> readers)
+    /// <summary>
+    /// Gets the registry with lazy string materialization.
+    /// </summary>
+    public static ColumnReaderRegistry LazyStrings { get; } = CreateLazyStrings();
+
+    /// <summary>
+    /// Gets the string materialization strategy for this registry.
+    /// </summary>
+    internal StringMaterialization Strategy { get; }
+
+    internal ColumnReaderRegistry(FrozenDictionary<string, IColumnReader> readers, StringMaterialization strategy = StringMaterialization.Eager)
     {
         _readers = readers;
+        Strategy = strategy;
     }
 
     /// <summary>
@@ -97,6 +108,14 @@ public sealed class ColumnReaderRegistry
         builder.RegisterDefaults();
         return builder.Build();
     }
+
+    private static ColumnReaderRegistry CreateLazyStrings()
+    {
+        var builder = new ColumnReaderRegistryBuilder();
+        builder.RegisterDefaults();
+        builder.Register(new ColumnReaders.StringColumnReader(lazy: true));
+        return builder.Build(StringMaterialization.Lazy);
+    }
 }
 
 /// <summary>
@@ -176,9 +195,10 @@ public sealed class ColumnReaderRegistryBuilder
     /// <summary>
     /// Builds the column reader registry.
     /// </summary>
+    /// <param name="strategy">The string materialization strategy for this registry.</param>
     /// <returns>The built registry.</returns>
-    public ColumnReaderRegistry Build()
+    public ColumnReaderRegistry Build(StringMaterialization strategy = StringMaterialization.Eager)
     {
-        return new ColumnReaderRegistry(_readers.ToFrozenDictionary());
+        return new ColumnReaderRegistry(_readers.ToFrozenDictionary(), strategy);
     }
 }

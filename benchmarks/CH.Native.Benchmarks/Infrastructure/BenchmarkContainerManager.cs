@@ -31,6 +31,12 @@ public sealed class BenchmarkContainerManager : IAsyncDisposable
         $"Host={Host};Port={NativePort};Username={Username};Password={Password}";
 
     /// <summary>
+    /// Connection string for CH.Native with lazy string materialization.
+    /// </summary>
+    public string NativeConnectionStringLazy =>
+        $"Host={Host};Port={NativePort};Username={Username};Password={Password};StringMaterialization=Lazy";
+
+    /// <summary>
     /// Connection string for ClickHouse.Driver (HTTP protocol).
     /// </summary>
     public string DriverConnectionString =>

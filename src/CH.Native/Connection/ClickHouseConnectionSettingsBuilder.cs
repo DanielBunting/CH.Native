@@ -1,5 +1,6 @@
 using System.Security.Cryptography.X509Certificates;
 using CH.Native.Compression;
+using CH.Native.Data;
 using CH.Native.Resilience;
 using CH.Native.Telemetry;
 using Microsoft.Extensions.Logging;
@@ -32,6 +33,7 @@ public sealed class ClickHouseConnectionSettingsBuilder
     private string? _tlsCaCertificatePath;
     private X509Certificate2? _tlsClientCertificate;
     private TelemetrySettings? _telemetry;
+    private StringMaterialization _stringMaterialization = StringMaterialization.Eager;
 
     /// <summary>
     /// Sets the host name or IP address.
@@ -348,6 +350,17 @@ public sealed class ClickHouseConnectionSettingsBuilder
     }
 
     /// <summary>
+    /// Sets the string materialization strategy.
+    /// </summary>
+    /// <param name="strategy">The materialization strategy.</param>
+    /// <returns>This builder for chaining.</returns>
+    public ClickHouseConnectionSettingsBuilder WithStringMaterialization(StringMaterialization strategy)
+    {
+        _stringMaterialization = strategy;
+        return this;
+    }
+
+    /// <summary>
     /// Builds the connection settings.
     /// </summary>
     /// <returns>The built settings.</returns>
@@ -378,7 +391,8 @@ public sealed class ClickHouseConnectionSettingsBuilder
             _allowInsecureTls,
             _tlsCaCertificatePath,
             _tlsClientCertificate,
-            _telemetry);
+            _telemetry,
+            _stringMaterialization);
     }
 }
 
