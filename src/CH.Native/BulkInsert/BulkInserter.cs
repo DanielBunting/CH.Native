@@ -1,9 +1,11 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Linq.Expressions;
 using System.Reflection;
 using CH.Native.Connection;
 using CH.Native.Data;
 using CH.Native.Mapping;
+using CH.Native.Telemetry;
 
 namespace CH.Native.BulkInsert;
 
@@ -24,6 +26,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     private bool _initialized;
     private bool _completed;
     private bool _disposed;
+    private int _totalRowsInserted;
 
     // Pooled column data arrays - reused across flushes (fallback path)
     private object?[][]? _pooledColumnData;
@@ -272,27 +275,45 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         if (_buffer.Count == 0)
             return;
 
-        if (_useDirectPath && _extractors != null)
+        using var activity = ClickHouseActivitySource.Source.StartActivity("clickhouse.bulk_insert.flush", ActivityKind.Client);
+        if (activity != null)
         {
-            // Fast path: direct-to-buffer writing (no boxing)
-            await _connection.SendDataBlockDirectAsync(
-                _extractors,
-                _buffer,
-                _buffer.Count,
-                cancellationToken);
+            activity.SetTag("db.system", "clickhouse");
+            activity.SetTag("db.clickhouse.table", _tableName);
+            activity.SetTag("db.clickhouse.rows", _buffer.Count);
         }
-        else
-        {
-            // Fallback path: extract column data from buffer (with boxing)
-            var columnData = ExtractColumnData();
 
-            // Send data block
-            await _connection.SendDataBlockAsync(
-                _columnNames!,
-                _columnTypes!,
-                columnData,
-                _buffer.Count,
-                cancellationToken);
+        try
+        {
+            if (_useDirectPath && _extractors != null)
+            {
+                // Fast path: direct-to-buffer writing (no boxing)
+                await _connection.SendDataBlockDirectAsync(
+                    _extractors,
+                    _buffer,
+                    _buffer.Count,
+                    cancellationToken);
+            }
+            else
+            {
+                // Fallback path: extract column data from buffer (with boxing)
+                var columnData = ExtractColumnData();
+
+                // Send data block
+                await _connection.SendDataBlockAsync(
+                    _columnNames!,
+                    _columnTypes!,
+                    columnData,
+                    _buffer.Count,
+                    cancellationToken);
+            }
+
+            _totalRowsInserted += _buffer.Count;
+        }
+        catch (Exception ex)
+        {
+            ClickHouseActivitySource.SetError(activity, ex);
+            throw;
         }
 
         _buffer.Clear();
@@ -310,16 +331,28 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         if (_completed)
             return;
 
-        // Flush any remaining items
-        await FlushAsync(cancellationToken);
+        using var activity = ClickHouseActivitySource.StartBulkInsert(_tableName, _connection.Settings.Database, _connection.Settings.Telemetry);
 
-        // Send empty block to signal end of data
-        await _connection.SendEmptyBlockAsync(cancellationToken);
+        try
+        {
+            // Flush any remaining items
+            await FlushAsync(cancellationToken);
 
-        // Wait for server confirmation
-        await _connection.ReceiveEndOfStreamAsync(cancellationToken);
+            // Send empty block to signal end of data
+            await _connection.SendEmptyBlockAsync(cancellationToken);
 
-        _completed = true;
+            // Wait for server confirmation
+            await _connection.ReceiveEndOfStreamAsync(cancellationToken);
+
+            activity?.SetTag("db.clickhouse.rows", _totalRowsInserted);
+
+            _completed = true;
+        }
+        catch (Exception ex)
+        {
+            ClickHouseActivitySource.SetError(activity, ex);
+            throw;
+        }
     }
 
     /// <summary>

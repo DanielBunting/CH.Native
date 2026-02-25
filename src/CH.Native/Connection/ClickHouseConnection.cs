@@ -551,8 +551,9 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
             return default;
         }
-        catch (OperationCanceledException) when (_cancellationRequested)
+        catch (OperationCanceledException ex) when (_cancellationRequested)
         {
+            ClickHouseActivitySource.SetError(activity, ex);
             // Server cancellation was requested - drain remaining messages to reset connection state
             await DrainAfterCancellationAsync();
             throw;
@@ -626,8 +627,9 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
             return totalRows;
         }
-        catch (OperationCanceledException) when (_cancellationRequested)
+        catch (OperationCanceledException ex) when (_cancellationRequested)
         {
+            ClickHouseActivitySource.SetError(activity, ex);
             // Server cancellation was requested - drain remaining messages to reset connection state
             await DrainAfterCancellationAsync();
             throw;
