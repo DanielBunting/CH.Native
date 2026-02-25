@@ -79,7 +79,10 @@ public static class ColumnExtractorFactory
                 static (ref ProtocolWriter w, bool v) => w.WriteByte(v ? (byte)1 : (byte)0)),
 
             // String (reference type, slightly different handling)
-            Type t when t == typeof(string) => CreateStringExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable),
+            Type t when t == typeof(string) =>
+                clickHouseType.Contains("FixedString(")
+                    ? CreateFixedStringExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable)
+                    : CreateStringExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable),
 
             // DateTime types
             Type t when t == typeof(DateTime) => CreateDateTimeExtractor<TRow>(property, columnName, clickHouseType, isNullable, isClickHouseNullable),
@@ -134,6 +137,33 @@ public static class ColumnExtractorFactory
     {
         var getter = CreateTypedGetter<TRow, string?>(property);
         return new StringExtractor<TRow>(getter, columnName, clickHouseType, isClickHouseNullable);
+    }
+
+    private static IColumnExtractor<TRow> CreateFixedStringExtractor<TRow>(
+        PropertyInfo property,
+        string columnName,
+        string clickHouseType,
+        bool isClickHouseNullable)
+    {
+        var length = ExtractFixedStringLength(clickHouseType);
+        var getter = CreateTypedGetter<TRow, string?>(property);
+        return new FixedStringExtractor<TRow>(getter, columnName, clickHouseType, length, isClickHouseNullable);
+    }
+
+    private static int ExtractFixedStringLength(string clickHouseType)
+    {
+        var idx = clickHouseType.IndexOf("FixedString(", StringComparison.Ordinal);
+        if (idx >= 0)
+        {
+            var start = idx + 12; // Length of "FixedString("
+            var end = clickHouseType.IndexOf(')', start);
+            if (end > start && int.TryParse(clickHouseType.AsSpan(start, end - start), out var length))
+            {
+                return length;
+            }
+        }
+
+        throw new ArgumentException($"Cannot parse FixedString length from type '{clickHouseType}'.");
     }
 
     private static IColumnExtractor<TRow> CreateDateTimeExtractor<TRow>(
@@ -514,6 +544,66 @@ public static class ColumnExtractorFactory
                     writer.WriteString(value ?? string.Empty);
                 }
             }
+        }
+    }
+
+    private sealed class FixedStringExtractor<TRow> : IColumnExtractor<TRow>
+    {
+        private readonly Func<TRow, string?> _getter;
+        private readonly int _length;
+        private readonly bool _isClickHouseNullable;
+
+        public string ColumnName { get; }
+        public string TypeName { get; }
+
+        public FixedStringExtractor(Func<TRow, string?> getter, string columnName, string typeName, int length, bool isClickHouseNullable)
+        {
+            _getter = getter;
+            ColumnName = columnName;
+            TypeName = typeName;
+            _length = length;
+            _isClickHouseNullable = isClickHouseNullable;
+        }
+
+        public void ExtractAndWrite(ref ProtocolWriter writer, IReadOnlyList<TRow> rows, int rowCount)
+        {
+            if (_isClickHouseNullable)
+            {
+                // Write null bitmap
+                for (int i = 0; i < rowCount; i++)
+                {
+                    var value = _getter(rows[i]);
+                    writer.WriteByte(value == null ? (byte)1 : (byte)0);
+                }
+
+                // Write fixed-length values
+                for (int i = 0; i < rowCount; i++)
+                {
+                    var value = _getter(rows[i]);
+                    WriteFixedString(ref writer, value);
+                }
+            }
+            else
+            {
+                for (int i = 0; i < rowCount; i++)
+                {
+                    var value = _getter(rows[i]);
+                    WriteFixedString(ref writer, value);
+                }
+            }
+        }
+
+        private void WriteFixedString(ref ProtocolWriter writer, string? value)
+        {
+            Span<byte> buffer = stackalloc byte[_length];
+            buffer.Clear();
+
+            if (value != null)
+            {
+                System.Text.Encoding.UTF8.GetBytes(value.AsSpan(), buffer);
+            }
+
+            writer.WriteBytes(buffer);
         }
     }
 

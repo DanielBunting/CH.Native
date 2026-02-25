@@ -60,6 +60,36 @@ public class ColumnExtractorFactoryTests
         Assert.NotNull(extractor);
     }
 
+    [Fact]
+    public void Create_FixedStringProperty_ReturnsExtractor()
+    {
+        var property = typeof(SimpleRow).GetProperty(nameof(SimpleRow.Name))!;
+
+        var extractor = ColumnExtractorFactory.Create<SimpleRow>(property, "val", "FixedString(16)");
+
+        Assert.NotNull(extractor);
+    }
+
+    [Fact]
+    public void Create_NullableFixedStringProperty_ReturnsExtractor()
+    {
+        var property = typeof(SimpleRow).GetProperty(nameof(SimpleRow.Name))!;
+
+        var extractor = ColumnExtractorFactory.Create<SimpleRow>(property, "val", "Nullable(FixedString(16))");
+
+        Assert.NotNull(extractor);
+    }
+
+    [Fact]
+    public void Create_LowCardinalityFixedStringProperty_ReturnsExtractor()
+    {
+        var property = typeof(SimpleRow).GetProperty(nameof(SimpleRow.Name))!;
+
+        var extractor = ColumnExtractorFactory.Create<SimpleRow>(property, "val", "LowCardinality(FixedString(8))");
+
+        Assert.NotNull(extractor);
+    }
+
     #endregion
 
     #region Test POCOs
