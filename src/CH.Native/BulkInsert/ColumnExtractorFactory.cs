@@ -312,6 +312,9 @@ public static class ColumnExtractorFactory
 
     private static int ExtractDecimalScale(string clickHouseType)
     {
+        if (clickHouseType.StartsWith("Nullable(", StringComparison.Ordinal) && clickHouseType.EndsWith(')'))
+            clickHouseType = clickHouseType[9..^1];
+
         // Parse "Decimal64(4)" or "Decimal(18, 4)" to get scale
         if (clickHouseType.Contains("Decimal(") || clickHouseType.Contains("Decimal32(") ||
             clickHouseType.Contains("Decimal64(") || clickHouseType.Contains("Decimal128(") ||
@@ -338,6 +341,9 @@ public static class ColumnExtractorFactory
 
     private static int ExtractDecimalPrecision(string clickHouseType)
     {
+        if (clickHouseType.StartsWith("Nullable(", StringComparison.Ordinal) && clickHouseType.EndsWith(')'))
+            clickHouseType = clickHouseType[9..^1];
+
         if (clickHouseType.Contains("Decimal32")) return 9;
         if (clickHouseType.Contains("Decimal64")) return 18;
         if (clickHouseType.Contains("Decimal128")) return 38;

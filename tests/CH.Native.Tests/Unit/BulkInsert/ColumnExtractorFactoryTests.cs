@@ -135,6 +135,72 @@ public class ColumnExtractorFactoryTests
 
     #endregion
 
+    #region Nullable Decimal precision and scale
+
+    [Fact]
+    public void ExtractAndWrite_NullableDecimal64_WritesCorrectScale()
+    {
+        var property = typeof(NullableDecimalRow).GetProperty(nameof(NullableDecimalRow.Value))!;
+        var extractor = ColumnExtractorFactory.Create<NullableDecimalRow>(property, "value", "Nullable(Decimal64(8))");
+
+        var row = new NullableDecimalRow { Value = 99.12345678m };
+        var rows = new List<NullableDecimalRow> { row };
+
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+        extractor.ExtractAndWrite(ref writer, rows, 1);
+
+        var written = buffer.WrittenSpan;
+        // 1 byte null indicator + 8 bytes Int64
+        Assert.Equal(9, written.Length);
+        Assert.Equal(0x00, written[0]); // not null
+        var scaledValue = BitConverter.ToInt64(written[1..]);
+        Assert.Equal(9_912_345_678L, scaledValue);
+    }
+
+    [Fact]
+    public void ExtractAndWrite_NullableGenericDecimal_WritesCorrectPrecisionAndScale()
+    {
+        var property = typeof(NullableDecimalRow).GetProperty(nameof(NullableDecimalRow.Value))!;
+        var extractor = ColumnExtractorFactory.Create<NullableDecimalRow>(property, "value", "Nullable(Decimal(9, 4))");
+
+        var row = new NullableDecimalRow { Value = 12345.6789m };
+        var rows = new List<NullableDecimalRow> { row };
+
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+        extractor.ExtractAndWrite(ref writer, rows, 1);
+
+        var written = buffer.WrittenSpan;
+        // 1 byte null indicator + 4 bytes Int32 (precision 9 → Decimal32)
+        Assert.Equal(5, written.Length);
+        Assert.Equal(0x00, written[0]); // not null
+        var scaledValue = BitConverter.ToInt32(written[1..]);
+        Assert.Equal(123_456_789, scaledValue);
+    }
+
+    [Fact]
+    public void ExtractAndWrite_NullableDecimal64_Null_WritesNullIndicator()
+    {
+        var property = typeof(NullableDecimalRow).GetProperty(nameof(NullableDecimalRow.Value))!;
+        var extractor = ColumnExtractorFactory.Create<NullableDecimalRow>(property, "value", "Nullable(Decimal64(8))");
+
+        var row = new NullableDecimalRow { Value = null };
+        var rows = new List<NullableDecimalRow> { row };
+
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+        extractor.ExtractAndWrite(ref writer, rows, 1);
+
+        var written = buffer.WrittenSpan;
+        Assert.Equal(9, written.Length);
+        Assert.Equal(0x01, written[0]); // null indicator
+        // Value bytes should be zero-filled
+        Assert.All(written[1..].ToArray(), b => Assert.Equal(0x00, b));
+    }
+
+    #endregion
+
     #region Test POCOs
 
     private class ArrayRow
@@ -161,6 +227,16 @@ public class ColumnExtractorFactoryTests
     private class IPv4TestRow
     {
         public IPAddress? Address { get; set; }
+    }
+
+    private class DecimalRow
+    {
+        public decimal Value { get; set; }
+    }
+
+    private class NullableDecimalRow
+    {
+        public decimal? Value { get; set; }
     }
 
     #endregion
