@@ -363,6 +363,142 @@ public class LazyStringColumnTests
 
     #endregion
 
+    #region LowCardinality Compatibility Tests
+
+    /// <summary>
+    /// Builds wire-format bytes for a LowCardinality(Nullable(String)) column.
+    /// Format: Version(UInt64) + Flags(UInt64) + DictSize(UInt64) + Dict(Nullable(String)) + IndexCount(UInt64) + Indices(UInt8)
+    /// </summary>
+    private static byte[] BuildLowCardinalityNullableStringBytes(string?[] dictionaryValues, byte[] indices)
+    {
+        const ulong HasAdditionalKeysBit = 1UL << 9;
+
+        // Build the dictionary payload as Nullable(String) format
+        var dictPayload = BuildNullableStringColumnBytes(dictionaryValues);
+
+        // Calculate total size:
+        // Version (8) + Flags (8) + DictSize (8) + dictPayload + IndexCount (8) + indices
+        var totalSize = 8 + 8 + 8 + dictPayload.Length + 8 + indices.Length;
+        var result = new byte[totalSize];
+        var offset = 0;
+
+        // Version = 1
+        BitConverter.TryWriteBytes(result.AsSpan(offset), (ulong)1);
+        offset += 8;
+
+        // Flags: index type UInt8 (0) | HasAdditionalKeysBit
+        BitConverter.TryWriteBytes(result.AsSpan(offset), HasAdditionalKeysBit | 0UL);
+        offset += 8;
+
+        // Dictionary size
+        BitConverter.TryWriteBytes(result.AsSpan(offset), (ulong)dictionaryValues.Length);
+        offset += 8;
+
+        // Dictionary values (Nullable(String) wire format)
+        dictPayload.CopyTo(result.AsSpan(offset));
+        offset += dictPayload.Length;
+
+        // Index count
+        BitConverter.TryWriteBytes(result.AsSpan(offset), (ulong)indices.Length);
+        offset += 8;
+
+        // Indices (UInt8)
+        indices.CopyTo(result.AsSpan(offset));
+
+        return result;
+    }
+
+    [Fact]
+    public void LowCardinality_CanConstructWithLazyNullableStringReader()
+    {
+        var stringReader = new StringColumnReader(lazy: true);
+        var lazyNullable = new LazyNullableStringColumnReader(stringReader);
+
+        // This should not throw — previously threw ArgumentException
+        var lowCard = new LowCardinalityColumnReader<string>(lazyNullable);
+
+        Assert.NotNull(lowCard);
+        Assert.Equal("LowCardinality(Nullable(String))", lowCard.TypeName);
+    }
+
+    [Fact]
+    public void LazyNullableStringReader_ReadValue_ReturnsNullAndNonNull()
+    {
+        var stringReader = new StringColumnReader(lazy: true);
+        var lazyNullable = new LazyNullableStringColumnReader(stringReader);
+        IColumnReader<string> typedReader = (IColumnReader<string>)lazyNullable;
+
+        // Non-null value: isNull=0 + string "hello"
+        var helloBytes = BuildNullableStringColumnBytes(new[] { "hello" });
+        var reader1 = new ProtocolReader(new ReadOnlySequence<byte>(helloBytes));
+        Assert.Equal("hello", typedReader.ReadValue(ref reader1));
+
+        // Null value: isNull=1 + empty string placeholder
+        var nullBytes = BuildNullableStringColumnBytes(new string?[] { null });
+        var reader2 = new ProtocolReader(new ReadOnlySequence<byte>(nullBytes));
+        Assert.Null(typedReader.ReadValue(ref reader2));
+    }
+
+    [Fact]
+    public void LazyNullableStringReader_GenericReadTypedColumn_ReturnsTypedColumnWithCorrectValues()
+    {
+        var stringReader = new StringColumnReader(lazy: true);
+        var lazyNullable = new LazyNullableStringColumnReader(stringReader);
+        IColumnReader<string> typedReader = (IColumnReader<string>)lazyNullable;
+
+        var bytes = BuildNullableStringColumnBytes(new string?[] { "alpha", null, "gamma", null });
+        var protocolReader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+
+        using var column = typedReader.ReadTypedColumn(ref protocolReader, 4);
+
+        Assert.IsType<TypedColumn<string>>(column);
+        Assert.Equal(4, column.Count);
+        Assert.Equal("alpha", column[0]);
+        Assert.Null(column[1]);
+        Assert.Equal("gamma", column[2]);
+        Assert.Null(column[3]);
+    }
+
+    [Fact]
+    public void LowCardinality_NullableString_FullRoundTrip_WithLazyReader()
+    {
+        // Dictionary: [null, "foo", "bar"]
+        var dictValues = new string?[] { null, "foo", "bar" };
+        // Rows: "bar", null, "foo", "foo", null, "bar"
+        var indices = new byte[] { 2, 0, 1, 1, 0, 2 };
+
+        var wireBytes = BuildLowCardinalityNullableStringBytes(dictValues, indices);
+
+        var stringReader = new StringColumnReader(lazy: true);
+        var lazyNullable = new LazyNullableStringColumnReader(stringReader);
+        var lowCard = new LowCardinalityColumnReader<string>(lazyNullable);
+
+        var protocolReader = new ProtocolReader(new ReadOnlySequence<byte>(wireBytes));
+        using var column = lowCard.ReadTypedColumn(ref protocolReader, indices.Length);
+
+        Assert.Equal(6, column.Count);
+        Assert.Equal("bar", column[0]);
+        Assert.Null(column[1]);
+        Assert.Equal("foo", column[2]);
+        Assert.Equal("foo", column[3]);
+        Assert.Null(column[4]);
+        Assert.Equal("bar", column[5]);
+    }
+
+    [Fact]
+    public void ColumnReaderRegistry_LazyStrings_LowCardinalityNullableString_Resolves()
+    {
+        var registry = ColumnReaderRegistry.LazyStrings;
+
+        // This should not throw — previously threw ArgumentException
+        var reader = registry.GetReader("LowCardinality(Nullable(String))");
+
+        Assert.NotNull(reader);
+        Assert.IsType<LowCardinalityColumnReader<string>>(reader);
+    }
+
+    #endregion
+
     #region Eager vs Lazy Equivalence
 
     [Fact]

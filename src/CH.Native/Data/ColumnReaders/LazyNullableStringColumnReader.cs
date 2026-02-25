@@ -8,7 +8,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// without materializing System.String objects. Returns a <see cref="NullableRawStringColumn"/>
 /// that defers decoding to GetValue().
 /// </summary>
-internal sealed class LazyNullableStringColumnReader : IColumnReader
+internal sealed class LazyNullableStringColumnReader : IColumnReader, IColumnReader<string>
 {
     private readonly StringColumnReader _innerReader;
 
@@ -22,6 +22,39 @@ internal sealed class LazyNullableStringColumnReader : IColumnReader
 
     /// <inheritdoc />
     public Type ClrType => typeof(string);
+
+    /// <inheritdoc />
+    public string ReadValue(ref ProtocolReader reader)
+    {
+        var isNull = reader.ReadByte();
+        // Always consume the string value — ClickHouse sends a placeholder for null rows
+        var value = _innerReader.ReadValue(ref reader);
+        return isNull != 0 ? null! : value;
+    }
+
+    /// <summary>
+    /// Reads column data into a <see cref="TypedColumn{T}"/> with eagerly materialized strings.
+    /// Used by <see cref="LowCardinalityColumnReader{T}"/> for small dictionaries.
+    /// </summary>
+    TypedColumn<string> IColumnReader<string>.ReadTypedColumn(ref ProtocolReader reader, int rowCount)
+    {
+        if (rowCount == 0)
+            return new TypedColumn<string>(Array.Empty<string>());
+
+        var nullBitmap = new byte[rowCount];
+        for (int i = 0; i < rowCount; i++)
+            nullBitmap[i] = reader.ReadByte();
+
+        var values = new string[rowCount];
+        for (int i = 0; i < rowCount; i++)
+        {
+            // Always consume the string value — ClickHouse sends a placeholder for null rows
+            var value = _innerReader.ReadValue(ref reader);
+            values[i] = nullBitmap[i] != 0 ? null! : value;
+        }
+
+        return new TypedColumn<string>(values);
+    }
 
     /// <inheritdoc />
     public ITypedColumn ReadTypedColumn(ref ProtocolReader reader, int rowCount)
