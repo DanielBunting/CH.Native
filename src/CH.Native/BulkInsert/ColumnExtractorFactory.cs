@@ -1210,6 +1210,7 @@ public static class ColumnExtractorFactory
                     if (value != null)
                     {
                         value.TryWriteBytes(buffer, out _);
+                        buffer[0..4].Reverse();
                         writer.WriteBytes(buffer[0..4]);
                     }
                     else

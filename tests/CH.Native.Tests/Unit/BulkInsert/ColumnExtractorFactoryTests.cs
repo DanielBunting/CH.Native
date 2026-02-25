@@ -1,6 +1,9 @@
+using System.Buffers;
+using System.Net;
 using System.Reflection;
 using CH.Native.BulkInsert;
 using CH.Native.Mapping;
+using CH.Native.Protocol;
 using Xunit;
 
 namespace CH.Native.Tests.Unit.BulkInsert;
@@ -92,6 +95,46 @@ public class ColumnExtractorFactoryTests
 
     #endregion
 
+    #region IPv4 byte order
+
+    [Fact]
+    public void ExtractAndWrite_IPv4_WritesLittleEndianByteOrder()
+    {
+        var property = typeof(IPv4TestRow).GetProperty(nameof(IPv4TestRow.Address))!;
+        var extractor = ColumnExtractorFactory.Create<IPv4TestRow>(property, "address", "IPv4");
+
+        var row = new IPv4TestRow { Address = IPAddress.Parse("127.0.0.1") };
+        var rows = new List<IPv4TestRow> { row };
+
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+        extractor.ExtractAndWrite(ref writer, rows, 1);
+
+        var written = buffer.WrittenSpan;
+        Assert.Equal(4, written.Length);
+        Assert.Equal(new byte[] { 0x01, 0x00, 0x00, 0x7F }, written.ToArray());
+    }
+
+    [Fact]
+    public void ExtractAndWrite_IPv4_AsymmetricAddress_WritesLittleEndianByteOrder()
+    {
+        var property = typeof(IPv4TestRow).GetProperty(nameof(IPv4TestRow.Address))!;
+        var extractor = ColumnExtractorFactory.Create<IPv4TestRow>(property, "address", "IPv4");
+
+        var row = new IPv4TestRow { Address = IPAddress.Parse("192.168.1.100") };
+        var rows = new List<IPv4TestRow> { row };
+
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+        extractor.ExtractAndWrite(ref writer, rows, 1);
+
+        var written = buffer.WrittenSpan;
+        Assert.Equal(4, written.Length);
+        Assert.Equal(new byte[] { 0x64, 0x01, 0xA8, 0xC0 }, written.ToArray());
+    }
+
+    #endregion
+
     #region Test POCOs
 
     private class ArrayRow
@@ -113,6 +156,11 @@ public class ColumnExtractorFactoryTests
     {
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty;
+    }
+
+    private class IPv4TestRow
+    {
+        public IPAddress? Address { get; set; }
     }
 
     #endregion
