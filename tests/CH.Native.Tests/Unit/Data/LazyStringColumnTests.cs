@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Linq;
 using System.Text;
 using CH.Native.Data;
 using CH.Native.Data.ColumnReaders;
@@ -367,14 +368,18 @@ public class LazyStringColumnTests
 
     /// <summary>
     /// Builds wire-format bytes for a LowCardinality(Nullable(String)) column.
-    /// Format: Version(UInt64) + Flags(UInt64) + DictSize(UInt64) + Dict(Nullable(String)) + IndexCount(UInt64) + Indices(UInt8)
+    /// Format: Version(UInt64) + Flags(UInt64) + DictSize(UInt64) + Dict(String) + IndexCount(UInt64) + Indices(UInt8)
+    /// Note: ClickHouse strips the Nullable wrapper from the dictionary; index 0 represents null.
     /// </summary>
     private static byte[] BuildLowCardinalityNullableStringBytes(string?[] dictionaryValues, byte[] indices)
     {
         const ulong HasAdditionalKeysBit = 1UL << 9;
 
-        // Build the dictionary payload as Nullable(String) format
-        var dictPayload = BuildNullableStringColumnBytes(dictionaryValues);
+        // Build the dictionary payload as plain String format (no Nullable wrapper).
+        // ClickHouse strips the Nullable from LowCardinality dictionaries.
+        // Index 0 represents null and stores a default/empty string.
+        var dictStrings = dictionaryValues.Select(v => v ?? "").ToArray();
+        var dictPayload = BuildStringColumnBytes(dictStrings);
 
         // Calculate total size:
         // Version (8) + Flags (8) + DictSize (8) + dictPayload + IndexCount (8) + indices
@@ -394,7 +399,7 @@ public class LazyStringColumnTests
         BitConverter.TryWriteBytes(result.AsSpan(offset), (ulong)dictionaryValues.Length);
         offset += 8;
 
-        // Dictionary values (Nullable(String) wire format)
+        // Dictionary values (plain String wire format — no Nullable wrapping)
         dictPayload.CopyTo(result.AsSpan(offset));
         offset += dictPayload.Length;
 
@@ -409,13 +414,13 @@ public class LazyStringColumnTests
     }
 
     [Fact]
-    public void LowCardinality_CanConstructWithLazyNullableStringReader()
+    public void LowCardinality_CanConstructWithStringReaderAndNullableFlag()
     {
         var stringReader = new StringColumnReader(lazy: true);
-        var lazyNullable = new LazyNullableStringColumnReader(stringReader);
 
-        // This should not throw — previously threw ArgumentException
-        var lowCard = new LowCardinalityColumnReader<string>(lazyNullable);
+        // For LowCardinality(Nullable(String)), the inner reader is StringColumnReader (not Nullable).
+        // Nullable is handled via isNullable flag (index 0 = null).
+        var lowCard = new LowCardinalityColumnReader<string>(stringReader, isNullable: true);
 
         Assert.NotNull(lowCard);
         Assert.Equal("LowCardinality(Nullable(String))", lowCard.TypeName);
@@ -462,16 +467,17 @@ public class LazyStringColumnTests
     [Fact]
     public void LowCardinality_NullableString_FullRoundTrip_WithLazyReader()
     {
-        // Dictionary: [null, "foo", "bar"]
+        // Dictionary: [null (index 0 = default), "foo", "bar"]
+        // ClickHouse strips Nullable from the dictionary; index 0 represents null.
         var dictValues = new string?[] { null, "foo", "bar" };
         // Rows: "bar", null, "foo", "foo", null, "bar"
         var indices = new byte[] { 2, 0, 1, 1, 0, 2 };
 
         var wireBytes = BuildLowCardinalityNullableStringBytes(dictValues, indices);
 
+        // Inner reader is plain StringColumnReader (not Nullable) — matches real wire format
         var stringReader = new StringColumnReader(lazy: true);
-        var lazyNullable = new LazyNullableStringColumnReader(stringReader);
-        var lowCard = new LowCardinalityColumnReader<string>(lazyNullable);
+        var lowCard = new LowCardinalityColumnReader<string>(stringReader, isNullable: true);
 
         var protocolReader = new ProtocolReader(new ReadOnlySequence<byte>(wireBytes));
         using var column = lowCard.ReadTypedColumn(ref protocolReader, indices.Length);

@@ -177,10 +177,24 @@ public sealed class ColumnReaderFactory
             throw new FormatException($"LowCardinality requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
-        var innerReader = CreateReaderForType(innerType);
+        var isNullable = innerType.BaseName == "Nullable" && innerType.TypeArguments.Count == 1;
+
+        // For Nullable inner types, ClickHouse serializes the LowCardinality dictionary
+        // using the base type (without the Nullable wrapper). Null is represented by
+        // dictionary index 0. Strip the Nullable to get the correct dictionary reader.
+        IColumnReader innerReader;
+        if (isNullable)
+        {
+            var baseType = innerType.TypeArguments[0];
+            innerReader = CreateReaderForType(baseType);
+        }
+        else
+        {
+            innerReader = CreateReaderForType(innerType);
+        }
 
         var readerType = typeof(LowCardinalityColumnReader<>).MakeGenericType(innerReader.ClrType);
-        return (IColumnReader)Activator.CreateInstance(readerType, innerReader)!;
+        return (IColumnReader)Activator.CreateInstance(readerType, innerReader, isNullable)!;
     }
 
     private IColumnReader CreateFixedStringReader(ClickHouseType type)

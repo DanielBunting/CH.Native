@@ -144,10 +144,24 @@ public sealed class ColumnWriterFactory
             throw new FormatException($"LowCardinality requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
-        var innerWriter = CreateWriterForType(innerType);
+        var isNullable = innerType.BaseName == "Nullable" && innerType.TypeArguments.Count == 1;
+
+        // For Nullable inner types, ClickHouse serializes the LowCardinality dictionary
+        // using the base type (without the Nullable wrapper). Null is represented by
+        // dictionary index 0. Strip the Nullable to get the correct dictionary writer.
+        IColumnWriter innerWriter;
+        if (isNullable)
+        {
+            var baseType = innerType.TypeArguments[0];
+            innerWriter = CreateWriterForType(baseType);
+        }
+        else
+        {
+            innerWriter = CreateWriterForType(innerType);
+        }
 
         var writerType = typeof(LowCardinalityColumnWriter<>).MakeGenericType(innerWriter.ClrType);
-        return (IColumnWriter)Activator.CreateInstance(writerType, innerWriter)!;
+        return (IColumnWriter)Activator.CreateInstance(writerType, innerWriter, isNullable)!;
     }
 
     private IColumnWriter CreateFixedStringWriter(ClickHouseType type)

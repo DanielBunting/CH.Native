@@ -151,8 +151,17 @@ public sealed class ColumnSkipperFactory
             throw new FormatException($"LowCardinality requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
-        var innerSkipper = CreateSkipperForType(innerType);
 
+        // For Nullable inner types, ClickHouse serializes the LowCardinality dictionary
+        // using the base type (without the Nullable wrapper). Strip it for correct skipping.
+        if (innerType.BaseName == "Nullable" && innerType.TypeArguments.Count == 1)
+        {
+            var baseType = innerType.TypeArguments[0];
+            var baseSkipper = CreateSkipperForType(baseType);
+            return new LowCardinalityColumnSkipper(baseSkipper, innerType.OriginalTypeName);
+        }
+
+        var innerSkipper = CreateSkipperForType(innerType);
         return new LowCardinalityColumnSkipper(innerSkipper, innerType.OriginalTypeName);
     }
 
