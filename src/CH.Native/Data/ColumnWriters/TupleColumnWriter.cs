@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnWriters;
@@ -88,17 +89,32 @@ public sealed class TupleColumnWriter : IColumnWriter<object[]>
 
     void IColumnWriter.WriteColumn(ref ProtocolWriter writer, object?[] values)
     {
-        // Cast to object[][] and delegate
         var tuples = new object[values.Length][];
         for (int i = 0; i < values.Length; i++)
         {
-            tuples[i] = (values[i] as object[]) ?? Array.Empty<object>();
+            tuples[i] = ExtractElements(values[i]);
         }
         WriteColumn(ref writer, tuples);
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)
     {
-        WriteValue(ref writer, (value as object[]) ?? Array.Empty<object>());
+        WriteValue(ref writer, ExtractElements(value));
+    }
+
+    private static object[] ExtractElements(object? value)
+    {
+        if (value is object[] array)
+            return array;
+
+        if (value is ITuple tuple)
+        {
+            var elements = new object[tuple.Length];
+            for (int i = 0; i < tuple.Length; i++)
+                elements[i] = tuple[i]!;
+            return elements;
+        }
+
+        return Array.Empty<object>();
     }
 }

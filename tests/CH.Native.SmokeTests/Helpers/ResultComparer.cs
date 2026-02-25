@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Net;
 using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Xunit;
 
@@ -161,6 +162,15 @@ public static class ResultComparer
         if (nativeVal is IList nList && driverVal is IList dList)
         {
             AssertListsEqual(nList, dList, location);
+            return;
+        }
+
+        // ITuple cross-type (System.Tuple instances from different drivers)
+        if (nativeVal is ITuple nativeTuple && driverVal is ITuple driverTuple)
+        {
+            Assert.Equal(driverTuple.Length, nativeTuple.Length);
+            for (int i = 0; i < nativeTuple.Length; i++)
+                AssertValuesEqual(nativeTuple[i], driverTuple[i], $"{location}.Item{i + 1}");
             return;
         }
 

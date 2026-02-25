@@ -772,11 +772,11 @@ public class BulkInsertTypeRoundTripTests
 
             await inserter.CompleteAsync();
 
-            var results = new List<object[]>();
+            var results = new List<System.Runtime.CompilerServices.ITuple>();
             await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 var tuple = row.GetFieldValue<object>("Value");
-                results.Add((object[])tuple);
+                results.Add((System.Runtime.CompilerServices.ITuple)tuple);
             }
 
             Assert.Equal(2, results.Count);

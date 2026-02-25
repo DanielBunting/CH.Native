@@ -504,7 +504,10 @@ public sealed class Block
             if (rowCount > 0)
             {
                 var columnWriter = writerRegistry.GetWriter(columnTypes[i]);
-                columnWriter.WriteColumn(ref writer, columnData[i]);
+                var data = columnData[i].Length == rowCount
+                    ? columnData[i]
+                    : columnData[i][..rowCount];
+                columnWriter.WriteColumn(ref writer, data);
             }
         }
     }
@@ -562,7 +565,10 @@ public sealed class Block
             if (rowCount > 0)
             {
                 var columnWriter = writerRegistry.GetWriter(columnTypes[i]);
-                columnWriter.WriteColumn(ref tempWriter, columnData[i]);
+                var data = columnData[i].Length == rowCount
+                    ? columnData[i]
+                    : columnData[i][..rowCount];
+                columnWriter.WriteColumn(ref tempWriter, data);
             }
         }
 

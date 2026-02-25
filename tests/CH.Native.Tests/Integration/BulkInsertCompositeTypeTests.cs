@@ -249,10 +249,10 @@ public class BulkInsertCompositeTypeTests
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
             Assert.Equal(2, count);
 
-            var results = new List<object?[]>();
+            var results = new List<System.Runtime.CompilerServices.ITuple>();
             await foreach (var row in connection.QueryAsync($"SELECT pair FROM {tableName} ORDER BY id"))
             {
-                results.Add((object?[])row.GetFieldValue<object>("pair"));
+                results.Add((System.Runtime.CompilerServices.ITuple)row.GetFieldValue<object>("pair"));
             }
 
             Assert.Equal(2, results.Count);
@@ -304,12 +304,14 @@ public class BulkInsertCompositeTypeTests
 
             await foreach (var row in connection.QueryAsync($"SELECT items FROM {tableName}"))
             {
-                var items = (object[][])row.GetFieldValue<object>("items");
+                var items = (object[])row.GetFieldValue<object>("items");
                 Assert.Equal(2, items.Length);
-                Assert.Equal(1, items[0][0]);
-                Assert.Equal("one", items[0][1]);
-                Assert.Equal(2, items[1][0]);
-                Assert.Equal("two", items[1][1]);
+                var item0 = (System.Runtime.CompilerServices.ITuple)items[0];
+                var item1 = (System.Runtime.CompilerServices.ITuple)items[1];
+                Assert.Equal(1, item0[0]);
+                Assert.Equal("one", item0[1]);
+                Assert.Equal(2, item1[0]);
+                Assert.Equal("two", item1[1]);
             }
         }
         finally

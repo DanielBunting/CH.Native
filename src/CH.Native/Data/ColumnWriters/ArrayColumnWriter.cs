@@ -53,24 +53,28 @@ public sealed class ArrayColumnWriter<T> : IColumnWriter<T[]>
     {
         // Step 1: Write cumulative offsets (UInt64 per row)
         ulong offset = 0;
+        int totalElements = 0;
         for (int i = 0; i < values.Length; i++)
         {
-            offset += (ulong)(values[i]?.Length ?? 0);
+            var len = values[i]?.Length ?? 0;
+            offset += (ulong)len;
+            totalElements += len;
             writer.WriteUInt64(offset);
         }
 
-        // Step 2: Write all elements concatenated
+        // Step 2: Flatten all elements and write as a column
+        var allElements = new T[totalElements];
+        int pos = 0;
         for (int i = 0; i < values.Length; i++)
         {
             var array = values[i];
-            if (array != null)
+            if (array != null && array.Length > 0)
             {
-                for (int j = 0; j < array.Length; j++)
-                {
-                    _elementWriter.WriteValue(ref writer, array[j]);
-                }
+                Array.Copy(array, 0, allElements, pos, array.Length);
+                pos += array.Length;
             }
         }
+        _elementWriter.WriteColumn(ref writer, allElements);
     }
 
     /// <inheritdoc />
@@ -92,24 +96,28 @@ public sealed class ArrayColumnWriter<T> : IColumnWriter<T[]>
     {
         // Step 1: Write cumulative offsets
         ulong offset = 0;
+        int totalElements = 0;
         for (int i = 0; i < values.Length; i++)
         {
             var array = values[i] as T[];
-            offset += (ulong)(array?.Length ?? 0);
+            var len = array?.Length ?? 0;
+            offset += (ulong)len;
+            totalElements += len;
             writer.WriteUInt64(offset);
         }
 
-        // Step 2: Write all elements
+        // Step 2: Flatten all elements and write as a column
+        var allElements = new T[totalElements];
+        int pos = 0;
         for (int i = 0; i < values.Length; i++)
         {
-            if (values[i] is T[] array)
+            if (values[i] is T[] array && array.Length > 0)
             {
-                for (int j = 0; j < array.Length; j++)
-                {
-                    _elementWriter.WriteValue(ref writer, array[j]);
-                }
+                Array.Copy(array, 0, allElements, pos, array.Length);
+                pos += array.Length;
             }
         }
+        _elementWriter.WriteColumn(ref writer, allElements);
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)
