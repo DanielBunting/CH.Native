@@ -1,0 +1,76 @@
+name: Prerelease
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    uses: ./.github/workflows/build-and-test.yml
+
+  prerelease:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Bump patch if stable version has been released for this version
+        run: |
+          VERSION_PREFIX=$(grep -oP '(?<=<VersionPrefix>)[^<]+' Directory.Build.props)
+          if git rev-parse "v${VERSION_PREFIX}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION_PREFIX} exists — bumping patch version"
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION_PREFIX"
+            NEW_PATCH=$((PATCH + 1))
+            NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+            sed -i "s|<VersionPrefix>${VERSION_PREFIX}</VersionPrefix>|<VersionPrefix>${NEW_VERSION}</VersionPrefix>|" Directory.Build.props
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add Directory.Build.props
+            git commit -m "Bump version to ${NEW_VERSION} [skip ci]"
+            git push
+            echo "Bumped VersionPrefix to ${NEW_VERSION}"
+          else
+            echo "Tag v${VERSION_PREFIX} does not exist — no bump needed"
+          fi
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION_PREFIX=$(grep -oP '(?<=<VersionPrefix>)[^<]+' Directory.Build.props)
+          echo "version=${VERSION_PREFIX}-prerelease.${{ github.run_number }}" >> $GITHUB_OUTPUT
+          echo "Publishing prerelease version: ${VERSION_PREFIX}-prerelease.${{ github.run_number }}"
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Pack
+        run: dotnet pack src/CH.Native/CH.Native.csproj --no-build --configuration Release --output ./nupkg /p:Version=${{ steps.version.outputs.version }}
+
+      - name: Push to NuGet
+        run: dotnet nuget push ./nupkg/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+      - name: Push symbols to NuGet
+        run: dotnet nuget push ./nupkg/*.snupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        continue-on-error: true
+
+      - name: Tag prerelease
+        run: |
+          git tag "v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"

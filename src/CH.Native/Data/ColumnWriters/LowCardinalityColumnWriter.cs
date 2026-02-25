@@ -72,7 +72,7 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
         if (values.Length == 0)
         {
             // Empty column
-            writer.WriteUInt64(1); // Version
+            writer.WriteUInt64(0); // Version
             writer.WriteUInt64(HasAdditionalKeysBit | NeedUpdateDictionary); // Flags
             writer.WriteUInt64(0); // Dictionary size
             writer.WriteUInt64(0); // Index count
@@ -102,7 +102,7 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
                         dictionary.Count <= int.MaxValue ? IndexTypeUInt32 : IndexTypeUInt64;
 
         // Write version
-        writer.WriteUInt64(1);
+        writer.WriteUInt64(0);
 
         // Write index type and flags
         ulong flags = (ulong)indexType | HasAdditionalKeysBit | NeedUpdateDictionary;

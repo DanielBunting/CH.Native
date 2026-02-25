@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="CH.Native.Tests" />
+    <InternalsVisibleTo Include="CH.Native.StressTests" />
   </ItemGroup>
 
   <ItemGroup>

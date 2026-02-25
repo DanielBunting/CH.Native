@@ -1,9 +1,9 @@
 # CH.Native
 
-A high-performance .NET 8 client for ClickHouse using the native binary TCP protocol.
+A high-performance modern .NET client for ClickHouse using the native binary TCP protocol.
 
 [![NuGet](https://img.shields.io/nuget/v/CH.Native.svg)](https://www.nuget.org/packages/CH.Native)
-[![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)](https://dotnet.microsoft.com/)
+[![.NET](https://img.shields.io/badge/.NET-8.0%20|%209.0%20|%2010.0-512BD4)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## Quick Start
@@ -152,7 +152,7 @@ Enable lazy string materialization via connection string (`StringMaterialization
 
 ## Requirements
 
-- .NET 8.0 or later
+- .NET 8.0, 9.0, or 10.0
 - ClickHouse server with native protocol enabled (port 9000)
 
 ## Contributing

@@ -29,6 +29,15 @@ public static class ColumnExtractorFactory
         var isNullable = underlyingType != null;
         var baseType = underlyingType ?? propertyType;
 
+        // Strip LowCardinality wrapper — client sends raw values with the inner type name,
+        // and ClickHouse handles dictionary encoding server-side.
+        // Must strip before Nullable check since valid nesting is LowCardinality(Nullable(X)).
+        if (clickHouseType.StartsWith("LowCardinality(", StringComparison.Ordinal)
+            && clickHouseType.EndsWith(')'))
+        {
+            clickHouseType = clickHouseType[15..^1];
+        }
+
         // Check if the ClickHouse type is Nullable
         var isClickHouseNullable = clickHouseType.StartsWith("Nullable(", StringComparison.Ordinal);
 
