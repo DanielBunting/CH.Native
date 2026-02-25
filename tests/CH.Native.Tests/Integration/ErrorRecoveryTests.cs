@@ -23,7 +23,7 @@ public class ErrorRecoveryTests
         await connection.OpenAsync();
 
         // Execute bad SQL — should throw a server exception
-        await Assert.ThrowsAnyAsync<Exception>(
+        await Assert.ThrowsAsync<ClickHouseServerException>(
             () => connection.ExecuteScalarAsync<int>("SELECT * FROM nonexistent_table_xyz_123"));
 
         // The connection should be reusable after a server error
@@ -362,6 +362,41 @@ public class ErrorRecoveryTests
         Assert.True(
             ex is OperationCanceledException or ClickHouseServerException,
             $"Expected OperationCanceledException or ClickHouseServerException but got {ex.GetType().Name}: {ex.Message}");
+    }
+
+    [Fact]
+    public async Task Connection_ReusableAfterTypedQueryError()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        // Execute bad SQL via the typed query path (ReadTypedBlocksAsync)
+        await Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        {
+            await foreach (var _ in connection.QueryTypedAsync<int>("SELECT * FROM nonexistent_table_xyz_789"))
+            {
+            }
+        });
+
+        // The connection should be reusable after a server error in the typed path
+        var result = await connection.ExecuteScalarAsync<int>("SELECT 1");
+        Assert.Equal(1, result);
+    }
+
+    [Fact]
+    public async Task Connection_ReusableAfterMultipleErrors()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        for (var i = 0; i < 3; i++)
+        {
+            await Assert.ThrowsAsync<ClickHouseServerException>(
+                () => connection.ExecuteScalarAsync<int>("SELECT * FROM nonexistent_table_xyz_123"));
+
+            var result = await connection.ExecuteScalarAsync<int>($"SELECT {i + 1}");
+            Assert.Equal(i + 1, result);
+        }
     }
 
     #region Test POCOs

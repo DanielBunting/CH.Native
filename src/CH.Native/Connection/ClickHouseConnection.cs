@@ -923,6 +923,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 case ServerMessageType.Exception:
                     var exceptionMessage = ExceptionMessage.Read(ref reader);
                     buffer = buffer.Slice(reader.Consumed);
+                    _pipeReader!.AdvanceTo(buffer.Start);
                     throw ClickHouseServerException.FromExceptionMessage(exceptionMessage);
 
                 case ServerMessageType.Progress:
@@ -1450,6 +1451,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 case ServerMessageType.Exception:
                     var exceptionMessage = ExceptionMessage.Read(ref reader);
                     buffer = buffer.Slice(reader.Consumed);
+                    _pipeReader!.AdvanceTo(buffer.Start);
                     throw ClickHouseServerException.FromExceptionMessage(exceptionMessage);
 
                 case ServerMessageType.Progress:
