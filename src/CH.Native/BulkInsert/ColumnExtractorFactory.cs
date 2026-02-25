@@ -95,8 +95,11 @@ public static class ColumnExtractorFactory
             // IP addresses
             Type t when t == typeof(IPAddress) => CreateIPAddressExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable),
 
-            // Fallback to boxing path for unsupported types
-            _ => CreateFallbackExtractor<TRow>(property, columnName, clickHouseType)
+            // No direct extractor available for this type
+            _ => throw new NotSupportedException(
+                $"Direct extraction not supported for CLR type '{propertyType.Name}' " +
+                $"(column '{columnName}', ClickHouse type '{clickHouseType}'). " +
+                $"The BulkInserter will use the standard column writer path.")
         };
     }
 
@@ -337,16 +340,6 @@ public static class ColumnExtractorFactory
         var isIPv6 = clickHouseType.Contains("IPv6");
         var getter = CreateTypedGetter<TRow, IPAddress?>(property);
         return new IPAddressExtractor<TRow>(getter, columnName, clickHouseType, isIPv6, isClickHouseNullable);
-    }
-
-    private static IColumnExtractor<TRow> CreateFallbackExtractor<TRow>(
-        PropertyInfo property,
-        string columnName,
-        string clickHouseType)
-    {
-        // Fallback to boxing path for unsupported types (Arrays, Maps, Tuples, etc.)
-        var getter = CreateBoxingGetter<TRow>(property);
-        return new FallbackExtractor<TRow>(getter, columnName, clickHouseType);
     }
 
     private static Func<TRow, TValue> CreateTypedGetter<TRow, TValue>(PropertyInfo property)
@@ -1135,43 +1128,6 @@ public static class ColumnExtractorFactory
                     }
                 }
             }
-        }
-    }
-
-    private sealed class FallbackExtractor<TRow> : IColumnExtractor<TRow>
-    {
-        private readonly Func<TRow, object?> _getter;
-
-        public string ColumnName { get; }
-        public string TypeName { get; }
-
-        public FallbackExtractor(Func<TRow, object?> getter, string columnName, string typeName)
-        {
-            _getter = getter;
-            ColumnName = columnName;
-            TypeName = typeName;
-        }
-
-        public void ExtractAndWrite(ref ProtocolWriter writer, IReadOnlyList<TRow> rows, int rowCount)
-        {
-            // This extractor doesn't write directly - it's used as a marker
-            // that the BulkInserter should use the fallback path
-            throw new NotSupportedException(
-                $"Direct writing not supported for column '{ColumnName}' of type '{TypeName}'. " +
-                $"The BulkInserter should use the standard extraction path for this column.");
-        }
-
-        /// <summary>
-        /// Extracts values using boxing (for use with the standard column writer path).
-        /// </summary>
-        public object?[] ExtractValues(IReadOnlyList<TRow> rows, int rowCount)
-        {
-            var values = new object?[rowCount];
-            for (int i = 0; i < rowCount; i++)
-            {
-                values[i] = _getter(rows[i]);
-            }
-            return values;
         }
     }
 
