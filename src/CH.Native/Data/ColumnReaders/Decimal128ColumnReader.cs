@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Numerics;
+using CH.Native.Numerics;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnReaders;
@@ -6,12 +8,9 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for Decimal128 values.
 /// Decimal128 is stored as Int128 with a scale factor.
+/// Returns <see cref="ClickHouseDecimal"/> to preserve full 38-digit precision.
 /// </summary>
-/// <remarks>
-/// .NET decimal has a maximum precision of 28-29 significant digits.
-/// Large Decimal128 values may lose precision when converted to decimal.
-/// </remarks>
-public sealed class Decimal128ColumnReader : IColumnReader<decimal>
+public sealed class Decimal128ColumnReader : IColumnReader<ClickHouseDecimal>
 {
     private readonly int _scale;
 
@@ -31,7 +30,7 @@ public sealed class Decimal128ColumnReader : IColumnReader<decimal>
     public string TypeName => $"Decimal128({_scale})";
 
     /// <inheritdoc />
-    public Type ClrType => typeof(decimal);
+    public Type ClrType => typeof(ClickHouseDecimal);
 
     /// <summary>
     /// Gets the scale (number of decimal places).
@@ -39,57 +38,23 @@ public sealed class Decimal128ColumnReader : IColumnReader<decimal>
     public int Scale => _scale;
 
     /// <inheritdoc />
-    public decimal ReadValue(ref ProtocolReader reader)
+    public ClickHouseDecimal ReadValue(ref ProtocolReader reader)
     {
         var raw = reader.ReadInt128();
-        return Int128ToDecimal(raw, _scale);
-    }
-
-    private static decimal Int128ToDecimal(Int128 value, int scale)
-    {
-        // Handle negative values
-        bool isNegative = value < 0;
-        if (isNegative)
-            value = -value;
-
-        // Convert Int128 to decimal
-        // This may lose precision for very large values
-        var high = (ulong)(value >> 64);
-        var low = (ulong)value;
-
-        decimal result;
-        if (high == 0)
-        {
-            // Fits in ulong
-            result = low;
-        }
-        else
-        {
-            // Need to handle the high part
-            // 2^64 as decimal
-            const decimal twoTo64 = 18446744073709551616m;
-            result = high * twoTo64 + low;
-        }
-
-        // Apply scale
-        if (scale > 0)
-        {
-            result /= (decimal)Math.Pow(10, scale);
-        }
-
-        return isNegative ? -result : result;
+        var bigValue = (BigInteger)raw;
+        return new ClickHouseDecimal(bigValue, _scale);
     }
 
     /// <inheritdoc />
-    public TypedColumn<decimal> ReadTypedColumn(ref ProtocolReader reader, int rowCount)
+    public TypedColumn<ClickHouseDecimal> ReadTypedColumn(ref ProtocolReader reader, int rowCount)
     {
-        var pool = ArrayPool<decimal>.Shared;
+        var pool = ArrayPool<ClickHouseDecimal>.Shared;
         var values = pool.Rent(rowCount);
         for (int i = 0; i < rowCount; i++)
         {
             values[i] = ReadValue(ref reader);
         }
-        return new TypedColumn<decimal>(values, rowCount, pool);
+        return new TypedColumn<ClickHouseDecimal>(values, rowCount, pool);
     }
 
     ITypedColumn IColumnReader.ReadTypedColumn(ref ProtocolReader reader, int rowCount)

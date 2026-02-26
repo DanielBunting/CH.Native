@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CH.Native.Numerics;
 
 namespace CH.Native.Parameters;
 
@@ -27,6 +28,7 @@ public static class ClickHouseTypeMapper
         { typeof(float), "Float32" },
         { typeof(double), "Float64" },
         { typeof(decimal), "Decimal128(18)" },
+        { typeof(ClickHouseDecimal), "Decimal128(18)" },
 
         // Boolean
         { typeof(bool), "Bool" },
@@ -126,6 +128,7 @@ public static class ClickHouseTypeMapper
                underlyingType == typeof(UInt128) ||
                underlyingType == typeof(float) ||
                underlyingType == typeof(double) ||
-               underlyingType == typeof(decimal);
+               underlyingType == typeof(decimal) ||
+               underlyingType == typeof(ClickHouseDecimal);
     }
 }

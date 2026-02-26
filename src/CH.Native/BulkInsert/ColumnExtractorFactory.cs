@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using System.Net;
 using System.Numerics;
 using System.Reflection;
+using CH.Native.Numerics;
 using CH.Native.Protocol;
 
 namespace CH.Native.BulkInsert;
@@ -94,6 +95,9 @@ public static class ColumnExtractorFactory
 
             // Decimal
             Type t when t == typeof(decimal) => CreateDecimalExtractor<TRow>(property, columnName, clickHouseType, isNullable, isClickHouseNullable),
+
+            // ClickHouseDecimal (full-precision Decimal128/256)
+            Type t when t == typeof(ClickHouseDecimal) => CreateClickHouseDecimalExtractor<TRow>(property, columnName, clickHouseType, isNullable, isClickHouseNullable),
 
             // IP addresses
             Type t when t == typeof(IPAddress) => CreateIPAddressExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable),
@@ -365,6 +369,28 @@ public static class ColumnExtractorFactory
             }
         }
         return 18; // Default
+    }
+
+    private static IColumnExtractor<TRow> CreateClickHouseDecimalExtractor<TRow>(
+        PropertyInfo property,
+        string columnName,
+        string clickHouseType,
+        bool isNullable,
+        bool isClickHouseNullable)
+    {
+        var scale = ExtractDecimalScale(clickHouseType);
+        var precision = ExtractDecimalPrecision(clickHouseType);
+
+        if (isNullable)
+        {
+            var getter = CreateTypedGetter<TRow, ClickHouseDecimal?>(property);
+            return new NullableClickHouseDecimalExtractor<TRow>(getter, columnName, clickHouseType, scale, precision, isClickHouseNullable);
+        }
+        else
+        {
+            var getter = CreateTypedGetter<TRow, ClickHouseDecimal>(property);
+            return new ClickHouseDecimalExtractor<TRow>(getter, columnName, clickHouseType, scale, precision, isClickHouseNullable);
+        }
     }
 
     private static IColumnExtractor<TRow> CreateIPAddressExtractor<TRow>(
@@ -1162,6 +1188,117 @@ public static class ColumnExtractorFactory
                     writer.WriteDecimalAsInt256(scaled);
                 }
             }
+        }
+    }
+
+    private sealed class ClickHouseDecimalExtractor<TRow> : IColumnExtractor<TRow>
+    {
+        private readonly Func<TRow, ClickHouseDecimal> _getter;
+        private readonly int _scale;
+        private readonly int _precision;
+        private readonly bool _isClickHouseNullable;
+
+        public string ColumnName { get; }
+        public string TypeName { get; }
+
+        public ClickHouseDecimalExtractor(Func<TRow, ClickHouseDecimal> getter, string columnName, string typeName, int scale, int precision, bool isClickHouseNullable)
+        {
+            _getter = getter;
+            ColumnName = columnName;
+            TypeName = typeName;
+            _scale = scale;
+            _precision = precision;
+            _isClickHouseNullable = isClickHouseNullable;
+        }
+
+        public void ExtractAndWrite(ref ProtocolWriter writer, IReadOnlyList<TRow> rows, int rowCount)
+        {
+            if (_isClickHouseNullable)
+            {
+                for (int i = 0; i < rowCount; i++)
+                    writer.WriteByte(0);
+            }
+
+            for (int i = 0; i < rowCount; i++)
+            {
+                var value = _getter(rows[i]);
+                var scaled = RescaleMantissa(value, _scale);
+
+                if (_precision <= 38)
+                {
+                    writer.WriteInt128((Int128)scaled);
+                }
+                else
+                {
+                    writer.WriteInt256(scaled);
+                }
+            }
+        }
+
+        private static BigInteger RescaleMantissa(ClickHouseDecimal value, int targetScale)
+        {
+            var mantissa = value.Mantissa;
+            if (value.Scale == targetScale) return mantissa;
+            if (value.Scale < targetScale)
+                return mantissa * BigInteger.Pow(10, targetScale - value.Scale);
+            return BigInteger.Divide(mantissa, BigInteger.Pow(10, value.Scale - targetScale));
+        }
+    }
+
+    private sealed class NullableClickHouseDecimalExtractor<TRow> : IColumnExtractor<TRow>
+    {
+        private readonly Func<TRow, ClickHouseDecimal?> _getter;
+        private readonly int _scale;
+        private readonly int _precision;
+        private readonly bool _isClickHouseNullable;
+
+        public string ColumnName { get; }
+        public string TypeName { get; }
+
+        public NullableClickHouseDecimalExtractor(Func<TRow, ClickHouseDecimal?> getter, string columnName, string typeName, int scale, int precision, bool isClickHouseNullable)
+        {
+            _getter = getter;
+            ColumnName = columnName;
+            TypeName = typeName;
+            _scale = scale;
+            _precision = precision;
+            _isClickHouseNullable = isClickHouseNullable;
+        }
+
+        public void ExtractAndWrite(ref ProtocolWriter writer, IReadOnlyList<TRow> rows, int rowCount)
+        {
+            if (_isClickHouseNullable)
+            {
+                for (int i = 0; i < rowCount; i++)
+                {
+                    var value = _getter(rows[i]);
+                    writer.WriteByte(value.HasValue ? (byte)0 : (byte)1);
+                }
+            }
+
+            for (int i = 0; i < rowCount; i++)
+            {
+                var value = _getter(rows[i]) ?? ClickHouseDecimal.Zero;
+                var scaled = RescaleMantissa(value, _scale);
+
+                if (_precision <= 38)
+                {
+                    writer.WriteInt128((Int128)scaled);
+                }
+                else
+                {
+                    writer.WriteInt256(scaled);
+                }
+            }
+        }
+
+        private static BigInteger RescaleMantissa(ClickHouseDecimal value, int targetScale)
+        {
+            var mantissa = value.Mantissa;
+            if (value.Scale == targetScale) return mantissa;
+            if (value.Scale < targetScale)
+                return mantissa * BigInteger.Pow(10, targetScale - value.Scale);
+            return BigInteger.Divide(mantissa, BigInteger.Pow(10, value.Scale - targetScale));
         }
     }
 

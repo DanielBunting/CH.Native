@@ -1,8 +1,11 @@
 using System.Collections;
+using System.Globalization;
 using System.Net;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text;
+using ClickHouse.Driver.Numerics;
+using NativeClickHouseDecimal = CH.Native.Numerics.ClickHouseDecimal;
 using Xunit;
 
 namespace CH.Native.SmokeTests.Helpers;
@@ -155,6 +158,16 @@ public static class ResultComparer
         if (nativeVal is decimal nativeDec && driverVal is decimal driverDec)
         {
             Assert.Equal(driverDec, nativeDec);
+            return;
+        }
+
+        // ClickHouseDecimal cross-type: CH.Native.Numerics.ClickHouseDecimal vs ClickHouse.Driver.Numerics.ClickHouseDecimal
+        // Both are BigInteger-backed with identical ToString formatting — compare by string representation.
+        if (nativeVal is NativeClickHouseDecimal nativeChd && driverVal is ClickHouseDecimal driverChd)
+        {
+            Assert.Equal(
+                driverChd.ToString(CultureInfo.InvariantCulture),
+                nativeChd.ToString(null, CultureInfo.InvariantCulture));
             return;
         }
 

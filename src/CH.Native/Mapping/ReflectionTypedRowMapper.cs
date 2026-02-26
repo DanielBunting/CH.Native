@@ -1,6 +1,7 @@
 using System.Linq.Expressions;
 using System.Reflection;
 using CH.Native.Data;
+using CH.Native.Numerics;
 
 namespace CH.Native.Mapping;
 
@@ -119,6 +120,7 @@ public sealed class ReflectionTypedRowMapper<T> : ITypedRowMapper<T> where T : n
                underlyingType == typeof(DateTime) ||
                underlyingType == typeof(DateTimeOffset) ||
                underlyingType == typeof(Guid) ||
-               underlyingType == typeof(string);
+               underlyingType == typeof(string) ||
+               underlyingType == typeof(ClickHouseDecimal);
     }
 }
