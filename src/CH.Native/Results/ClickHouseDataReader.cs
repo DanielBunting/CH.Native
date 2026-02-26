@@ -271,6 +271,9 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
                     _isCompleted = true;
                     break;
                 }
+
+                if (_messageEnumerator.Current is DataMessage drainedMessage)
+                    drainedMessage.Block.Dispose();
             }
         }
         catch

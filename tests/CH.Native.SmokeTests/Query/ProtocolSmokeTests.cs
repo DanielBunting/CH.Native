@@ -152,4 +152,64 @@ public class ProtocolSmokeTests
 
         ResultComparer.AssertResultsEqual(native, driver, "system.databases");
     }
+
+    [Theory]
+    [InlineData(1_000)]
+    [InlineData(10_000)]
+    [InlineData(100_000)]
+    [InlineData(500_000)]
+    [InlineData(1_000_000)]
+    public async Task LargeResultSet_ReadAll_MatchesDriver(int rowCount)
+    {
+        var table = $"smoke_large_{Guid.NewGuid():N}";
+        try
+        {
+            // Create table and insert via server-side SELECT to isolate the read path
+            await NativeQueryHelper.ExecuteNonQueryAsync(
+                _fixture.NativeConnectionString,
+                $@"CREATE TABLE {table} (
+                    id UInt64,
+                    value String
+                ) ENGINE = Memory");
+
+            await NativeQueryHelper.ExecuteNonQueryAsync(
+                _fixture.NativeConnectionString,
+                $@"INSERT INTO {table}
+                   SELECT number, concat('row_', toString(number))
+                   FROM numbers({rowCount})");
+
+            // CH.Native: read all rows via ExecuteReaderAsync (the exact code path under test)
+            long nativeRowCount = 0;
+            await using var connection = new ClickHouseConnection(_fixture.NativeConnectionString);
+            await connection.OpenAsync();
+            await using var reader = await connection.ExecuteReaderAsync(
+                $"SELECT id, value FROM {table}");
+            while (await reader.ReadAsync())
+            {
+                nativeRowCount++;
+            }
+
+            // Driver: get count and checksum as reference
+            var driverCount = Convert.ToInt64(await DriverQueryHelper.ExecuteScalarAsync(
+                _fixture.DriverConnectionString,
+                $"SELECT count() FROM {table}"));
+            var driverChecksum = await DriverQueryHelper.ExecuteScalarAsync(
+                _fixture.DriverConnectionString,
+                $"SELECT sum(sipHash64(id, value)) FROM {table}");
+
+            // Native: get checksum via query helper
+            var nativeChecksum = await NativeQueryHelper.ExecuteScalarAsync<ulong>(
+                _fixture.NativeConnectionString,
+                $"SELECT sum(sipHash64(id, value)) FROM {table}");
+
+            Assert.Equal(driverCount, nativeRowCount);
+            Assert.Equal(Convert.ToUInt64(driverChecksum), nativeChecksum);
+        }
+        finally
+        {
+            await NativeQueryHelper.ExecuteNonQueryAsync(
+                _fixture.NativeConnectionString,
+                $"DROP TABLE IF EXISTS {table}");
+        }
+    }
 }

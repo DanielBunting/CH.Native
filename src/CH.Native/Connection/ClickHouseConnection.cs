@@ -540,6 +540,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                             result = dataMessage.Block.GetValue(0, 0);
                             hasResult = true;
                         }
+                        dataMessage.Block.Dispose();
                         break;
 
                     case EndOfStreamMessage:
@@ -614,8 +615,8 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                         totalRows = (long)progressMessage.Rows;
                         break;
 
-                    case DataMessage:
-                        // Ignore data for non-query
+                    case DataMessage nonQueryDataMessage:
+                        nonQueryDataMessage.Block.Dispose();
                         break;
 
                     case EndOfStreamMessage:
@@ -827,6 +828,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     throw new ClickHouseConnectionException("Server closed connection unexpectedly");
 
                 bool messageRead = false;
+                bool advancedInLoop = false;
                 while (TryReadTypedMessage(ref buffer, registry, out var message, out var typedBlock))
                 {
                     messageRead = true;
@@ -841,13 +843,17 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     {
                         _pipeReader.AdvanceTo(buffer.Start);
                         yield return typedBlock;
+                        advancedInLoop = true;
                         // Need to re-read buffer after yielding
                         break;
                     }
                 }
 
-                // Advance to consumed position, examined to end
-                _pipeReader.AdvanceTo(buffer.Start, buffer.End);
+                if (!advancedInLoop)
+                {
+                    // Advance to consumed position, examined to end
+                    _pipeReader.AdvanceTo(buffer.Start, buffer.End);
+                }
 
                 if (result.IsCompleted && !messageRead)
                     throw new ClickHouseConnectionException("Incomplete response from server");
@@ -917,6 +923,12 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                             }
                         }
                     }
+                    else if (_compressionEnabled)
+                    {
+                        var scanBuffer = buffer.Slice(reader.Consumed);
+                        if (!TryScanCompressedDataMessage(scanBuffer))
+                            return false;
+                    }
 
                     typedBlock = ReadTypedDataMessage(ref reader, registry);
                     buffer = buffer.Slice(reader.Consumed);
@@ -953,7 +965,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                         if (!TryScanUncompressedDataMessage(scanBuffer, out _))
                             return false;
                     }
-                    ReadDataMessage(ref reader, registry);
+                    else if (_compressionEnabled)
+                    {
+                        var scanBuffer = buffer.Slice(reader.Consumed);
+                        if (!TryScanCompressedDataMessage(scanBuffer))
+                            return false;
+                    }
+                    var profileEventsMsg = ReadDataMessage(ref reader, registry);
+                    profileEventsMsg.Block.Dispose();
                     buffer = buffer.Slice(reader.Consumed);
                     return TryReadTypedMessage(ref buffer, registry, out message, out typedBlock);
 
@@ -989,6 +1008,12 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                                 pool.Return(contiguous);
                             }
                         }
+                    }
+                    else if (_compressionEnabled)
+                    {
+                        var scanBuffer = buffer.Slice(reader.Consumed);
+                        if (!TryScanCompressedDataMessage(scanBuffer))
+                            return false;
                     }
                     typedBlock = ReadTypedDataMessage(ref reader, registry);
                     buffer = buffer.Slice(reader.Consumed);
@@ -1030,12 +1055,45 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         var skipperRegistry = ColumnSkipperRegistry.Default;
         if (!Block.TrySkipBlockColumns(ref scanner, skipperRegistry,
             header.Value.ColumnCount, header.Value.RowCount, NegotiatedProtocolVersion))
-        {
             return false;
-        }
 
         messageLength = scanner.Consumed;
         return true;
+    }
+
+    /// <summary>
+    /// Scans a compressed data message to check if the full compressed block is available.
+    /// Peeks at the compressed block header to read compressedSize without allocating.
+    /// </summary>
+    /// <param name="buffer">The buffer positioned after the message type.</param>
+    /// <returns>True if the entire compressed block is available; false if not enough data.</returns>
+    private static bool TryScanCompressedDataMessage(ReadOnlySequence<byte> buffer)
+    {
+        var scanner = new ProtocolReader(buffer);
+
+        // Skip table name (VarInt length prefix + bytes)
+        if (!scanner.TrySkipString())
+            return false;
+
+        // Need at least 16 (checksum) + 9 (header) = 25 bytes to read compressed block header
+        if (scanner.Remaining < 25)
+            return false;
+
+        // Peek at algorithm byte at offset 16 (after checksum)
+        byte alg = scanner.PeekByte(16);
+
+        // If not a recognized compression algorithm, it's uncompressed — let the parser handle it
+        if (alg != 0x82 && alg != 0x90)
+            return true;
+
+        // Read compressedSize (UInt32LE at offset 17-20 from current position)
+        uint compressedSize = (uint)scanner.PeekByte(17)
+            | ((uint)scanner.PeekByte(18) << 8)
+            | ((uint)scanner.PeekByte(19) << 16)
+            | ((uint)scanner.PeekByte(20) << 24);
+
+        // Full block available? Need 16 (checksum) + compressedSize bytes
+        return scanner.Remaining >= 16 + compressedSize;
     }
 
     private TypedBlock ReadTypedDataMessage(ref ProtocolReader reader, ColumnReaderRegistry registry)
@@ -1053,22 +1111,40 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
         bool isCompressed = IsNextBlockCompressed(ref reader);
 
-        if (isCompressed)
-        {
-            // Read and decompress the block data
-            using var compressedData = CompressedBlock.ReadFromProtocol(ref reader);
-            using var decompressed = CompressedBlock.DecompressPooled(compressedData.Span);
-
-            var decompressedSequence = new ReadOnlySequence<byte>(decompressed.Memory);
-            var blockReader = new ProtocolReader(decompressedSequence);
-
-            return Block.ReadTypedBlockWithTableName(ref blockReader, registry, tableNameFromCompressed, NegotiatedProtocolVersion);
-        }
-        else
+        if (!isCompressed)
         {
             // Data is not compressed - read directly
             return Block.ReadTypedBlockWithTableName(ref reader, registry, tableNameFromCompressed, NegotiatedProtocolVersion);
         }
+
+        // ClickHouse sends block data in multiple compressed chunks (typically 1MB each).
+        // Read and decompress all chunks, concatenate, then parse the complete block.
+        using var accumulator = new PooledBufferWriter(1024 * 1024);
+
+        do
+        {
+            using var compressedData = CompressedBlock.ReadFromProtocol(ref reader);
+            using var decompressed = CompressedBlock.DecompressPooled(compressedData.Span);
+
+            var span = accumulator.GetSpan(decompressed.Length);
+            decompressed.Span.CopyTo(span);
+            accumulator.Advance(decompressed.Length);
+
+            // Try to parse the accumulated decompressed data
+            try
+            {
+                var seq = new ReadOnlySequence<byte>(accumulator.WrittenMemory);
+                var blockReader = new ProtocolReader(seq);
+                return Block.ReadTypedBlockWithTableName(ref blockReader, registry, tableNameFromCompressed, NegotiatedProtocolVersion);
+            }
+            catch (InvalidOperationException)
+            {
+                // Not enough decompressed data yet — read next compressed chunk
+            }
+        } while (IsNextBlockCompressed(ref reader));
+
+        throw new InvalidDataException(
+            $"Failed to parse block after decompressing all available compressed chunks ({accumulator.WrittenCount} bytes decompressed).");
     }
 
     /// <summary>
@@ -1110,6 +1186,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                             result = dataMessage.Block.GetValue(0, 0);
                             hasResult = true;
                         }
+                        dataMessage.Block.Dispose();
                         break;
 
                     case EndOfStreamMessage:
@@ -1159,8 +1236,8 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                         totalRows = (long)progressMessage.Rows;
                         break;
 
-                    case DataMessage:
-                        // Ignore data for non-query
+                    case DataMessage nonQueryParamDataMessage:
+                        nonQueryParamDataMessage.Block.Dispose();
                         break;
 
                     case EndOfStreamMessage:
@@ -1364,6 +1441,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     throw new ClickHouseConnectionException("Server closed connection unexpectedly");
 
                 bool messageRead = false;
+                bool advancedInLoop = false;
                 while (TryReadMessage(ref buffer, registry, out var message))
                 {
                     messageRead = true;
@@ -1375,11 +1453,18 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                         yield break;
                     }
 
+                    _pipeReader.AdvanceTo(buffer.Start);
                     yield return message;
+                    advancedInLoop = true;
+                    // Need to re-read buffer after yielding
+                    break;
                 }
 
-                // Advance to consumed position, examined to end
-                _pipeReader.AdvanceTo(buffer.Start, buffer.End);
+                if (!advancedInLoop)
+                {
+                    // Advance to consumed position, examined to end
+                    _pipeReader.AdvanceTo(buffer.Start, buffer.End);
+                }
 
                 if (result.IsCompleted && !messageRead)
                     throw new ClickHouseConnectionException("Incomplete response from server");
@@ -1444,6 +1529,12 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                             }
                         }
                     }
+                    else if (_compressionEnabled)
+                    {
+                        var scanBuffer = buffer.Slice(reader.Consumed);
+                        if (!TryScanCompressedDataMessage(scanBuffer))
+                            return false;
+                    }
 
                     var dataMessage = ReadDataMessage(ref reader, registry);
                     buffer = buffer.Slice(reader.Consumed);
@@ -1484,7 +1575,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                         if (!TryScanUncompressedDataMessage(scanBuffer, out _))
                             return false;
                     }
+                    else if (_compressionEnabled)
+                    {
+                        var scanBuffer = buffer.Slice(reader.Consumed);
+                        if (!TryScanCompressedDataMessage(scanBuffer))
+                            return false;
+                    }
                     var profileEventsBlock = ReadDataMessage(ref reader, registry);
+                    profileEventsBlock.Block.Dispose();
                     buffer = buffer.Slice(reader.Consumed);
                     // Continue reading next message
                     return TryReadMessage(ref buffer, registry, out message);
@@ -1523,6 +1621,12 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                             }
                         }
                     }
+                    else if (_compressionEnabled)
+                    {
+                        var scanBuffer = buffer.Slice(reader.Consumed);
+                        if (!TryScanCompressedDataMessage(scanBuffer))
+                            return false;
+                    }
                     var specialData = ReadDataMessage(ref reader, registry);
                     buffer = buffer.Slice(reader.Consumed);
                     message = specialData;
@@ -1532,7 +1636,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     throw new ClickHouseException($"Unexpected server message type: {messageType}");
             }
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException ex)
         {
             // Not enough data yet
             return false;
@@ -1559,23 +1663,40 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         // Some messages (like ProfileEvents) may be sent uncompressed even when compression is enabled
         bool isCompressed = IsNextBlockCompressed(ref reader);
 
-        if (isCompressed)
-        {
-            // Read and decompress the block data (BlockInfo + columns)
-            using var compressedData = CompressedBlock.ReadFromProtocol(ref reader);
-            using var decompressed = CompressedBlock.DecompressPooled(compressedData.Span);
-
-            // Parse the decompressed block using pre-read table name
-            var decompressedSequence = new ReadOnlySequence<byte>(decompressed.Memory);
-            var blockReader = new ProtocolReader(decompressedSequence);
-
-            return new DataMessage { Block = Block.ReadTypedBlockWithTableName(ref blockReader, registry, compressedTableName, NegotiatedProtocolVersion) };
-        }
-        else
+        if (!isCompressed)
         {
             // Data is not compressed - read directly
             return new DataMessage { Block = Block.ReadTypedBlockWithTableName(ref reader, registry, compressedTableName, NegotiatedProtocolVersion) };
         }
+
+        // ClickHouse sends block data in multiple compressed chunks (typically 1MB each).
+        // Read and decompress all chunks, concatenate, then parse the complete block.
+        using var accumulator = new PooledBufferWriter(1024 * 1024);
+
+        do
+        {
+            using var compressedData = CompressedBlock.ReadFromProtocol(ref reader);
+            using var decompressed = CompressedBlock.DecompressPooled(compressedData.Span);
+
+            var span = accumulator.GetSpan(decompressed.Length);
+            decompressed.Span.CopyTo(span);
+            accumulator.Advance(decompressed.Length);
+
+            // Try to parse the accumulated decompressed data
+            try
+            {
+                var seq = new ReadOnlySequence<byte>(accumulator.WrittenMemory);
+                var blockReader = new ProtocolReader(seq);
+                return new DataMessage { Block = Block.ReadTypedBlockWithTableName(ref blockReader, registry, compressedTableName, NegotiatedProtocolVersion) };
+            }
+            catch (InvalidOperationException)
+            {
+                // Not enough decompressed data yet — read next compressed chunk
+            }
+        } while (IsNextBlockCompressed(ref reader));
+
+        throw new InvalidDataException(
+            $"Failed to parse block after decompressing all available compressed chunks ({accumulator.WrittenCount} bytes decompressed).");
     }
 
     /// <summary>
@@ -2177,7 +2298,8 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                                 continue;
                             }
                         }
-                        ReadDataMessage(ref reader, registry);
+                        var dataMsg = ReadDataMessage(ref reader, registry);
+                        dataMsg.Block.Dispose();
                         _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
                         break;
 
@@ -2197,7 +2319,8 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                                 continue;
                             }
                         }
-                        ReadDataMessage(ref reader, registry);
+                        var profileMsg = ReadDataMessage(ref reader, registry);
+                        profileMsg.Block.Dispose();
                         _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
                         break;
 
