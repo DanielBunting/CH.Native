@@ -109,6 +109,18 @@ public static class ResultComparer
             return;
         }
 
+        // DateTimeOffset vs DateTime (timezone-aware columns)
+        if (nativeVal is DateTimeOffset nativeDto && driverVal is DateTime driverDtUtc)
+        {
+            Assert.Equal(driverDtUtc, nativeDto.UtcDateTime);
+            return;
+        }
+        if (nativeVal is DateTime nativeDtUtc && driverVal is DateTimeOffset driverDto)
+        {
+            Assert.Equal(driverDto.UtcDateTime, nativeDtUtc);
+            return;
+        }
+
         // Guid vs string
         if (nativeVal is Guid nativeGuid && driverVal is string driverGuidStr)
         {
