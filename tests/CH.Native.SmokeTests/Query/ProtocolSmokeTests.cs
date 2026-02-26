@@ -3,7 +3,6 @@ using CH.Native.Connection;
 using CH.Native.SmokeTests.Fixtures;
 using CH.Native.SmokeTests.Helpers;
 using Xunit;
-using DriverConnection = ClickHouse.Driver.ADO.ClickHouseConnection;
 
 namespace CH.Native.SmokeTests.Query;
 
@@ -105,14 +104,14 @@ public class ProtocolSmokeTests
     [Fact]
     public async Task ServerVersion_IsNonEmpty()
     {
-        // Both drivers should report a non-empty server version (via ADO.NET)
+        // Native driver: use ADO.NET ServerVersion property
         await using var nativeConn = new ClickHouseDbConnection(_fixture.NativeConnectionString);
         await nativeConn.OpenAsync();
         var nativeVersion = nativeConn.ServerVersion;
 
-        using var driverConn = new DriverConnection(_fixture.DriverConnectionString);
-        await driverConn.OpenAsync();
-        var driverVersion = driverConn.ServerVersion;
+        // Reference driver: use SELECT version() since ServerVersion property was removed
+        var driverVersion = (string?)await DriverQueryHelper.ExecuteScalarAsync(
+            _fixture.DriverConnectionString, "SELECT version()");
 
         Assert.NotNull(nativeVersion);
         Assert.NotEmpty(nativeVersion);
