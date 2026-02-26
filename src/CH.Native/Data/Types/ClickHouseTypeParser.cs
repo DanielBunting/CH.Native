@@ -243,8 +243,24 @@ public static class ClickHouseTypeParser
             }
             else
             {
-                // Could be an identifier (for some complex parameters)
-                return ParseIdentifier();
+                // Could be an identifier, possibly with key=value syntax (e.g., max_dynamic_paths=100)
+                var paramStart = _pos;
+                ParseIdentifier();
+
+                if (!IsAtEnd && Peek() == '=')
+                {
+                    Advance();
+                    SkipWhitespace();
+                    // Parse the value after '='
+                    if (!IsAtEnd && (char.IsDigit(Peek()) || Peek() == '-'))
+                        ParseNumber();
+                    else if (!IsAtEnd && Peek() == '\'')
+                        ParseStringLiteral();
+                    else if (!IsAtEnd)
+                        ParseIdentifier();
+                }
+
+                return _input[paramStart.._pos];
             }
         }
 
