@@ -375,7 +375,7 @@ public class ExtendedTypeTests
     #region Tuple
 
     [Fact]
-    public async Task Select_Tuple_ReturnsObjectArray()
+    public async Task Select_Tuple_ReturnsTupleInstance()
     {
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
@@ -384,11 +384,11 @@ public class ExtendedTypeTests
         var result = await connection.ExecuteScalarAsync<object>("SELECT tuple(toInt32(1), 'hello', toFloat64(3.14))");
 
         Assert.NotNull(result);
-        var tuple = Assert.IsType<object[]>(result);
+        var tuple = Assert.IsAssignableFrom<System.Runtime.CompilerServices.ITuple>(result);
         Assert.Equal(3, tuple.Length);
         Assert.Equal(1, tuple[0]);
         Assert.Equal("hello", tuple[1]);
-        Assert.Equal(3.14, (double)tuple[2], 2);
+        Assert.Equal(3.14, (double)tuple[2]!, 2);
     }
 
     #endregion

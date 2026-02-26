@@ -852,6 +852,16 @@ public class BulkInsertTests
 
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
             Assert.Equal(1, count);
+
+            var readBack = await connection.ExecuteScalarAsync<DateTime>(
+                $"SELECT Timestamp FROM {tableName}");
+            Assert.Equal(timestamp.Year, readBack.Year);
+            Assert.Equal(timestamp.Month, readBack.Month);
+            Assert.Equal(timestamp.Day, readBack.Day);
+            Assert.Equal(timestamp.Hour, readBack.Hour);
+            Assert.Equal(timestamp.Minute, readBack.Minute);
+            Assert.Equal(timestamp.Second, readBack.Second);
+            Assert.Equal(timestamp.Millisecond, readBack.Millisecond);
         }
         finally
         {
@@ -887,6 +897,181 @@ public class BulkInsertTests
 
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
             Assert.Equal(1000, count);
+        }
+        finally
+        {
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_LowCardinalityString_RoundTrips()
+    {
+        var tableName = $"test_bulk_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                Id Int32,
+                Status LowCardinality(String)
+            ) ENGINE = Memory");
+
+        try
+        {
+            await using var inserter = connection.CreateBulkInserter<LowCardinalityRow>(tableName);
+            await inserter.InitAsync();
+
+            await inserter.AddAsync(new LowCardinalityRow { Id = 1, Status = "active" });
+            await inserter.AddAsync(new LowCardinalityRow { Id = 2, Status = "inactive" });
+            await inserter.AddAsync(new LowCardinalityRow { Id = 3, Status = "active" });
+            await inserter.AddAsync(new LowCardinalityRow { Id = 4, Status = "pending" });
+            await inserter.AddAsync(new LowCardinalityRow { Id = 5, Status = "active" });
+
+            await inserter.CompleteAsync();
+
+            var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
+            Assert.Equal(5, count);
+
+            var statuses = new List<string>();
+            await foreach (var row in connection.QueryAsync($"SELECT Status FROM {tableName} ORDER BY Id"))
+            {
+                statuses.Add(row.GetFieldValue<string>("Status"));
+            }
+
+            Assert.Equal(new[] { "active", "inactive", "active", "pending", "active" }, statuses);
+        }
+        finally
+        {
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_LowCardinalityNullableString_RoundTrips()
+    {
+        var tableName = $"test_bulk_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                Id Int32,
+                Tag LowCardinality(Nullable(String))
+            ) ENGINE = Memory");
+
+        try
+        {
+            await using var inserter = connection.CreateBulkInserter<LowCardinalityNullableRow>(tableName);
+            await inserter.InitAsync();
+
+            await inserter.AddAsync(new LowCardinalityNullableRow { Id = 1, Tag = "important" });
+            await inserter.AddAsync(new LowCardinalityNullableRow { Id = 2, Tag = null });
+            await inserter.AddAsync(new LowCardinalityNullableRow { Id = 3, Tag = "important" });
+            await inserter.AddAsync(new LowCardinalityNullableRow { Id = 4, Tag = "low" });
+
+            await inserter.CompleteAsync();
+
+            var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
+            Assert.Equal(4, count);
+
+            var nullCount = await connection.ExecuteScalarAsync<long>(
+                $"SELECT count() FROM {tableName} WHERE Tag IS NULL");
+            Assert.Equal(1, nullCount);
+
+            var importantCount = await connection.ExecuteScalarAsync<long>(
+                $"SELECT count() FROM {tableName} WHERE Tag = 'important'");
+            Assert.Equal(2, importantCount);
+        }
+        finally
+        {
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_MultipleLowCardinalityColumns_RoundTrips()
+    {
+        var tableName = $"test_bulk_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                Id Int32,
+                Level LowCardinality(String),
+                Service LowCardinality(String),
+                StatusCode Int32
+            ) ENGINE = Memory");
+
+        try
+        {
+            await using var inserter = connection.CreateBulkInserter<MultiLowCardinalityRow>(tableName);
+            await inserter.InitAsync();
+
+            await inserter.AddAsync(new MultiLowCardinalityRow { Id = 1, Level = "INFO", Service = "api", StatusCode = 200 });
+            await inserter.AddAsync(new MultiLowCardinalityRow { Id = 2, Level = "ERROR", Service = "api", StatusCode = 500 });
+            await inserter.AddAsync(new MultiLowCardinalityRow { Id = 3, Level = "INFO", Service = "worker", StatusCode = 200 });
+
+            await inserter.CompleteAsync();
+
+            var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
+            Assert.Equal(3, count);
+
+            var levels = new List<string>();
+            var services = new List<string>();
+            await foreach (var row in connection.QueryAsync($"SELECT Level, Service FROM {tableName} ORDER BY Id"))
+            {
+                levels.Add(row.GetFieldValue<string>("Level"));
+                services.Add(row.GetFieldValue<string>("Service"));
+            }
+
+            Assert.Equal(new[] { "INFO", "ERROR", "INFO" }, levels);
+            Assert.Equal(new[] { "api", "api", "worker" }, services);
+        }
+        finally
+        {
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_LowCardinalityString_LargeBatch_RoundTrips()
+    {
+        var tableName = $"test_bulk_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                Id Int32,
+                Status LowCardinality(String)
+            ) ENGINE = Memory");
+
+        try
+        {
+            var options = new BulkInsertOptions { BatchSize = 1000 };
+            await using var inserter = connection.CreateBulkInserter<LowCardinalityRow>(tableName, options);
+            await inserter.InitAsync();
+
+            var statuses = new[] { "active", "inactive", "pending", "archived" };
+            for (int i = 0; i < 10000; i++)
+            {
+                await inserter.AddAsync(new LowCardinalityRow
+                {
+                    Id = i,
+                    Status = statuses[i % statuses.Length]
+                });
+            }
+
+            await inserter.CompleteAsync();
+
+            var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
+            Assert.Equal(10000, count);
+
+            var activeCount = await connection.ExecuteScalarAsync<long>(
+                $"SELECT count() FROM {tableName} WHERE Status = 'active'");
+            Assert.Equal(2500, activeCount);
         }
         finally
         {
@@ -1035,6 +1220,26 @@ public class BulkInsertTests
     {
         public int Id { get; set; }
         public DateTime Timestamp { get; set; }
+    }
+
+    private class LowCardinalityRow
+    {
+        public int Id { get; set; }
+        public string Status { get; set; } = string.Empty;
+    }
+
+    private class LowCardinalityNullableRow
+    {
+        public int Id { get; set; }
+        public string? Tag { get; set; }
+    }
+
+    private class MultiLowCardinalityRow
+    {
+        public int Id { get; set; }
+        public string Level { get; set; } = string.Empty;
+        public string Service { get; set; } = string.Empty;
+        public int StatusCode { get; set; }
     }
 
     #endregion

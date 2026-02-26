@@ -1,3 +1,5 @@
+using System.Numerics;
+using CH.Native.Numerics;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnWriters;
@@ -6,7 +8,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Column writer for Decimal128 values.
 /// Decimal128 is stored as Int128 with a scale factor.
 /// </summary>
-public sealed class Decimal128ColumnWriter : IColumnWriter<decimal>
+public sealed class Decimal128ColumnWriter : IColumnWriter<ClickHouseDecimal>
 {
     private readonly int _scale;
 
@@ -26,7 +28,7 @@ public sealed class Decimal128ColumnWriter : IColumnWriter<decimal>
     public string TypeName => $"Decimal128({_scale})";
 
     /// <inheritdoc />
-    public Type ClrType => typeof(decimal);
+    public Type ClrType => typeof(ClickHouseDecimal);
 
     /// <summary>
     /// Gets the scale (number of decimal places).
@@ -34,7 +36,7 @@ public sealed class Decimal128ColumnWriter : IColumnWriter<decimal>
     public int Scale => _scale;
 
     /// <inheritdoc />
-    public void WriteColumn(ref ProtocolWriter writer, decimal[] values)
+    public void WriteColumn(ref ProtocolWriter writer, ClickHouseDecimal[] values)
     {
         for (int i = 0; i < values.Length; i++)
         {
@@ -43,48 +45,47 @@ public sealed class Decimal128ColumnWriter : IColumnWriter<decimal>
     }
 
     /// <inheritdoc />
-    public void WriteValue(ref ProtocolWriter writer, decimal value)
+    public void WriteValue(ref ProtocolWriter writer, ClickHouseDecimal value)
     {
-        var int128Value = DecimalToInt128(value, _scale);
+        var scaled = RescaleToTargetScale(value, _scale);
+        var int128Value = (Int128)scaled;
         writer.WriteInt128(int128Value);
-    }
-
-    private static Int128 DecimalToInt128(decimal value, int scale)
-    {
-        // Apply scale by multiplying
-        var multiplier = (decimal)Math.Pow(10, scale);
-        var scaled = value * multiplier;
-
-        // Handle negative values
-        bool isNegative = scaled < 0;
-        if (isNegative)
-            scaled = -scaled;
-
-        // Round to nearest integer
-        scaled = Math.Round(scaled);
-
-        // Convert to Int128
-        // Decimal max is ~79,228,162,514,264,337,593,543,950,335
-        // which fits in Int128
-        // 2^64 = 18446744073709551616
-        const decimal twoTo64 = 18446744073709551616m;
-        var low = (ulong)(scaled % twoTo64);
-        var high = (ulong)(scaled / twoTo64);
-
-        var result = new Int128((ulong)high, low);
-        return isNegative ? -result : result;
     }
 
     void IColumnWriter.WriteColumn(ref ProtocolWriter writer, object?[] values)
     {
         for (int i = 0; i < values.Length; i++)
         {
-            WriteValue(ref writer, (decimal)values[i]!);
+            ((IColumnWriter)this).WriteValue(ref writer, values[i]);
         }
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)
     {
-        WriteValue(ref writer, (decimal)value!);
+        var chd = value switch
+        {
+            ClickHouseDecimal d => d,
+            decimal d => (ClickHouseDecimal)d,
+            _ => throw new InvalidCastException($"Cannot convert {value?.GetType().Name ?? "null"} to ClickHouseDecimal.")
+        };
+        WriteValue(ref writer, chd);
+    }
+
+    private static BigInteger RescaleToTargetScale(ClickHouseDecimal value, int targetScale)
+    {
+        var mantissa = value.Mantissa;
+        var currentScale = value.Scale;
+
+        if (currentScale == targetScale)
+            return mantissa;
+
+        if (currentScale < targetScale)
+        {
+            // Need more decimal places — multiply
+            return mantissa * BigInteger.Pow(10, targetScale - currentScale);
+        }
+
+        // Need fewer decimal places — divide (truncate)
+        return BigInteger.Divide(mantissa, BigInteger.Pow(10, currentScale - targetScale));
     }
 }

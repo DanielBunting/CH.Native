@@ -12,9 +12,12 @@ namespace CH.Native.Data.ColumnWriters;
 /// 1. Version (UInt64) - serialization version/state
 /// 2. Index type and flags (UInt64)
 /// 3. Dictionary size (UInt64)
-/// 4. Dictionary values (using inner writer)
+/// 4. Dictionary values (using inner writer for the base type)
 /// 5. Index count (UInt64)
 /// 6. Indices (using index type from flags)
+///
+/// For Nullable inner types, ClickHouse strips the Nullable wrapper from the dictionary.
+/// Dictionary entry at index 0 represents null (written as a default value).
 ///
 /// The CLR type accepted is the same as the inner type (dictionary encoding is transparent).
 /// </remarks>
@@ -22,6 +25,8 @@ namespace CH.Native.Data.ColumnWriters;
 public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
 {
     private readonly IColumnWriter<T> _innerWriter;
+    private readonly bool _isNullable;
+    private readonly string _typeName;
 
     // Index type constants matching ClickHouse
     private const int IndexTypeUInt8 = 0;
@@ -36,17 +41,23 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
     /// <summary>
     /// Creates a LowCardinality writer that wraps the specified inner writer.
     /// </summary>
-    /// <param name="innerWriter">The writer for the underlying type.</param>
-    public LowCardinalityColumnWriter(IColumnWriter<T> innerWriter)
+    /// <param name="innerWriter">The writer for the underlying type (base type, not Nullable).</param>
+    /// <param name="isNullable">Whether the original type was LowCardinality(Nullable(T)).</param>
+    public LowCardinalityColumnWriter(IColumnWriter<T> innerWriter, bool isNullable = false)
     {
         _innerWriter = innerWriter ?? throw new ArgumentNullException(nameof(innerWriter));
+        _isNullable = isNullable;
+        _typeName = isNullable
+            ? $"LowCardinality(Nullable({_innerWriter.TypeName}))"
+            : $"LowCardinality({_innerWriter.TypeName})";
     }
 
     /// <summary>
     /// Creates a LowCardinality writer from a non-generic IColumnWriter.
     /// </summary>
     /// <param name="innerWriter">The writer for the underlying type.</param>
-    public LowCardinalityColumnWriter(IColumnWriter innerWriter)
+    /// <param name="isNullable">Whether the original type was LowCardinality(Nullable(T)).</param>
+    public LowCardinalityColumnWriter(IColumnWriter innerWriter, bool isNullable = false)
     {
         if (innerWriter is IColumnWriter<T> typedWriter)
         {
@@ -58,10 +69,14 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
                 $"Inner writer must implement IColumnWriter<{typeof(T).Name}>.",
                 nameof(innerWriter));
         }
+        _isNullable = isNullable;
+        _typeName = isNullable
+            ? $"LowCardinality(Nullable({_innerWriter.TypeName}))"
+            : $"LowCardinality({_innerWriter.TypeName})";
     }
 
     /// <inheritdoc />
-    public string TypeName => $"LowCardinality({_innerWriter.TypeName})";
+    public string TypeName => _typeName;
 
     /// <inheritdoc />
     public Type ClrType => typeof(T);
@@ -72,7 +87,7 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
         if (values.Length == 0)
         {
             // Empty column
-            writer.WriteUInt64(1); // Version
+            writer.WriteUInt64(0); // Version
             writer.WriteUInt64(HasAdditionalKeysBit | NeedUpdateDictionary); // Flags
             writer.WriteUInt64(0); // Dictionary size
             writer.WriteUInt64(0); // Index count
@@ -84,9 +99,24 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
         var indexMap = new Dictionary<T, int>(EqualityComparer<T>.Default);
         var indices = new int[values.Length];
 
+        // For Nullable types, reserve index 0 for the null/default value
+        if (_isNullable)
+        {
+            dictionary.Add(default!);
+            indexMap[default!] = 0;
+        }
+
         for (int i = 0; i < values.Length; i++)
         {
             var value = values[i];
+
+            // For Nullable types, null/default maps to index 0
+            if (_isNullable && EqualityComparer<T>.Default.Equals(value, default!))
+            {
+                indices[i] = 0;
+                continue;
+            }
+
             if (!indexMap.TryGetValue(value, out var index))
             {
                 index = dictionary.Count;
@@ -102,13 +132,13 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
                         dictionary.Count <= int.MaxValue ? IndexTypeUInt32 : IndexTypeUInt64;
 
         // Write version
-        writer.WriteUInt64(1);
+        writer.WriteUInt64(0);
 
         // Write index type and flags
         ulong flags = (ulong)indexType | HasAdditionalKeysBit | NeedUpdateDictionary;
         writer.WriteUInt64(flags);
 
-        // Write dictionary size and values
+        // Write dictionary size and values using the base type writer
         writer.WriteUInt64((ulong)dictionary.Count);
         for (int i = 0; i < dictionary.Count; i++)
         {

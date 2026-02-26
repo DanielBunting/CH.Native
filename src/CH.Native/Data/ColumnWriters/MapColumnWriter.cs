@@ -71,37 +71,36 @@ public sealed class MapColumnWriter<TKey, TValue> : IColumnWriter<Dictionary<TKe
     {
         // Step 1: Write cumulative offsets (UInt64 per row)
         ulong offset = 0;
+        int totalEntries = 0;
         for (int i = 0; i < values.Length; i++)
         {
-            offset += (ulong)(values[i]?.Count ?? 0);
+            var count = values[i]?.Count ?? 0;
+            offset += (ulong)count;
+            totalEntries += count;
             writer.WriteUInt64(offset);
         }
 
-        // Step 2: Write all keys
+        // Step 2: Flatten all keys and write as a column
+        var allKeys = new TKey[totalEntries];
+        int pos = 0;
         for (int i = 0; i < values.Length; i++)
         {
-            var dict = values[i];
-            if (dict != null)
-            {
+            if (values[i] is { } dict)
                 foreach (var key in dict.Keys)
-                {
-                    _keyWriter.WriteValue(ref writer, key);
-                }
-            }
+                    allKeys[pos++] = key;
         }
+        _keyWriter.WriteColumn(ref writer, allKeys);
 
-        // Step 3: Write all values
+        // Step 3: Flatten all values and write as a column
+        var allValues = new TValue[totalEntries];
+        pos = 0;
         for (int i = 0; i < values.Length; i++)
         {
-            var dict = values[i];
-            if (dict != null)
-            {
-                foreach (var value in dict.Values)
-                {
-                    _valueWriter.WriteValue(ref writer, value);
-                }
-            }
+            if (values[i] is { } dict)
+                foreach (var val in dict.Values)
+                    allValues[pos++] = val;
         }
+        _valueWriter.WriteColumn(ref writer, allValues);
     }
 
     /// <inheritdoc />
@@ -128,36 +127,37 @@ public sealed class MapColumnWriter<TKey, TValue> : IColumnWriter<Dictionary<TKe
     {
         // Step 1: Write offsets
         ulong offset = 0;
+        int totalEntries = 0;
         for (int i = 0; i < values.Length; i++)
         {
             var dict = values[i] as Dictionary<TKey, TValue>;
-            offset += (ulong)(dict?.Count ?? 0);
+            var count = dict?.Count ?? 0;
+            offset += (ulong)count;
+            totalEntries += count;
             writer.WriteUInt64(offset);
         }
 
-        // Step 2: Write all keys
+        // Step 2: Flatten all keys and write as a column
+        var allKeys = new TKey[totalEntries];
+        int pos = 0;
         for (int i = 0; i < values.Length; i++)
         {
             if (values[i] is Dictionary<TKey, TValue> dict)
-            {
                 foreach (var key in dict.Keys)
-                {
-                    _keyWriter.WriteValue(ref writer, key);
-                }
-            }
+                    allKeys[pos++] = key;
         }
+        _keyWriter.WriteColumn(ref writer, allKeys);
 
-        // Step 3: Write all values
+        // Step 3: Flatten all values and write as a column
+        var allValues = new TValue[totalEntries];
+        pos = 0;
         for (int i = 0; i < values.Length; i++)
         {
             if (values[i] is Dictionary<TKey, TValue> dict)
-            {
-                foreach (var value in dict.Values)
-                {
-                    _valueWriter.WriteValue(ref writer, value);
-                }
-            }
+                foreach (var val in dict.Values)
+                    allValues[pos++] = val;
         }
+        _valueWriter.WriteColumn(ref writer, allValues);
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)

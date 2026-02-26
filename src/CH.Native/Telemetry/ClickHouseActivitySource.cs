@@ -87,6 +87,35 @@ public static class ClickHouseActivitySource
     }
 
     /// <summary>
+    /// Starts a new Activity for a ClickHouse bulk insert operation.
+    /// </summary>
+    /// <param name="tableName">The table being inserted into.</param>
+    /// <param name="database">The database name.</param>
+    /// <param name="settings">Telemetry settings to check if tracing is enabled.</param>
+    /// <returns>A new Activity, or null if tracing is disabled or not sampled.</returns>
+    public static Activity? StartBulkInsert(
+        string tableName,
+        string? database = null,
+        TelemetrySettings? settings = null)
+    {
+        if (settings?.EnableTracing == false)
+            return null;
+
+        var activity = Source.StartActivity("clickhouse.bulk_insert", ActivityKind.Client);
+        if (activity == null)
+            return null;
+
+        activity.SetTag("db.system", "clickhouse");
+
+        if (database != null)
+            activity.SetTag("db.name", database);
+
+        activity.SetTag("db.clickhouse.table", tableName);
+
+        return activity;
+    }
+
+    /// <summary>
     /// Sets server information tags on an Activity after a successful connection.
     /// </summary>
     /// <param name="activity">The Activity to update.</param>

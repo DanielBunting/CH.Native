@@ -14,6 +14,7 @@ public sealed class DictionaryEncodedColumn<T> : ITypedColumn
     private readonly int[] _indices;
     private readonly int _count;
     private readonly ArrayPool<int>? _indicesPool;
+    private readonly bool _isNullable;
     private bool _disposed;
 
     /// <summary>
@@ -23,12 +24,14 @@ public sealed class DictionaryEncodedColumn<T> : ITypedColumn
     /// <param name="indices">The indices into the dictionary for each row.</param>
     /// <param name="count">The number of rows (may be less than indices array length if pooled).</param>
     /// <param name="indicesPool">The pool to return the indices array to, or null if not pooled.</param>
-    public DictionaryEncodedColumn(T[] dictionary, int[] indices, int count, ArrayPool<int>? indicesPool)
+    /// <param name="isNullable">Whether index 0 represents null (for LowCardinality(Nullable(T))).</param>
+    public DictionaryEncodedColumn(T[] dictionary, int[] indices, int count, ArrayPool<int>? indicesPool, bool isNullable = false)
     {
         _dictionary = dictionary;
         _indices = indices;
         _count = count;
         _indicesPool = indicesPool;
+        _isNullable = isNullable;
     }
 
     /// <inheritdoc />
@@ -50,6 +53,11 @@ public sealed class DictionaryEncodedColumn<T> : ITypedColumn
                 throw new ArgumentOutOfRangeException(nameof(index));
 
             var dictIndex = _indices[index];
+
+            // For Nullable LowCardinality, index 0 represents null
+            if (_isNullable && dictIndex == 0)
+                return default!;
+
             return _dictionary[dictIndex];
         }
     }

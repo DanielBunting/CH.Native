@@ -13,9 +13,12 @@ namespace CH.Native.Data.ColumnReaders;
 /// 1. Version (UInt64) - serialization version/state
 /// 2. Index type and flags (UInt64)
 /// 3. Dictionary size (UInt64)
-/// 4. Dictionary values (using inner reader)
+/// 4. Dictionary values (using inner reader for the base type)
 /// 5. Index count (UInt64)
 /// 6. Indices (using index type from flags)
+///
+/// For Nullable inner types, ClickHouse strips the Nullable wrapper from the dictionary.
+/// Dictionary entry at index 0 represents null. The inner reader reads the base type directly.
 ///
 /// The CLR type returned is the same as the inner type (dictionary encoding is transparent).
 /// </remarks>
@@ -23,6 +26,8 @@ namespace CH.Native.Data.ColumnReaders;
 public sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
 {
     private readonly IColumnReader<T> _innerReader;
+    private readonly bool _isNullable;
+    private readonly string _typeName;
 
     // Index type constants from ClickHouse
     private const int IndexTypeUInt8 = 0;
@@ -38,17 +43,23 @@ public sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
     /// <summary>
     /// Creates a LowCardinality reader that wraps the specified inner reader.
     /// </summary>
-    /// <param name="innerReader">The reader for the underlying type.</param>
-    public LowCardinalityColumnReader(IColumnReader<T> innerReader)
+    /// <param name="innerReader">The reader for the underlying type (base type, not Nullable).</param>
+    /// <param name="isNullable">Whether the original type was LowCardinality(Nullable(T)).</param>
+    public LowCardinalityColumnReader(IColumnReader<T> innerReader, bool isNullable = false)
     {
         _innerReader = innerReader ?? throw new ArgumentNullException(nameof(innerReader));
+        _isNullable = isNullable;
+        _typeName = isNullable
+            ? $"LowCardinality(Nullable({_innerReader.TypeName}))"
+            : $"LowCardinality({_innerReader.TypeName})";
     }
 
     /// <summary>
     /// Creates a LowCardinality reader from a non-generic IColumnReader.
     /// </summary>
     /// <param name="innerReader">The reader for the underlying type.</param>
-    public LowCardinalityColumnReader(IColumnReader innerReader)
+    /// <param name="isNullable">Whether the original type was LowCardinality(Nullable(T)).</param>
+    public LowCardinalityColumnReader(IColumnReader innerReader, bool isNullable = false)
     {
         if (innerReader is IColumnReader<T> typedReader)
         {
@@ -60,10 +71,14 @@ public sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
                 $"Inner reader must implement IColumnReader<{typeof(T).Name}>.",
                 nameof(innerReader));
         }
+        _isNullable = isNullable;
+        _typeName = isNullable
+            ? $"LowCardinality(Nullable({_innerReader.TypeName}))"
+            : $"LowCardinality({_innerReader.TypeName})";
     }
 
     /// <inheritdoc />
-    public string TypeName => $"LowCardinality({_innerReader.TypeName})";
+    public string TypeName => _typeName;
 
     /// <inheritdoc />
     public Type ClrType => typeof(T);
@@ -117,8 +132,12 @@ public sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
                 _ => throw new NotSupportedException($"Unknown LowCardinality index type: {indexType}")
             };
 
-            // Resolve dictionary lookup directly from the inner column
-            if (dictColumn != null && index < (ulong)dictColumn.Count)
+            // For Nullable LowCardinality, index 0 represents null
+            if (_isNullable && index == 0)
+            {
+                result[i] = default!;
+            }
+            else if (dictColumn != null && index < (ulong)dictColumn.Count)
             {
                 result[i] = dictColumn[(int)index];
             }
@@ -195,6 +214,6 @@ public sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
             };
         }
 
-        return new DictionaryEncodedColumn<T>(dictionary, indices, rowCount, indicesPool);
+        return new DictionaryEncodedColumn<T>(dictionary, indices, rowCount, indicesPool, _isNullable);
     }
 }

@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using System.Net;
 using System.Numerics;
 using System.Reflection;
+using CH.Native.Numerics;
 using CH.Native.Protocol;
 
 namespace CH.Native.BulkInsert;
@@ -28,6 +29,15 @@ public static class ColumnExtractorFactory
         var underlyingType = Nullable.GetUnderlyingType(propertyType);
         var isNullable = underlyingType != null;
         var baseType = underlyingType ?? propertyType;
+
+        // Strip LowCardinality wrapper — client sends raw values with the inner type name,
+        // and ClickHouse handles dictionary encoding server-side.
+        // Must strip before Nullable check since valid nesting is LowCardinality(Nullable(X)).
+        if (clickHouseType.StartsWith("LowCardinality(", StringComparison.Ordinal)
+            && clickHouseType.EndsWith(')'))
+        {
+            clickHouseType = clickHouseType[15..^1];
+        }
 
         // Check if the ClickHouse type is Nullable
         var isClickHouseNullable = clickHouseType.StartsWith("Nullable(", StringComparison.Ordinal);
@@ -70,7 +80,10 @@ public static class ColumnExtractorFactory
                 static (ref ProtocolWriter w, bool v) => w.WriteByte(v ? (byte)1 : (byte)0)),
 
             // String (reference type, slightly different handling)
-            Type t when t == typeof(string) => CreateStringExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable),
+            Type t when t == typeof(string) =>
+                clickHouseType.Contains("FixedString(")
+                    ? CreateFixedStringExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable)
+                    : CreateStringExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable),
 
             // DateTime types
             Type t when t == typeof(DateTime) => CreateDateTimeExtractor<TRow>(property, columnName, clickHouseType, isNullable, isClickHouseNullable),
@@ -83,11 +96,17 @@ public static class ColumnExtractorFactory
             // Decimal
             Type t when t == typeof(decimal) => CreateDecimalExtractor<TRow>(property, columnName, clickHouseType, isNullable, isClickHouseNullable),
 
+            // ClickHouseDecimal (full-precision Decimal128/256)
+            Type t when t == typeof(ClickHouseDecimal) => CreateClickHouseDecimalExtractor<TRow>(property, columnName, clickHouseType, isNullable, isClickHouseNullable),
+
             // IP addresses
             Type t when t == typeof(IPAddress) => CreateIPAddressExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable),
 
-            // Fallback to boxing path for unsupported types
-            _ => CreateFallbackExtractor<TRow>(property, columnName, clickHouseType)
+            // No direct extractor available for this type
+            _ => throw new NotSupportedException(
+                $"Direct extraction not supported for CLR type '{propertyType.Name}' " +
+                $"(column '{columnName}', ClickHouse type '{clickHouseType}'). " +
+                $"The BulkInserter will use the standard column writer path.")
         };
     }
 
@@ -122,6 +141,33 @@ public static class ColumnExtractorFactory
     {
         var getter = CreateTypedGetter<TRow, string?>(property);
         return new StringExtractor<TRow>(getter, columnName, clickHouseType, isClickHouseNullable);
+    }
+
+    private static IColumnExtractor<TRow> CreateFixedStringExtractor<TRow>(
+        PropertyInfo property,
+        string columnName,
+        string clickHouseType,
+        bool isClickHouseNullable)
+    {
+        var length = ExtractFixedStringLength(clickHouseType);
+        var getter = CreateTypedGetter<TRow, string?>(property);
+        return new FixedStringExtractor<TRow>(getter, columnName, clickHouseType, length, isClickHouseNullable);
+    }
+
+    private static int ExtractFixedStringLength(string clickHouseType)
+    {
+        var idx = clickHouseType.IndexOf("FixedString(", StringComparison.Ordinal);
+        if (idx >= 0)
+        {
+            var start = idx + 12; // Length of "FixedString("
+            var end = clickHouseType.IndexOf(')', start);
+            if (end > start && int.TryParse(clickHouseType.AsSpan(start, end - start), out var length))
+            {
+                return length;
+            }
+        }
+
+        throw new ArgumentException($"Cannot parse FixedString length from type '{clickHouseType}'.");
     }
 
     private static IColumnExtractor<TRow> CreateDateTimeExtractor<TRow>(
@@ -270,6 +316,9 @@ public static class ColumnExtractorFactory
 
     private static int ExtractDecimalScale(string clickHouseType)
     {
+        if (clickHouseType.StartsWith("Nullable(", StringComparison.Ordinal) && clickHouseType.EndsWith(')'))
+            clickHouseType = clickHouseType[9..^1];
+
         // Parse "Decimal64(4)" or "Decimal(18, 4)" to get scale
         if (clickHouseType.Contains("Decimal(") || clickHouseType.Contains("Decimal32(") ||
             clickHouseType.Contains("Decimal64(") || clickHouseType.Contains("Decimal128(") ||
@@ -296,6 +345,9 @@ public static class ColumnExtractorFactory
 
     private static int ExtractDecimalPrecision(string clickHouseType)
     {
+        if (clickHouseType.StartsWith("Nullable(", StringComparison.Ordinal) && clickHouseType.EndsWith(')'))
+            clickHouseType = clickHouseType[9..^1];
+
         if (clickHouseType.Contains("Decimal32")) return 9;
         if (clickHouseType.Contains("Decimal64")) return 18;
         if (clickHouseType.Contains("Decimal128")) return 38;
@@ -319,6 +371,28 @@ public static class ColumnExtractorFactory
         return 18; // Default
     }
 
+    private static IColumnExtractor<TRow> CreateClickHouseDecimalExtractor<TRow>(
+        PropertyInfo property,
+        string columnName,
+        string clickHouseType,
+        bool isNullable,
+        bool isClickHouseNullable)
+    {
+        var scale = ExtractDecimalScale(clickHouseType);
+        var precision = ExtractDecimalPrecision(clickHouseType);
+
+        if (isNullable)
+        {
+            var getter = CreateTypedGetter<TRow, ClickHouseDecimal?>(property);
+            return new NullableClickHouseDecimalExtractor<TRow>(getter, columnName, clickHouseType, scale, precision, isClickHouseNullable);
+        }
+        else
+        {
+            var getter = CreateTypedGetter<TRow, ClickHouseDecimal>(property);
+            return new ClickHouseDecimalExtractor<TRow>(getter, columnName, clickHouseType, scale, precision, isClickHouseNullable);
+        }
+    }
+
     private static IColumnExtractor<TRow> CreateIPAddressExtractor<TRow>(
         PropertyInfo property,
         string columnName,
@@ -328,16 +402,6 @@ public static class ColumnExtractorFactory
         var isIPv6 = clickHouseType.Contains("IPv6");
         var getter = CreateTypedGetter<TRow, IPAddress?>(property);
         return new IPAddressExtractor<TRow>(getter, columnName, clickHouseType, isIPv6, isClickHouseNullable);
-    }
-
-    private static IColumnExtractor<TRow> CreateFallbackExtractor<TRow>(
-        PropertyInfo property,
-        string columnName,
-        string clickHouseType)
-    {
-        // Fallback to boxing path for unsupported types (Arrays, Maps, Tuples, etc.)
-        var getter = CreateBoxingGetter<TRow>(property);
-        return new FallbackExtractor<TRow>(getter, columnName, clickHouseType);
     }
 
     private static Func<TRow, TValue> CreateTypedGetter<TRow, TValue>(PropertyInfo property)
@@ -512,6 +576,66 @@ public static class ColumnExtractorFactory
                     writer.WriteString(value ?? string.Empty);
                 }
             }
+        }
+    }
+
+    private sealed class FixedStringExtractor<TRow> : IColumnExtractor<TRow>
+    {
+        private readonly Func<TRow, string?> _getter;
+        private readonly int _length;
+        private readonly bool _isClickHouseNullable;
+
+        public string ColumnName { get; }
+        public string TypeName { get; }
+
+        public FixedStringExtractor(Func<TRow, string?> getter, string columnName, string typeName, int length, bool isClickHouseNullable)
+        {
+            _getter = getter;
+            ColumnName = columnName;
+            TypeName = typeName;
+            _length = length;
+            _isClickHouseNullable = isClickHouseNullable;
+        }
+
+        public void ExtractAndWrite(ref ProtocolWriter writer, IReadOnlyList<TRow> rows, int rowCount)
+        {
+            if (_isClickHouseNullable)
+            {
+                // Write null bitmap
+                for (int i = 0; i < rowCount; i++)
+                {
+                    var value = _getter(rows[i]);
+                    writer.WriteByte(value == null ? (byte)1 : (byte)0);
+                }
+
+                // Write fixed-length values
+                for (int i = 0; i < rowCount; i++)
+                {
+                    var value = _getter(rows[i]);
+                    WriteFixedString(ref writer, value);
+                }
+            }
+            else
+            {
+                for (int i = 0; i < rowCount; i++)
+                {
+                    var value = _getter(rows[i]);
+                    WriteFixedString(ref writer, value);
+                }
+            }
+        }
+
+        private void WriteFixedString(ref ProtocolWriter writer, string? value)
+        {
+            Span<byte> buffer = stackalloc byte[_length];
+            buffer.Clear();
+
+            if (value != null)
+            {
+                System.Text.Encoding.UTF8.GetBytes(value.AsSpan(), buffer);
+            }
+
+            writer.WriteBytes(buffer);
         }
     }
 
@@ -1067,6 +1191,117 @@ public static class ColumnExtractorFactory
         }
     }
 
+    private sealed class ClickHouseDecimalExtractor<TRow> : IColumnExtractor<TRow>
+    {
+        private readonly Func<TRow, ClickHouseDecimal> _getter;
+        private readonly int _scale;
+        private readonly int _precision;
+        private readonly bool _isClickHouseNullable;
+
+        public string ColumnName { get; }
+        public string TypeName { get; }
+
+        public ClickHouseDecimalExtractor(Func<TRow, ClickHouseDecimal> getter, string columnName, string typeName, int scale, int precision, bool isClickHouseNullable)
+        {
+            _getter = getter;
+            ColumnName = columnName;
+            TypeName = typeName;
+            _scale = scale;
+            _precision = precision;
+            _isClickHouseNullable = isClickHouseNullable;
+        }
+
+        public void ExtractAndWrite(ref ProtocolWriter writer, IReadOnlyList<TRow> rows, int rowCount)
+        {
+            if (_isClickHouseNullable)
+            {
+                for (int i = 0; i < rowCount; i++)
+                    writer.WriteByte(0);
+            }
+
+            for (int i = 0; i < rowCount; i++)
+            {
+                var value = _getter(rows[i]);
+                var scaled = RescaleMantissa(value, _scale);
+
+                if (_precision <= 38)
+                {
+                    writer.WriteInt128((Int128)scaled);
+                }
+                else
+                {
+                    writer.WriteInt256(scaled);
+                }
+            }
+        }
+
+        private static BigInteger RescaleMantissa(ClickHouseDecimal value, int targetScale)
+        {
+            var mantissa = value.Mantissa;
+            if (value.Scale == targetScale) return mantissa;
+            if (value.Scale < targetScale)
+                return mantissa * BigInteger.Pow(10, targetScale - value.Scale);
+            return BigInteger.Divide(mantissa, BigInteger.Pow(10, value.Scale - targetScale));
+        }
+    }
+
+    private sealed class NullableClickHouseDecimalExtractor<TRow> : IColumnExtractor<TRow>
+    {
+        private readonly Func<TRow, ClickHouseDecimal?> _getter;
+        private readonly int _scale;
+        private readonly int _precision;
+        private readonly bool _isClickHouseNullable;
+
+        public string ColumnName { get; }
+        public string TypeName { get; }
+
+        public NullableClickHouseDecimalExtractor(Func<TRow, ClickHouseDecimal?> getter, string columnName, string typeName, int scale, int precision, bool isClickHouseNullable)
+        {
+            _getter = getter;
+            ColumnName = columnName;
+            TypeName = typeName;
+            _scale = scale;
+            _precision = precision;
+            _isClickHouseNullable = isClickHouseNullable;
+        }
+
+        public void ExtractAndWrite(ref ProtocolWriter writer, IReadOnlyList<TRow> rows, int rowCount)
+        {
+            if (_isClickHouseNullable)
+            {
+                for (int i = 0; i < rowCount; i++)
+                {
+                    var value = _getter(rows[i]);
+                    writer.WriteByte(value.HasValue ? (byte)0 : (byte)1);
+                }
+            }
+
+            for (int i = 0; i < rowCount; i++)
+            {
+                var value = _getter(rows[i]) ?? ClickHouseDecimal.Zero;
+                var scaled = RescaleMantissa(value, _scale);
+
+                if (_precision <= 38)
+                {
+                    writer.WriteInt128((Int128)scaled);
+                }
+                else
+                {
+                    writer.WriteInt256(scaled);
+                }
+            }
+        }
+
+        private static BigInteger RescaleMantissa(ClickHouseDecimal value, int targetScale)
+        {
+            var mantissa = value.Mantissa;
+            if (value.Scale == targetScale) return mantissa;
+            if (value.Scale < targetScale)
+                return mantissa * BigInteger.Pow(10, targetScale - value.Scale);
+            return BigInteger.Divide(mantissa, BigInteger.Pow(10, value.Scale - targetScale));
+        }
+    }
+
     private sealed class IPAddressExtractor<TRow> : IColumnExtractor<TRow>
     {
         private readonly Func<TRow, IPAddress?> _getter;
@@ -1118,6 +1353,7 @@ public static class ColumnExtractorFactory
                     if (value != null)
                     {
                         value.TryWriteBytes(buffer, out _);
+                        buffer[0..4].Reverse();
                         writer.WriteBytes(buffer[0..4]);
                     }
                     else
@@ -1126,43 +1362,6 @@ public static class ColumnExtractorFactory
                     }
                 }
             }
-        }
-    }
-
-    private sealed class FallbackExtractor<TRow> : IColumnExtractor<TRow>
-    {
-        private readonly Func<TRow, object?> _getter;
-
-        public string ColumnName { get; }
-        public string TypeName { get; }
-
-        public FallbackExtractor(Func<TRow, object?> getter, string columnName, string typeName)
-        {
-            _getter = getter;
-            ColumnName = columnName;
-            TypeName = typeName;
-        }
-
-        public void ExtractAndWrite(ref ProtocolWriter writer, IReadOnlyList<TRow> rows, int rowCount)
-        {
-            // This extractor doesn't write directly - it's used as a marker
-            // that the BulkInserter should use the fallback path
-            throw new NotSupportedException(
-                $"Direct writing not supported for column '{ColumnName}' of type '{TypeName}'. " +
-                $"The BulkInserter should use the standard extraction path for this column.");
-        }
-
-        /// <summary>
-        /// Extracts values using boxing (for use with the standard column writer path).
-        /// </summary>
-        public object?[] ExtractValues(IReadOnlyList<TRow> rows, int rowCount)
-        {
-            var values = new object?[rowCount];
-            for (int i = 0; i < rowCount; i++)
-            {
-                values[i] = _getter(rows[i]);
-            }
-            return values;
         }
     }
 

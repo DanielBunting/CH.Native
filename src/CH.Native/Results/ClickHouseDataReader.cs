@@ -141,6 +141,10 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
         if (value is T typed)
             return typed;
 
+        // Handle DateTimeOffset → DateTime conversion for timezone-aware columns
+        if (typeof(T) == typeof(DateTime) && value is DateTimeOffset dto)
+            return (T)(object)dto.UtcDateTime;
+
         // Handle numeric and other conversions
         return (T)Convert.ChangeType(value, typeof(T));
     }
@@ -267,6 +271,9 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
                     _isCompleted = true;
                     break;
                 }
+
+                if (_messageEnumerator.Current is DataMessage drainedMessage)
+                    drainedMessage.Block.Dispose();
             }
         }
         catch

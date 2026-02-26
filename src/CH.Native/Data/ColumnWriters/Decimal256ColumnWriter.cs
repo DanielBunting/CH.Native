@@ -1,4 +1,5 @@
 using System.Numerics;
+using CH.Native.Numerics;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnWriters;
@@ -7,7 +8,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Column writer for Decimal256 values.
 /// Decimal256 is stored as 256-bit integer with a scale factor.
 /// </summary>
-public sealed class Decimal256ColumnWriter : IColumnWriter<decimal>
+public sealed class Decimal256ColumnWriter : IColumnWriter<ClickHouseDecimal>
 {
     private readonly int _scale;
 
@@ -27,7 +28,7 @@ public sealed class Decimal256ColumnWriter : IColumnWriter<decimal>
     public string TypeName => $"Decimal256({_scale})";
 
     /// <inheritdoc />
-    public Type ClrType => typeof(decimal);
+    public Type ClrType => typeof(ClickHouseDecimal);
 
     /// <summary>
     /// Gets the scale (number of decimal places).
@@ -35,7 +36,7 @@ public sealed class Decimal256ColumnWriter : IColumnWriter<decimal>
     public int Scale => _scale;
 
     /// <inheritdoc />
-    public void WriteColumn(ref ProtocolWriter writer, decimal[] values)
+    public void WriteColumn(ref ProtocolWriter writer, ClickHouseDecimal[] values)
     {
         for (int i = 0; i < values.Length; i++)
         {
@@ -44,54 +45,46 @@ public sealed class Decimal256ColumnWriter : IColumnWriter<decimal>
     }
 
     /// <inheritdoc />
-    public void WriteValue(ref ProtocolWriter writer, decimal value)
+    public void WriteValue(ref ProtocolWriter writer, ClickHouseDecimal value)
     {
-        var bigIntValue = DecimalToBigInteger(value, _scale);
-        writer.WriteInt256(bigIntValue);
-    }
-
-    private static BigInteger DecimalToBigInteger(decimal value, int scale)
-    {
-        // Apply scale by multiplying
-        // We need to work with BigInteger for precision
-        var multiplier = BigInteger.Pow(10, scale);
-
-        // Convert decimal to BigInteger
-        // Decimal is stored as a 96-bit integer with a scale
-        var bits = decimal.GetBits(value);
-        var lo = (uint)bits[0];
-        var mid = (uint)bits[1];
-        var hi = (uint)bits[2];
-        var flags = bits[3];
-
-        var isNegative = (flags & 0x80000000) != 0;
-        var decimalScale = (flags >> 16) & 0xFF;
-
-        // Construct the magnitude
-        var magnitude = new BigInteger(lo)
-                      + new BigInteger(mid) * (BigInteger.One << 32)
-                      + new BigInteger(hi) * (BigInteger.One << 64);
-
-        // Apply the decimal's scale
-        var divisor = BigInteger.Pow(10, decimalScale);
-
-        // Calculate: (magnitude / divisor) * multiplier
-        // To maintain precision: (magnitude * multiplier) / divisor
-        var result = (magnitude * multiplier) / divisor;
-
-        return isNegative ? -result : result;
+        var scaled = RescaleToTargetScale(value, _scale);
+        writer.WriteInt256(scaled);
     }
 
     void IColumnWriter.WriteColumn(ref ProtocolWriter writer, object?[] values)
     {
         for (int i = 0; i < values.Length; i++)
         {
-            WriteValue(ref writer, (decimal)values[i]!);
+            ((IColumnWriter)this).WriteValue(ref writer, values[i]);
         }
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)
     {
-        WriteValue(ref writer, (decimal)value!);
+        var chd = value switch
+        {
+            ClickHouseDecimal d => d,
+            decimal d => (ClickHouseDecimal)d,
+            _ => throw new InvalidCastException($"Cannot convert {value?.GetType().Name ?? "null"} to ClickHouseDecimal.")
+        };
+        WriteValue(ref writer, chd);
+    }
+
+    private static BigInteger RescaleToTargetScale(ClickHouseDecimal value, int targetScale)
+    {
+        var mantissa = value.Mantissa;
+        var currentScale = value.Scale;
+
+        if (currentScale == targetScale)
+            return mantissa;
+
+        if (currentScale < targetScale)
+        {
+            // Need more decimal places — multiply
+            return mantissa * BigInteger.Pow(10, targetScale - currentScale);
+        }
+
+        // Need fewer decimal places — divide (truncate)
+        return BigInteger.Divide(mantissa, BigInteger.Pow(10, currentScale - targetScale));
     }
 }

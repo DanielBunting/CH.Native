@@ -357,4 +357,15 @@ public class ClickHouseTypeParserTests
         Assert.Equal("user_id", result.FieldNames[0]);
         Assert.Equal("created_at", result.FieldNames[1]);
     }
+
+    [Fact]
+    public void Parse_JsonWithKeyValueParameter_ParsesCorrectly()
+    {
+        var result = ClickHouseTypeParser.Parse("JSON(max_dynamic_paths=100)");
+
+        Assert.Equal("JSON", result.BaseName);
+        Assert.True(result.IsParameterized);
+        Assert.Single(result.Parameters);
+        Assert.Equal("max_dynamic_paths=100", result.Parameters[0]);
+    }
 }

@@ -1,9 +1,10 @@
 # CH.Native
 
-A high-performance .NET 8 client for ClickHouse using the native binary TCP protocol.
+A high-performance modern .NET client for ClickHouse using the native binary TCP protocol.
 
 [![NuGet](https://img.shields.io/nuget/v/CH.Native.svg)](https://www.nuget.org/packages/CH.Native)
-[![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)](https://dotnet.microsoft.com/)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/CH.Native.svg)](https://www.nuget.org/packages/CH.Native)
+[![.NET](https://img.shields.io/badge/.NET-8.0%20|%209.0%20|%2010.0-512BD4)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 ## Quick Start
@@ -122,37 +123,37 @@ Three-way comparison against [ClickHouse.Driver](https://github.com/ClickHouse/c
 
 | Benchmark | CH.Native | ClickHouse.Driver | Octonica |
 |-----------|-----------|-------------------|----------|
-| SELECT 1 | **579 μs** | 1,028 μs | 616 μs |
-| COUNT(*) 1M rows | 1,188 μs | 1,632 μs | **1,003 μs** |
-| SELECT 100 rows | **641 μs** | 1,052 μs | 725 μs |
+| SELECT 1 | **586 μs** | 978 μs | 878 μs |
+| COUNT(*) 1M rows | **992 μs** | 1,408 μs | 1,041 μs |
+| SELECT 100 rows | **660 μs** | 1,183 μs | 710 μs |
 
 ### Large Result Sets
 
 | Benchmark | CH.Native | CH.Native (Lazy) | ClickHouse.Driver | Octonica |
 |-----------|-----------|------------------|-------------------|----------|
-| Stream 1M rows | 123 ms | **70 ms** | 279 ms | 75 ms |
-| Materialize 1M rows | 268 ms | 356 ms | 471 ms | **216 ms** |
+| Stream 1M rows | 100 ms | **58 ms** | 263 ms | 77 ms |
+| Materialize 1M rows | 234 ms | 319 ms | 442 ms | **202 ms** |
 
 ### Bulk Insert
 
 | Benchmark | CH.Native | ClickHouse.Driver | Octonica |
 |-----------|-----------|-------------------|----------|
-| 1M rows | **101 ms** | 227 ms | 1,589 ms |
+| 1M rows | **97 ms** | 205 ms | 1,489 ms |
 
 ### Memory Efficiency (1M rows)
 
 | Benchmark | CH.Native | CH.Native (Lazy) | ClickHouse.Driver | Octonica |
 |-----------|-----------|------------------|-------------------|----------|
-| Streaming | 146 MB | **45 MB** | 195 MB | 80 MB |
-| Bulk insert | **0.5 MB** | — | 95 MB | 27 MB |
+| Streaming | 121 MB | **25 MB** | 191 MB | 78 MB |
+| Bulk insert | **0.4 MB** | — | 95 MB | 27 MB |
 
-Enable lazy string materialization via connection string (`StringMaterialization=Lazy`) or builder (`.WithStringMaterialization(StringMaterialization.Lazy)`). Lazy mode defers UTF-8 string decoding until values are accessed, reducing memory by ~70% for streaming reads. Best for `ExecuteReaderAsync` / `QueryAsync` workloads; typed queries (`QueryAsync<T>`) always use eager decoding.
+Enable lazy string materialization via connection string (`StringMaterialization=Lazy`) or builder (`.WithStringMaterialization(StringMaterialization.Lazy)`). Lazy mode defers UTF-8 string decoding until values are accessed, reducing memory by ~68% for streaming reads. Best for `ExecuteReaderAsync` / `QueryAsync` workloads; typed queries (`QueryAsync<T>`) always use eager decoding.
 
-*Apple M5, .NET 9.0, ClickHouse 25.3 — run benchmarks with `dotnet run --project benchmarks/CH.Native.Benchmarks -c Release`*
+*Apple M5, .NET 10.0, ClickHouse 25.3 — run benchmarks with `dotnet run --project benchmarks/CH.Native.Benchmarks -c Release`*
 
 ## Requirements
 
-- .NET 8.0 or later
+- .NET 8.0, 9.0, or 10.0
 - ClickHouse server with native protocol enabled (port 9000)
 
 ## Contributing

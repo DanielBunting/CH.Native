@@ -240,15 +240,23 @@ public static class CompressedBlock
         // Rent from pool and combine header + remaining data
         var pool = ArrayPool<byte>.Shared;
         var result = pool.Rent(totalBlockSize);
-        headerBytes.Span.CopyTo(result);
-
-        if (remainingDataSize > 0)
+        try
         {
-            using var remainingData = reader.ReadPooledBytes(remainingDataSize);
-            remainingData.Span.CopyTo(result.AsSpan(MinBlockSize));
-        }
+            headerBytes.Span.CopyTo(result);
 
-        return new PooledCompressedData(result, totalBlockSize);
+            if (remainingDataSize > 0)
+            {
+                using var remainingData = reader.ReadPooledBytes(remainingDataSize);
+                remainingData.Span.CopyTo(result.AsSpan(MinBlockSize));
+            }
+
+            return new PooledCompressedData(result, totalBlockSize);
+        }
+        catch
+        {
+            pool.Return(result);
+            throw;
+        }
     }
 
     /// <summary>
