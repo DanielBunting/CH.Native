@@ -5,7 +5,7 @@ A high-performance modern .NET client for ClickHouse using the native binary TCP
 [![NuGet](https://img.shields.io/nuget/v/CH.Native.svg)](https://www.nuget.org/packages/CH.Native)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/CH.Native.svg)](https://www.nuget.org/packages/CH.Native)
 [![.NET](https://img.shields.io/badge/.NET-8.0%20|%209.0%20|%2010.0-512BD4)](https://dotnet.microsoft.com/)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 
 ## Quick Start
 
@@ -167,4 +167,4 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
