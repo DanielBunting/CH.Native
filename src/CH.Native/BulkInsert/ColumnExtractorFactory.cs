@@ -88,6 +88,7 @@ public static class ColumnExtractorFactory
             // DateTime types
             Type t when t == typeof(DateTime) => CreateDateTimeExtractor<TRow>(property, columnName, clickHouseType, isNullable, isClickHouseNullable),
             Type t when t == typeof(DateOnly) => CreateDateOnlyExtractor<TRow>(property, columnName, clickHouseType, isNullable, isClickHouseNullable),
+            Type t when t == typeof(TimeOnly) => CreateTimeOnlyExtractor<TRow>(property, columnName, clickHouseType, isNullable, isClickHouseNullable),
             Type t when t == typeof(DateTimeOffset) => CreateDateTimeOffsetExtractor<TRow>(property, columnName, clickHouseType, isNullable, isClickHouseNullable),
 
             // GUID/UUID
@@ -248,6 +249,62 @@ public static class ColumnExtractorFactory
             var getter = CreateTypedGetter<TRow, DateOnly>(property);
             return new DateOnlyExtractor<TRow>(getter, columnName, clickHouseType, isDate32, isClickHouseNullable);
         }
+    }
+
+    private static IColumnExtractor<TRow> CreateTimeOnlyExtractor<TRow>(
+        PropertyInfo property,
+        string columnName,
+        string clickHouseType,
+        bool isNullable,
+        bool isClickHouseNullable)
+    {
+        // Time is Int32 seconds since midnight; Time64(N) is Int64 sub-seconds with precision N.
+        var isTime64 = clickHouseType.StartsWith("Time64", StringComparison.Ordinal) ||
+                       (isClickHouseNullable && clickHouseType.Contains("Time64"));
+
+        if (isTime64)
+        {
+            var precision = ExtractTime64Precision(clickHouseType);
+
+            if (isNullable)
+            {
+                var getter = CreateTypedGetter<TRow, TimeOnly?>(property);
+                return new NullableTime64Extractor<TRow>(getter, columnName, clickHouseType, precision, isClickHouseNullable);
+            }
+            else
+            {
+                var getter = CreateTypedGetter<TRow, TimeOnly>(property);
+                return new Time64Extractor<TRow>(getter, columnName, clickHouseType, precision, isClickHouseNullable);
+            }
+        }
+        else
+        {
+            if (isNullable)
+            {
+                var getter = CreateTypedGetter<TRow, TimeOnly?>(property);
+                return new NullableTimeExtractor<TRow>(getter, columnName, clickHouseType, isClickHouseNullable);
+            }
+            else
+            {
+                var getter = CreateTypedGetter<TRow, TimeOnly>(property);
+                return new TimeExtractor<TRow>(getter, columnName, clickHouseType, isClickHouseNullable);
+            }
+        }
+    }
+
+    private static int ExtractTime64Precision(string clickHouseType)
+    {
+        var idx = clickHouseType.IndexOf("Time64(", StringComparison.Ordinal);
+        if (idx >= 0)
+        {
+            var start = idx + 7; // Length of "Time64("
+            var end = clickHouseType.IndexOfAny([',', ')'], start);
+            if (end > start && int.TryParse(clickHouseType.AsSpan(start, end - start), out var precision))
+            {
+                return precision;
+            }
+        }
+        return 3; // Default precision
     }
 
     private static IColumnExtractor<TRow> CreateDateTimeOffsetExtractor<TRow>(
@@ -906,6 +963,176 @@ public static class ColumnExtractorFactory
                         writer.WriteUInt16(0);
                 }
             }
+        }
+    }
+
+    private sealed class TimeExtractor<TRow> : IColumnExtractor<TRow>
+    {
+        private readonly Func<TRow, TimeOnly> _getter;
+        private readonly bool _isClickHouseNullable;
+
+        public string ColumnName { get; }
+        public string TypeName { get; }
+
+        public TimeExtractor(Func<TRow, TimeOnly> getter, string columnName, string typeName, bool isClickHouseNullable)
+        {
+            _getter = getter;
+            ColumnName = columnName;
+            TypeName = typeName;
+            _isClickHouseNullable = isClickHouseNullable;
+        }
+
+        public void ExtractAndWrite(ref ProtocolWriter writer, IReadOnlyList<TRow> rows, int rowCount)
+        {
+            if (_isClickHouseNullable)
+            {
+                for (int i = 0; i < rowCount; i++)
+                    writer.WriteByte(0);
+            }
+
+            for (int i = 0; i < rowCount; i++)
+            {
+                var value = _getter(rows[i]);
+                var seconds = (int)(value.Ticks / TimeSpan.TicksPerSecond);
+                writer.WriteInt32(seconds);
+            }
+        }
+    }
+
+    private sealed class NullableTimeExtractor<TRow> : IColumnExtractor<TRow>
+    {
+        private readonly Func<TRow, TimeOnly?> _getter;
+        private readonly bool _isClickHouseNullable;
+
+        public string ColumnName { get; }
+        public string TypeName { get; }
+
+        public NullableTimeExtractor(Func<TRow, TimeOnly?> getter, string columnName, string typeName, bool isClickHouseNullable)
+        {
+            _getter = getter;
+            ColumnName = columnName;
+            TypeName = typeName;
+            _isClickHouseNullable = isClickHouseNullable;
+        }
+
+        public void ExtractAndWrite(ref ProtocolWriter writer, IReadOnlyList<TRow> rows, int rowCount)
+        {
+            if (_isClickHouseNullable)
+            {
+                for (int i = 0; i < rowCount; i++)
+                {
+                    var value = _getter(rows[i]);
+                    writer.WriteByte(value.HasValue ? (byte)0 : (byte)1);
+                }
+            }
+
+            for (int i = 0; i < rowCount; i++)
+            {
+                var value = _getter(rows[i]);
+                if (value.HasValue)
+                {
+                    var seconds = (int)(value.Value.Ticks / TimeSpan.TicksPerSecond);
+                    writer.WriteInt32(seconds);
+                }
+                else
+                {
+                    writer.WriteInt32(0);
+                }
+            }
+        }
+    }
+
+    private sealed class Time64Extractor<TRow> : IColumnExtractor<TRow>
+    {
+        private readonly Func<TRow, TimeOnly> _getter;
+        private readonly int _precision;
+        private readonly long _ticksPerUnit;
+        private readonly long _highPrecisionMultiplier;
+        private readonly bool _isClickHouseNullable;
+
+        public string ColumnName { get; }
+        public string TypeName { get; }
+
+        public Time64Extractor(Func<TRow, TimeOnly> getter, string columnName, string typeName, int precision, bool isClickHouseNullable)
+        {
+            _getter = getter;
+            ColumnName = columnName;
+            TypeName = typeName;
+            _precision = precision;
+            var unitsPerSecond = (long)Math.Pow(10, precision);
+            _ticksPerUnit = precision <= 7 ? TimeSpan.TicksPerSecond / unitsPerSecond : 0;
+            _highPrecisionMultiplier = precision > 7 ? (long)Math.Pow(10, precision - 7) : 0;
+            _isClickHouseNullable = isClickHouseNullable;
+        }
+
+        public void ExtractAndWrite(ref ProtocolWriter writer, IReadOnlyList<TRow> rows, int rowCount)
+        {
+            if (_isClickHouseNullable)
+            {
+                for (int i = 0; i < rowCount; i++)
+                    writer.WriteByte(0);
+            }
+
+            for (int i = 0; i < rowCount; i++)
+            {
+                writer.WriteInt64(EncodeTimeOnly(_getter(rows[i])));
+            }
+        }
+
+        private long EncodeTimeOnly(TimeOnly value)
+        {
+            return _precision > 7
+                ? value.Ticks * _highPrecisionMultiplier
+                : value.Ticks / _ticksPerUnit;
+        }
+    }
+
+    private sealed class NullableTime64Extractor<TRow> : IColumnExtractor<TRow>
+    {
+        private readonly Func<TRow, TimeOnly?> _getter;
+        private readonly int _precision;
+        private readonly long _ticksPerUnit;
+        private readonly long _highPrecisionMultiplier;
+        private readonly bool _isClickHouseNullable;
+
+        public string ColumnName { get; }
+        public string TypeName { get; }
+
+        public NullableTime64Extractor(Func<TRow, TimeOnly?> getter, string columnName, string typeName, int precision, bool isClickHouseNullable)
+        {
+            _getter = getter;
+            ColumnName = columnName;
+            TypeName = typeName;
+            _precision = precision;
+            var unitsPerSecond = (long)Math.Pow(10, precision);
+            _ticksPerUnit = precision <= 7 ? TimeSpan.TicksPerSecond / unitsPerSecond : 0;
+            _highPrecisionMultiplier = precision > 7 ? (long)Math.Pow(10, precision - 7) : 0;
+            _isClickHouseNullable = isClickHouseNullable;
+        }
+
+        public void ExtractAndWrite(ref ProtocolWriter writer, IReadOnlyList<TRow> rows, int rowCount)
+        {
+            if (_isClickHouseNullable)
+            {
+                for (int i = 0; i < rowCount; i++)
+                {
+                    var value = _getter(rows[i]);
+                    writer.WriteByte(value.HasValue ? (byte)0 : (byte)1);
+                }
+            }
+
+            for (int i = 0; i < rowCount; i++)
+            {
+                var value = _getter(rows[i]);
+                writer.WriteInt64(value.HasValue ? Encode(value.Value) : 0);
+            }
+        }
+
+        private long Encode(TimeOnly value)
+        {
+            return _precision > 7
+                ? value.Ticks * _highPrecisionMultiplier
+                : value.Ticks / _ticksPerUnit;
         }
     }
 

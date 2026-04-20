@@ -211,6 +211,7 @@ All standard ClickHouse types are supported for bulk insert:
 | byte[] | FixedString(N) |
 | DateTime | DateTime, DateTime64 |
 | DateOnly | Date, Date32 |
+| TimeOnly | Time, Time64(P) |
 | DateTimeOffset | DateTime with timezone |
 | Guid | UUID |
 | IPAddress | IPv4, IPv6 |

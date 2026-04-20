@@ -66,7 +66,7 @@ public sealed class ColumnWriterRegistry
     private static bool IsCompositeType(string? baseType)
     {
         return baseType is "Nullable" or "Array" or "Map" or "Tuple" or "LowCardinality" or "Nested"
-            or "FixedString" or "DateTime" or "DateTime64"
+            or "FixedString" or "DateTime" or "DateTime64" or "Time64"
             or "Decimal" or "Decimal32" or "Decimal64" or "Decimal128" or "Decimal256"
             or "JSON";
     }
@@ -155,6 +155,10 @@ public sealed class ColumnWriterRegistryBuilder
         Register(new ColumnWriters.DateTimeColumnWriter());
         Register(new ColumnWriters.DateColumnWriter());
         Register(new ColumnWriters.Date32ColumnWriter());
+        Register(new ColumnWriters.TimeColumnWriter());
+
+        // BFloat16 (Time64 is parameterised — created on demand by the factory)
+        Register(new ColumnWriters.BFloat16ColumnWriter());
 
         // UUID type
         Register(new ColumnWriters.UuidColumnWriter());

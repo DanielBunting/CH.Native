@@ -233,7 +233,7 @@ public class CircuitBreakerTests
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 5,
-            FailureWindow = TimeSpan.FromMilliseconds(50)
+            FailureWindow = TimeSpan.FromMilliseconds(500)
         };
         var breaker = new CircuitBreaker(options);
 
@@ -252,8 +252,8 @@ public class CircuitBreakerTests
 
         Assert.Equal(3, breaker.FailureCount);
 
-        // Wait for failure window to expire
-        await Task.Delay(100);
+        // Wait for failure window to expire (window is 500ms, wait 700ms for headroom on slow CI)
+        await Task.Delay(700);
 
         // Next failure should start fresh
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>

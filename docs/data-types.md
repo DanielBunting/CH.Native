@@ -24,6 +24,7 @@ When reading data, CH.Native automatically converts ClickHouse types to their .N
 | UInt256 | BigInteger | |
 | Float32 | float | |
 | Float64 | double | |
+| BFloat16 | float | 16-bit brain-float; ClickHouse 24.12+ |
 | Bool | bool | Stored as UInt8 |
 | Decimal32(S) | decimal | S = scale (decimal places) |
 | Decimal64(S) | decimal | |
@@ -33,6 +34,8 @@ When reading data, CH.Native automatically converts ClickHouse types to their .N
 | Date32 | DateOnly | Supports dates before 1970 |
 | DateTime | DateTime | Unix timestamp (UTC) |
 | DateTime64(P) | DateTime | P = precision (0-9) |
+| Time | TimeOnly | Time-of-day; ClickHouse 25.10+ |
+| Time64(P) | TimeOnly | Sub-second time-of-day; ClickHouse 25.10+ |
 | String | string | UTF-8 encoded |
 | FixedString(N) | byte[] | Fixed N bytes |
 | UUID | Guid | |
@@ -77,6 +80,14 @@ When reading data, CH.Native automatically converts ClickHouse types to their .N
 |------|------|-----------|
 | Float32 | float | ~7 decimal digits |
 | Float64 | double | ~15-17 decimal digits |
+| BFloat16 | float | ~3 decimal digits; 8-bit exponent |
+
+`BFloat16` (brain-float) is a 16-bit IEEE-754 variant — same exponent range as `Float32` but with only 7 mantissa bits. Common in ML workloads. Requires ClickHouse 24.12+. On read, the high 16 bits are zero-extended to a `float`. On write, the low 16 mantissa bits are truncated (matching the ClickHouse server-side cast and clickhouse-cs):
+
+```csharp
+var v = await connection.ExecuteScalarAsync<float>("SELECT toBFloat16(3.14)");
+// Returns ~3.140625 — low mantissa bits are lost
+```
 
 ### Decimal
 
@@ -120,6 +131,27 @@ All decimal types map to .NET `decimal`.
 ```sql
 DateTime64(3, 'America/New_York')  -- Milliseconds with timezone
 ```
+
+### Time Types
+
+`Time` and `Time64(P)` represent a time-of-day with no calendar date — equivalent to `TimeSpan` constrained to `[00:00:00, 24:00:00)`.
+
+| Type | .NET | Precision | Notes |
+|------|------|-----------|-------|
+| Time | TimeOnly | Seconds | Int32 seconds since 00:00:00 |
+| Time64(0) | TimeOnly | Seconds | |
+| Time64(3) | TimeOnly | Milliseconds | |
+| Time64(6) | TimeOnly | Microseconds | |
+| Time64(9) | TimeOnly | Nanoseconds | Truncated to 100-ns ticks (matches `DateTime64`) |
+
+**Requires ClickHouse 25.10+** with `enable_time_time64_type=1`. Set it once per session:
+
+```csharp
+await connection.ExecuteNonQueryAsync("SET enable_time_time64_type=1");
+var t = await connection.ExecuteScalarAsync<TimeOnly>("SELECT CAST('13:37:42' AS Time)");
+```
+
+Reads outside `[0, 86400)` (or `[0, 86400 × 10^P)` for `Time64`) throw `OverflowException` — `TimeOnly` cannot represent negative or overflow values. Power users wanting raw nanoseconds at `Time64(8/9)` can use the low-level `IColumnReader<long>` path.
 
 ## String Types
 

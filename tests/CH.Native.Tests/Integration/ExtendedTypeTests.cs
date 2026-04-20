@@ -673,4 +673,172 @@ public class ExtendedTypeTests
     }
 
     #endregion
+
+    #region Time
+
+    [Fact]
+    public async Task Select_Time_ReturnsTimeOnly()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        await EnableTimeTypeAsync(connection);
+
+        var result = await connection.ExecuteScalarAsync<TimeOnly>("SELECT CAST('13:37:42' AS Time)");
+
+        Assert.Equal(new TimeOnly(13, 37, 42), result);
+    }
+
+    [Fact]
+    public async Task Select_NullableTime_WithValue_ReturnsTimeOnly()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        await EnableTimeTypeAsync(connection);
+
+        var result = await connection.ExecuteScalarAsync<TimeOnly?>("SELECT CAST('01:02:03' AS Nullable(Time))");
+
+        Assert.Equal(new TimeOnly(1, 2, 3), result);
+    }
+
+    [Fact]
+    public async Task Select_ArrayOfTime_ReturnsArray()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        await EnableTimeTypeAsync(connection);
+
+        var result = await connection.ExecuteScalarAsync<TimeOnly[]>(
+            "SELECT [CAST('00:00:00' AS Time), CAST('12:00:00' AS Time), CAST('23:59:59' AS Time)]");
+
+        Assert.NotNull(result);
+        Assert.Equal(3, result.Length);
+        Assert.Equal(new TimeOnly(0, 0, 0), result[0]);
+        Assert.Equal(new TimeOnly(12, 0, 0), result[1]);
+        Assert.Equal(new TimeOnly(23, 59, 59), result[2]);
+    }
+
+    #endregion
+
+    #region Time64
+
+    [Theory]
+    [InlineData(0, "13:37:42", "13:37:42")]
+    [InlineData(3, "13:37:42.123", "13:37:42.123")]
+    [InlineData(6, "13:37:42.123456", "13:37:42.123456")]
+    public async Task Select_Time64_ReturnsTimeOnly(int precision, string input, string expected)
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        await EnableTimeTypeAsync(connection);
+
+        var result = await connection.ExecuteScalarAsync<TimeOnly>($"SELECT CAST('{input}' AS Time64({precision}))");
+
+        Assert.Equal(TimeOnly.Parse(expected), result);
+    }
+
+    [Fact]
+    public async Task Select_Time64_Precision9_TruncatesToTickPrecision()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        await EnableTimeTypeAsync(connection);
+
+        // 0.123456789 seconds — last two digits truncate to 100ns ticks
+        var result = await connection.ExecuteScalarAsync<TimeOnly>("SELECT CAST('00:00:00.123456789' AS Time64(9))");
+
+        // 123456789 ns / 100 = 1234567 ticks
+        Assert.Equal(1_234_567L, result.Ticks);
+    }
+
+    [Fact]
+    public async Task Select_NullableTime64_WithValue_ReturnsTimeOnly()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        await EnableTimeTypeAsync(connection);
+
+        var result = await connection.ExecuteScalarAsync<TimeOnly?>("SELECT CAST('01:02:03.456' AS Nullable(Time64(3)))");
+
+        Assert.Equal(new TimeOnly(1, 2, 3, 456), result);
+    }
+
+    private static Task EnableTimeTypeAsync(ClickHouseConnection connection)
+        => connection.ExecuteNonQueryAsync("SET enable_time_time64_type=1");
+
+    #endregion
+
+    #region BFloat16
+
+    [Fact]
+    public async Task Select_BFloat16_PositiveValue_RoundTrips()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var result = await connection.ExecuteScalarAsync<float>("SELECT toBFloat16(1.0)");
+
+        Assert.Equal(1.0f, result);
+    }
+
+    [Fact]
+    public async Task Select_BFloat16_NegativeValue_RoundTrips()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var result = await connection.ExecuteScalarAsync<float>("SELECT toBFloat16(-1.0)");
+
+        Assert.Equal(-1.0f, result);
+    }
+
+    [Fact]
+    public async Task Select_BFloat16_Zero_RoundTrips()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var result = await connection.ExecuteScalarAsync<float>("SELECT toBFloat16(0.0)");
+
+        Assert.Equal(0.0f, result);
+    }
+
+    [Fact]
+    public async Task Select_BFloat16_LargeValue_TruncatesMantissa()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        // 3.14 truncated to bfloat16 is approximately 3.140625
+        var result = await connection.ExecuteScalarAsync<float>("SELECT toBFloat16(3.14)");
+
+        Assert.InRange(result, 3.0f, 3.25f);
+    }
+
+    [Fact]
+    public async Task Select_ArrayOfBFloat16_ReturnsArray()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var result = await connection.ExecuteScalarAsync<float[]>("SELECT [toBFloat16(1.0), toBFloat16(2.0), toBFloat16(-3.0)]");
+
+        Assert.NotNull(result);
+        Assert.Equal(3, result.Length);
+        Assert.Equal(1.0f, result[0]);
+        Assert.Equal(2.0f, result[1]);
+        Assert.Equal(-3.0f, result[2]);
+    }
+
+    [Fact]
+    public async Task Select_NullableBFloat16_WithValue_ReturnsFloat()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var result = await connection.ExecuteScalarAsync<float?>("SELECT toNullable(toBFloat16(2.5))");
+
+        Assert.Equal(2.5f, result);
+    }
+
+    #endregion
 }

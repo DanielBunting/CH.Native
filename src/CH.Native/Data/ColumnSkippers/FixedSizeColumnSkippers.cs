@@ -60,6 +60,12 @@ public sealed class DateColumnSkipper : FixedSizeColumnSkipper
     public override string TypeName => "Date";
 }
 
+public sealed class BFloat16ColumnSkipper : FixedSizeColumnSkipper
+{
+    public BFloat16ColumnSkipper() : base(2) { }
+    public override string TypeName => "BFloat16";
+}
+
 // 4-byte types
 public sealed class Int32ColumnSkipper : FixedSizeColumnSkipper
 {
@@ -83,6 +89,12 @@ public sealed class DateTimeColumnSkipper : FixedSizeColumnSkipper
 {
     public DateTimeColumnSkipper() : base(4) { }
     public override string TypeName => "DateTime";
+}
+
+public sealed class TimeColumnSkipper : FixedSizeColumnSkipper
+{
+    public TimeColumnSkipper() : base(4) { }
+    public override string TypeName => "Time";
 }
 
 public sealed class Date32ColumnSkipper : FixedSizeColumnSkipper
@@ -126,6 +138,12 @@ public sealed class DateTime64ColumnSkipper : FixedSizeColumnSkipper
 {
     public DateTime64ColumnSkipper() : base(8) { }
     public override string TypeName => "DateTime64";
+}
+
+public sealed class Time64ColumnSkipper : FixedSizeColumnSkipper
+{
+    public Time64ColumnSkipper() : base(8) { }
+    public override string TypeName => "Time64";
 }
 
 public sealed class Decimal64ColumnSkipper : FixedSizeColumnSkipper

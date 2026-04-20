@@ -50,6 +50,7 @@ public sealed class ColumnReaderFactory
             "FixedString" => CreateFixedStringReader(type),
             "DateTime" => CreateDateTimeReader(type),
             "DateTime64" => CreateDateTime64Reader(type),
+            "Time64" => CreateTime64Reader(type),
             "Decimal32" => CreateDecimal32Reader(type),
             "Decimal64" => CreateDecimal64Reader(type),
             "Decimal128" => CreateDecimal128Reader(type),
@@ -232,6 +233,15 @@ public sealed class ColumnReaderFactory
         }
 
         return new DateTime64ColumnReader(precision, timezone);
+    }
+
+    private IColumnReader CreateTime64Reader(ClickHouseType type)
+    {
+        if (type.Parameters.Count < 1)
+            throw new FormatException($"Time64 requires at least one parameter (precision), got: {type.OriginalTypeName}");
+
+        var precision = int.Parse(type.Parameters[0]);
+        return new Time64ColumnReader(precision);
     }
 
     private IColumnReader CreateDecimal32Reader(ClickHouseType type)

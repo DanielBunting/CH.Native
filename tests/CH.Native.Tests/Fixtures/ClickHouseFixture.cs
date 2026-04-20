@@ -1,3 +1,4 @@
+using CH.Native.Connection;
 using DotNet.Testcontainers.Builders;
 using Testcontainers.ClickHouse;
 using Xunit;
@@ -13,7 +14,7 @@ public class ClickHouseFixture : IAsyncLifetime
     private const string TestPassword = "test_password";
 
     private readonly ClickHouseContainer _container = new ClickHouseBuilder()
-        .WithImage("clickhouse/clickhouse-server:24.1")
+        .WithImage("clickhouse/clickhouse-server:25.10")
         .WithUsername(TestUsername)
         .WithPassword(TestPassword)
         .WithWaitStrategy(Wait.ForUnixContainer()
@@ -48,6 +49,23 @@ public class ClickHouseFixture : IAsyncLifetime
     public async Task InitializeAsync()
     {
         await _container.StartAsync();
+
+        // Image 25.3 reports port-open before the native protocol listener actually accepts
+        // connections; retry until the handshake succeeds.
+        for (int attempt = 1; attempt <= 20; attempt++)
+        {
+            try
+            {
+                await using var connection = new ClickHouseConnection(ConnectionString);
+                await connection.OpenAsync();
+                return;
+            }
+            catch
+            {
+                if (attempt == 20) throw;
+                await Task.Delay(500);
+            }
+        }
     }
 
     public async Task DisposeAsync()

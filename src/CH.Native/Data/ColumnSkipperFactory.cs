@@ -50,6 +50,7 @@ public sealed class ColumnSkipperFactory
             "FixedString" => CreateFixedStringSkipper(type),
             "DateTime" => CreateDateTimeSkipper(type),
             "DateTime64" => CreateDateTime64Skipper(type),
+            "Time64" => new Time64ColumnSkipper(),
             "Decimal32" => new Decimal32ColumnSkipper(),
             "Decimal64" => new Decimal64ColumnSkipper(),
             "Decimal128" => new Decimal128ColumnSkipper(),
