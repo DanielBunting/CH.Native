@@ -662,4 +662,58 @@ public class ClickHouseConnectionSettingsTests
 
         Assert.Equal(StringMaterialization.Eager, settings.StringMaterialization);
     }
+
+    [Theory]
+    [InlineData("Host=localhost;SchemaCache=true", true)]
+    [InlineData("Host=localhost;SchemaCache=false", false)]
+    [InlineData("Host=localhost;SchemaCache=1", true)]
+    [InlineData("Host=localhost;SchemaCache=0", false)]
+    [InlineData("Host=localhost;UseSchemaCache=true", true)]
+    [InlineData("Host=localhost;schemacache=TRUE", true)]
+    public void Parse_SchemaCache_AcceptsBoolAndBitValues(string connectionString, bool expected)
+    {
+        var settings = ClickHouseConnectionSettings.Parse(connectionString);
+
+        Assert.Equal(expected, settings.UseSchemaCache);
+    }
+
+    [Fact]
+    public void Parse_WithoutSchemaCache_DefaultsToFalse()
+    {
+        var settings = ClickHouseConnectionSettings.Parse("Host=localhost");
+
+        Assert.False(settings.UseSchemaCache);
+    }
+
+    [Theory]
+    [InlineData("Host=localhost;SchemaCache=yes")]
+    [InlineData("Host=localhost;SchemaCache=2")]
+    [InlineData("Host=localhost;UseSchemaCache=not-a-bool")]
+    public void Parse_SchemaCache_InvalidValue_ThrowsArgumentException(string connectionString)
+    {
+        Assert.Throws<ArgumentException>(() =>
+            ClickHouseConnectionSettings.Parse(connectionString));
+    }
+
+    [Fact]
+    public void Builder_WithSchemaCache_EnablesCaching()
+    {
+        var settings = ClickHouseConnectionSettings.CreateBuilder()
+            .WithHost("localhost")
+            .WithSchemaCache()
+            .Build();
+
+        Assert.True(settings.UseSchemaCache);
+    }
+
+    [Fact]
+    public void Builder_WithSchemaCacheFalse_DisablesCaching()
+    {
+        var settings = ClickHouseConnectionSettings.CreateBuilder()
+            .WithHost("localhost")
+            .WithSchemaCache(false)
+            .Build();
+
+        Assert.False(settings.UseSchemaCache);
+    }
 }

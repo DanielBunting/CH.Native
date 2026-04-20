@@ -27,6 +27,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private readonly ClickHouseConnectionSettings _settings;
     private readonly ColumnReaderRegistry _columnReaderRegistry;
     private readonly ClickHouseLogger _logger;
+    private readonly SchemaCache _schemaCache = new();
     private readonly object _queryLock = new();
     private TcpClient? _tcpClient;
     private Stream? _networkStream;
@@ -428,6 +429,22 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             throw new InvalidOperationException("Connection is not open.");
 
         return new BulkInserter<T>(this, tableName, options);
+    }
+
+    internal SchemaCache SchemaCache => _schemaCache;
+
+    /// <summary>
+    /// Evicts cached bulk-insert schemas on this connection. Call after server-side
+    /// ALTER TABLE on a table whose schema is cached, or pass <c>null</c> to clear the
+    /// entire cache.
+    /// </summary>
+    /// <param name="tableName">The table to evict. When null, the entire cache is cleared.</param>
+    public void InvalidateSchemaCache(string? tableName = null)
+    {
+        if (tableName is null)
+            _schemaCache.Clear();
+        else
+            _schemaCache.InvalidateTable(tableName);
     }
 
     /// <summary>
@@ -1751,6 +1768,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     {
         _isOpen = false;
         _compressionEnabled = false;
+        _schemaCache.Clear();
 
         if (_pipeWriter != null)
         {
