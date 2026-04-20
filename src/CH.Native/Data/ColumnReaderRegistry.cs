@@ -77,7 +77,7 @@ public sealed class ColumnReaderRegistry
     private static bool IsCompositeType(string? baseType)
     {
         return baseType is "Nullable" or "Array" or "Map" or "Tuple" or "LowCardinality" or "Nested"
-            or "FixedString" or "DateTime" or "DateTime64"
+            or "FixedString" or "DateTime" or "DateTime64" or "Time64"
             or "Decimal" or "Decimal32" or "Decimal64" or "Decimal128" or "Decimal256"
             or "JSON";
     }
@@ -174,6 +174,10 @@ public sealed class ColumnReaderRegistryBuilder
         Register(new ColumnReaders.DateTimeColumnReader());
         Register(new ColumnReaders.DateColumnReader());
         Register(new ColumnReaders.Date32ColumnReader());
+        Register(new ColumnReaders.TimeColumnReader());
+
+        // BFloat16 (Time64 is parameterised — created on demand by the factory)
+        Register(new ColumnReaders.BFloat16ColumnReader());
 
         // UUID type
         Register(new ColumnReaders.UuidColumnReader());

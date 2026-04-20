@@ -49,6 +49,7 @@ public sealed class ColumnWriterFactory
             "FixedString" => CreateFixedStringWriter(type),
             "DateTime" => CreateDateTimeWriter(type),
             "DateTime64" => CreateDateTime64Writer(type),
+            "Time64" => CreateTime64Writer(type),
             "Decimal32" => CreateDecimal32Writer(type),
             "Decimal64" => CreateDecimal64Writer(type),
             "Decimal128" => CreateDecimal128Writer(type),
@@ -199,6 +200,15 @@ public sealed class ColumnWriterFactory
         }
 
         return new DateTime64ColumnWriter(precision, timezone);
+    }
+
+    private IColumnWriter CreateTime64Writer(ClickHouseType type)
+    {
+        if (type.Parameters.Count < 1)
+            throw new FormatException($"Time64 requires at least one parameter (precision), got: {type.OriginalTypeName}");
+
+        var precision = int.Parse(type.Parameters[0]);
+        return new Time64ColumnWriter(precision);
     }
 
     private IColumnWriter CreateDecimal32Writer(ClickHouseType type)

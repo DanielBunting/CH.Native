@@ -80,7 +80,7 @@ public sealed class ColumnSkipperRegistry
     private static bool IsCompositeType(string? baseType)
     {
         return baseType is "Nullable" or "Array" or "Map" or "Tuple" or "LowCardinality"
-            or "FixedString" or "DateTime" or "DateTime64" or "Nested"
+            or "FixedString" or "DateTime" or "DateTime64" or "Time64" or "Nested"
             or "Decimal" or "Decimal32" or "Decimal64" or "Decimal128" or "Decimal256"
             or "JSON";
     }
@@ -134,6 +134,10 @@ public sealed class ColumnSkipperRegistry
             return _skippers["Date"];
         if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Date32))
             return _skippers["Date32"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Time))
+            return _skippers["Time"];
+        if (typeNameUtf8.SequenceEqual(Utf8TypeNames.BFloat16))
+            return _skippers["BFloat16"];
 
         // Smaller numeric types
         if (typeNameUtf8.SequenceEqual(Utf8TypeNames.Int16))
@@ -223,6 +227,7 @@ public sealed class ColumnSkipperRegistryBuilder
         Register(new Int16ColumnSkipper());
         Register(new UInt16ColumnSkipper());
         Register(new DateColumnSkipper());
+        Register(new BFloat16ColumnSkipper());
 
         // 4-byte types
         Register(new Int32ColumnSkipper());
@@ -230,6 +235,7 @@ public sealed class ColumnSkipperRegistryBuilder
         Register(new Float32ColumnSkipper());
         Register(new DateTimeColumnSkipper());
         Register(new Date32ColumnSkipper());
+        Register(new TimeColumnSkipper());
         Register(new IPv4ColumnSkipper());
         Register(new Decimal32ColumnSkipper());
 

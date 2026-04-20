@@ -42,6 +42,9 @@ if (args.Length > 0)
             // Quick run for development testing
             BenchmarkRunner.Run<SimpleQueryBenchmarks>(new QuickComparisonConfig());
             break;
+        case "types":
+            BenchmarkRunner.Run<BenchmarkTypeSuite>(new QuickComparisonConfig());
+            break;
         case "all":
             RunAllBenchmarks();
             break;
@@ -122,6 +125,7 @@ static void PrintUsage()
           complex     - Complex queries (aggregations, JOINs, filters)
           connection  - Connection establishment overhead
           compression - Compression comparison (LZ4, Zstd, native vs HTTP)
+          types       - Per-type read suite: Native vs Driver × Bulk/Single for every primitive
           compare     - Run all protocol comparison benchmarks
           quick       - Quick dev test (SimpleQueryBenchmarks, few iterations)
 

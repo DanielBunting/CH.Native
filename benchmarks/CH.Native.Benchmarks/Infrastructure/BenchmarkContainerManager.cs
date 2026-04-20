@@ -60,7 +60,7 @@ public sealed class BenchmarkContainerManager : IAsyncDisposable
             if (_initialized) return;
 
             _container = new ClickHouseBuilder()
-                .WithImage("clickhouse/clickhouse-server:25.3")
+                .WithImage("clickhouse/clickhouse-server:25.10")
                 .WithUsername(Username)
                 .WithPassword(Password)
                 .WithPortBinding(9000, true)

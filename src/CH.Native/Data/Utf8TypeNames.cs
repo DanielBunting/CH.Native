@@ -15,6 +15,7 @@ internal static class Utf8TypeNames
     public static ReadOnlySpan<byte> Int16 => "Int16"u8;
     public static ReadOnlySpan<byte> UInt16 => "UInt16"u8;
     public static ReadOnlySpan<byte> Date => "Date"u8;
+    public static ReadOnlySpan<byte> BFloat16 => "BFloat16"u8;
 
     // 4-byte types
     public static ReadOnlySpan<byte> Int32 => "Int32"u8;
@@ -22,6 +23,7 @@ internal static class Utf8TypeNames
     public static ReadOnlySpan<byte> Float32 => "Float32"u8;
     public static ReadOnlySpan<byte> DateTime => "DateTime"u8;
     public static ReadOnlySpan<byte> Date32 => "Date32"u8;
+    public static ReadOnlySpan<byte> Time => "Time"u8;
     public static ReadOnlySpan<byte> IPv4 => "IPv4"u8;
 
     // 8-byte types
