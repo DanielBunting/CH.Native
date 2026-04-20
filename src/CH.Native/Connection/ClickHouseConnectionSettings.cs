@@ -125,6 +125,14 @@ public sealed class ClickHouseConnectionSettings
     public StringMaterialization StringMaterialization { get; }
 
     /// <summary>
+    /// Gets the default value of <see cref="BulkInsert.BulkInsertOptions.UseSchemaCache"/>
+    /// for inserters created on this connection. When true, any inserter whose options do
+    /// not explicitly set <c>UseSchemaCache</c> will skip the schema-exchange round-trip
+    /// after the first call against a given (table, column-list) pair. Default false.
+    /// </summary>
+    public bool UseSchemaCache { get; }
+
+    /// <summary>
     /// Gets the effective port to use for the connection (TlsPort if UseTls, otherwise Port).
     /// </summary>
     public int EffectivePort => UseTls ? TlsPort : Port;
@@ -154,7 +162,8 @@ public sealed class ClickHouseConnectionSettings
         string? tlsCaCertificatePath,
         X509Certificate2? tlsClientCertificate,
         TelemetrySettings? telemetry,
-        StringMaterialization stringMaterialization)
+        StringMaterialization stringMaterialization,
+        bool useSchemaCache)
     {
         Host = host;
         Port = port;
@@ -188,6 +197,9 @@ public sealed class ClickHouseConnectionSettings
 
         // String materialization
         StringMaterialization = stringMaterialization;
+
+        // Bulk-insert schema cache default
+        UseSchemaCache = useSchemaCache;
     }
 
     /// <summary>
@@ -389,6 +401,18 @@ public sealed class ClickHouseConnectionSettings
                     if (!Enum.TryParse<StringMaterialization>(value, ignoreCase: true, out var materialization))
                         throw new ArgumentException($"Invalid string materialization value: {value}. Valid values: Eager, Lazy", nameof(connectionString));
                     builder.WithStringMaterialization(materialization);
+                    break;
+
+                case "useschemacache":
+                case "schemacache":
+                    if (bool.TryParse(value, out var useSchemaCache))
+                        builder.WithSchemaCache(useSchemaCache);
+                    else if (value.Equals("1", StringComparison.Ordinal))
+                        builder.WithSchemaCache(true);
+                    else if (value.Equals("0", StringComparison.Ordinal))
+                        builder.WithSchemaCache(false);
+                    else
+                        throw new ArgumentException($"Invalid {key} value: {value}", nameof(connectionString));
                     break;
             }
         }

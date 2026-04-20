@@ -34,6 +34,7 @@ public sealed class ClickHouseConnectionSettingsBuilder
     private X509Certificate2? _tlsClientCertificate;
     private TelemetrySettings? _telemetry;
     private StringMaterialization _stringMaterialization = StringMaterialization.Eager;
+    private bool _useSchemaCache = false;
 
     /// <summary>
     /// Sets the host name or IP address.
@@ -175,6 +176,19 @@ public sealed class ClickHouseConnectionSettingsBuilder
     public ClickHouseConnectionSettingsBuilder WithCompression(bool enabled = true)
     {
         _compress = enabled;
+        return this;
+    }
+
+    /// <summary>
+    /// Enables the per-connection bulk-insert schema cache as the default for new inserters.
+    /// Individual <see cref="BulkInsert.BulkInsertOptions.UseSchemaCache"/> values still override
+    /// this on a per-call basis.
+    /// </summary>
+    /// <param name="enabled">True to enable the cache by default.</param>
+    /// <returns>This builder for chaining.</returns>
+    public ClickHouseConnectionSettingsBuilder WithSchemaCache(bool enabled = true)
+    {
+        _useSchemaCache = enabled;
         return this;
     }
 
@@ -392,7 +406,8 @@ public sealed class ClickHouseConnectionSettingsBuilder
             _tlsCaCertificatePath,
             _tlsClientCertificate,
             _telemetry,
-            _stringMaterialization);
+            _stringMaterialization,
+            _useSchemaCache);
     }
 }
 

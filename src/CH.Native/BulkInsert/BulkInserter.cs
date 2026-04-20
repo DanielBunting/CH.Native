@@ -4,6 +4,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using CH.Native.Connection;
 using CH.Native.Data;
+using CH.Native.Exceptions;
 using CH.Native.Mapping;
 using CH.Native.Telemetry;
 
@@ -27,6 +28,8 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     private bool _completed;
     private bool _disposed;
     private int _totalRowsInserted;
+    private bool _usedCachedSchema;
+    private SchemaKey _schemaCacheKey;
 
     // Pooled column data arrays - reused across flushes (fallback path)
     private object?[][]? _pooledColumnData;
@@ -59,6 +62,13 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     /// Initializes the bulk inserter by sending the INSERT query and receiving the schema.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// When <see cref="BulkInsertOptions.UseSchemaCache"/> is enabled and a matching schema
+    /// is cached on the connection, this method still sends the INSERT query (required for
+    /// server-side protocol context) but skips the synchronous wait for the schema Data
+    /// block. The server's schema response is drained later by
+    /// <see cref="ClickHouseConnection.ReceiveEndOfStreamAsync"/>, saving one round-trip.
+    /// </remarks>
     public async Task InitAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -68,16 +78,36 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         // Build column list from POCO properties
         var propertyMappings = GetPropertyMappings();
         var columnList = string.Join(", ", propertyMappings.Select(p => p.ColumnName));
+        _schemaCacheKey = new SchemaKey(_tableName, columnList);
 
-        // Send INSERT query
+        // Send INSERT query (required for server-side protocol state even on cache hit)
         var sql = $"INSERT INTO {_tableName} ({columnList}) VALUES";
         await _connection.SendInsertQueryAsync(sql, cancellationToken);
 
-        // Receive schema block
-        var schemaBlock = await _connection.ReceiveSchemaBlockAsync(cancellationToken);
+        // Per-call override wins; null falls back to the connection setting.
+        var useCache = _options.UseSchemaCache ?? _connection.Settings.UseSchemaCache;
 
-        // Map properties to schema columns
-        MapPropertiesToSchema(propertyMappings, schemaBlock);
+        if (useCache &&
+            _connection.SchemaCache.TryGet(_schemaCacheKey, out var cachedSchema))
+        {
+            // Cache hit: use cached schema, skip the schema read round-trip.
+            // The server's schema Data block will be drained by ReceiveEndOfStreamAsync.
+            MapPropertiesToSchema(propertyMappings, cachedSchema.ColumnNames, cachedSchema.ColumnTypes);
+            _usedCachedSchema = true;
+        }
+        else
+        {
+            // Cache miss (or caching disabled): wait for server schema, then map.
+            var schemaBlock = await _connection.ReceiveSchemaBlockAsync(cancellationToken);
+            var names = schemaBlock.ColumnNames;
+            var types = schemaBlock.ColumnTypes;
+            MapPropertiesToSchema(propertyMappings, names, types);
+
+            if (useCache)
+            {
+                _connection.SchemaCache.Set(_schemaCacheKey, new BulkInsertSchema(names, types));
+            }
+        }
 
         _initialized = true;
     }
@@ -348,6 +378,15 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
 
             _completed = true;
         }
+        catch (ClickHouseServerException ex) when (_usedCachedSchema)
+        {
+            // Server-side rejection on the cached-schema path is almost always schema drift
+            // (e.g. post-ALTER column removal, rename, or type change). Evict the entry so
+            // the next inserter refreshes, and surface the error to the caller.
+            _connection.SchemaCache.InvalidateTable(_tableName);
+            ClickHouseActivitySource.SetError(activity, ex);
+            throw;
+        }
         catch (Exception ex)
         {
             ClickHouseActivitySource.SetError(activity, ex);
@@ -422,13 +461,16 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         return properties;
     }
 
-    private void MapPropertiesToSchema(List<PropertyMapping> propertyMappings, TypedBlock schemaBlock)
+    private void MapPropertiesToSchema(
+        List<PropertyMapping> propertyMappings,
+        string[] schemaColumnNames,
+        string[] schemaColumnTypes)
     {
         // Build lookup from schema
         var schemaColumns = new Dictionary<string, (int Index, string Type)>(StringComparer.OrdinalIgnoreCase);
-        for (int i = 0; i < schemaBlock.ColumnCount; i++)
+        for (int i = 0; i < schemaColumnNames.Length; i++)
         {
-            schemaColumns[schemaBlock.ColumnNames[i]] = (i, schemaBlock.ColumnTypes[i]);
+            schemaColumns[schemaColumnNames[i]] = (i, schemaColumnTypes[i]);
         }
 
         // Match properties to schema columns
@@ -445,7 +487,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
                 var propertyInfo = mapping.Property != null ? $"from property '{mapping.Property.Name}' " : "";
                 throw new InvalidOperationException(
                     $"Column '{mapping.ColumnName}' {propertyInfo}not found in table schema. " +
-                    $"Available columns: {string.Join(", ", schemaBlock.ColumnNames)}");
+                    $"Available columns: {string.Join(", ", schemaColumnNames)}");
             }
 
             matchedNames.Add(mapping.ColumnName);

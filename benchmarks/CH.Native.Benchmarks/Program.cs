@@ -26,6 +26,9 @@ if (args.Length > 0)
         case "insert":
             BenchmarkRunner.Run<BulkInsertComparisonBenchmarks>();
             break;
+        case "schemacache":
+            BenchmarkRunner.Run<BulkInsertSchemaCacheBenchmarks>();
+            break;
         case "complex":
             BenchmarkRunner.Run<ComplexQueryBenchmarks>();
             break;
@@ -122,6 +125,7 @@ static void PrintUsage()
           simple      - Simple query latency (SELECT 1, COUNT, 100 rows)
           large       - Large result set reads (10K, 100K, 1M rows)
           insert      - Bulk insert comparison (1K, 10K, 100K rows)
+          schemacache - Per-connection schema cache (warm vs cold inserter)
           complex     - Complex queries (aggregations, JOINs, filters)
           connection  - Connection establishment overhead
           compression - Compression comparison (LZ4, Zstd, native vs HTTP)
