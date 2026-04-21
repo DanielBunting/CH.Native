@@ -89,6 +89,14 @@ public sealed class ClickHouseDbCommand : DbCommand
 
     private List<string>? _roles;
 
+    /// <summary>
+    /// Gets or sets the query ID to send with this command. Set to override the auto-generated
+    /// GUID; after execution the property reflects the ID that was actually sent on the wire
+    /// (matching <c>system.query_log</c>). Null or empty means "generate a new GUID per execution".
+    /// Maximum length is 128 characters.
+    /// </summary>
+    public string? QueryId { get; set; }
+
     /// <inheritdoc />
     protected override DbConnection? DbConnection
     {
@@ -136,12 +144,20 @@ public sealed class ClickHouseDbCommand : DbCommand
         using var timeoutCts = CreateTimeoutCts(cancellationToken);
         var token = timeoutCts?.Token ?? cancellationToken;
 
-        return (int)await _connection!.Inner.ExecuteNonQueryWithParametersAsync(
-            _commandText,
-            nativeParams,
-            progress: null,
-            token,
-            rolesOverride: _roles is { Count: > 0 } ? _roles : null).ConfigureAwait(false);
+        try
+        {
+            return (int)await _connection!.Inner.ExecuteNonQueryWithParametersAsync(
+                _commandText,
+                nativeParams,
+                progress: null,
+                token,
+                rolesOverride: _roles is { Count: > 0 } ? _roles : null,
+                queryId: QueryId).ConfigureAwait(false);
+        }
+        finally
+        {
+            QueryId = _connection!.Inner.LastQueryId ?? QueryId;
+        }
     }
 
     /// <inheritdoc />
@@ -158,12 +174,20 @@ public sealed class ClickHouseDbCommand : DbCommand
         using var timeoutCts = CreateTimeoutCts(cancellationToken);
         var token = timeoutCts?.Token ?? cancellationToken;
 
-        return await _connection!.Inner.ExecuteScalarWithParametersAsync<object?>(
-            _commandText,
-            nativeParams,
-            progress: null,
-            token,
-            rolesOverride: _roles is { Count: > 0 } ? _roles : null).ConfigureAwait(false);
+        try
+        {
+            return await _connection!.Inner.ExecuteScalarWithParametersAsync<object?>(
+                _commandText,
+                nativeParams,
+                progress: null,
+                token,
+                rolesOverride: _roles is { Count: > 0 } ? _roles : null,
+                queryId: QueryId).ConfigureAwait(false);
+        }
+        finally
+        {
+            QueryId = _connection!.Inner.LastQueryId ?? QueryId;
+        }
     }
 
     /// <inheritdoc />
@@ -187,7 +211,9 @@ public sealed class ClickHouseDbCommand : DbCommand
             _commandText,
             nativeParams,
             token,
-            rolesOverride: _roles is { Count: > 0 } ? _roles : null).ConfigureAwait(false);
+            rolesOverride: _roles is { Count: > 0 } ? _roles : null,
+            queryId: QueryId).ConfigureAwait(false);
+        QueryId = reader.QueryId ?? QueryId;
         return new ClickHouseDbDataReader(reader);
     }
 

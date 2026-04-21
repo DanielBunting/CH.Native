@@ -86,7 +86,10 @@ public sealed class ClickHouseQueryProvider : IQueryProvider
             _context.Connection,
             _context.TableName,
             elementType,
-            _context.ColumnNames);
+            _context.ColumnNames)
+        {
+            QueryId = _context.QueryId
+        };
     }
 
     private static Type GetElementType(Type type)

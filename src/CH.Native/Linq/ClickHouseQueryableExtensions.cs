@@ -94,6 +94,25 @@ public static class ClickHouseQueryableExtensions
     }
 
     /// <summary>
+    /// Sets the query ID sent on the wire for this query. When non-null and non-empty, the
+    /// supplied value is used instead of the auto-generated GUID. Max length is 128 characters.
+    /// </summary>
+    /// <typeparam name="T">The element type.</typeparam>
+    /// <param name="source">The source queryable. Must be a ClickHouse query.</param>
+    /// <param name="queryId">The query ID to send on the wire.</param>
+    /// <returns>The same queryable, with the query ID configured on its context.</returns>
+    /// <exception cref="InvalidOperationException">Thrown if the source is not a ClickHouse query.</exception>
+    public static IQueryable<T> WithQueryId<T>(this IQueryable<T> source, string queryId)
+    {
+        if (source.Provider is not ClickHouseQueryProvider provider)
+            throw new InvalidOperationException(
+                "WithQueryId() is only available on ClickHouse queries created via connection.Table<T>().");
+
+        provider.Context.QueryId = queryId;
+        return source;
+    }
+
+    /// <summary>
     /// Returns the query as an <see cref="IAsyncEnumerable{T}"/> for use with <c>await foreach</c>.
     /// </summary>
     /// <typeparam name="T">The element type.</typeparam>

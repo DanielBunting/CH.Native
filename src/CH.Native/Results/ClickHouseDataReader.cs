@@ -26,12 +26,22 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
     internal ClickHouseDataReader(
         IAsyncEnumerator<object> messageEnumerator,
         ClickHouseConnection? connection = null,
-        Activity? activity = null)
+        Activity? activity = null,
+        string? queryId = null)
     {
         _messageEnumerator = messageEnumerator;
         _connection = connection;
         _activity = activity;
+        QueryId = queryId;
     }
+
+    /// <summary>
+    /// Gets the query ID for this reader's query. This reflects either the caller-supplied ID
+    /// or the auto-generated GUID sent on the wire, matching the value in ClickHouse's
+    /// <c>system.query_log</c>. Null if the reader was constructed without a query ID
+    /// (legacy internal test paths only).
+    /// </summary>
+    public string? QueryId { get; }
 
     /// <summary>
     /// Gets the number of columns in the result set.

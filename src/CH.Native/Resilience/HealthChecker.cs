@@ -1,4 +1,5 @@
 using CH.Native.Connection;
+using CH.Native.Telemetry;
 
 namespace CH.Native.Resilience;
 
@@ -13,6 +14,7 @@ public sealed class HealthChecker : IAsyncDisposable
     private readonly TimeSpan _healthCheckTimeout;
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _backgroundTask;
+    private readonly ClickHouseLogger? _logger;
     private bool _disposed;
 
     /// <summary>
@@ -37,11 +39,25 @@ public sealed class HealthChecker : IAsyncDisposable
         ClickHouseConnectionSettings baseSettings,
         TimeSpan? checkInterval = null,
         TimeSpan? healthCheckTimeout = null)
+        : this(servers, baseSettings, checkInterval, healthCheckTimeout, logger: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a new health checker for the specified servers with a logger.
+    /// </summary>
+    public HealthChecker(
+        IEnumerable<ServerAddress> servers,
+        ClickHouseConnectionSettings baseSettings,
+        TimeSpan? checkInterval,
+        TimeSpan? healthCheckTimeout,
+        ClickHouseLogger? logger)
     {
         _nodes = servers.Select(s => new ServerNode(s)).ToList();
         _baseSettings = baseSettings;
         _checkInterval = checkInterval ?? TimeSpan.FromSeconds(10);
         _healthCheckTimeout = healthCheckTimeout ?? TimeSpan.FromSeconds(5);
+        _logger = logger;
 
         // Start background health check task
         _backgroundTask = RunHealthChecksAsync(_cts.Token);
@@ -155,6 +171,16 @@ public sealed class HealthChecker : IAsyncDisposable
         }
 
         var duration = DateTime.UtcNow - startTime;
+
+        if (_logger is not null)
+        {
+            var addr = $"{node.Address.Host}:{node.Address.Port}";
+            if (!isHealthy)
+                _logger.HealthCheckFailed(addr, checkException?.Message ?? "unknown");
+            else if (!wasHealthy)
+                _logger.HealthCheckRecovered(addr);
+        }
+
         OnHealthCheckCompleted?.Invoke(this, new HealthCheckCompletedEventArgs(
             node.Address,
             isHealthy,

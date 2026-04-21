@@ -10,6 +10,7 @@ namespace CH.Native.Resilience;
 public sealed class RetryPolicy
 {
     private readonly RetryOptions _options;
+    private readonly ClickHouseLogger? _logger;
 
     /// <summary>
     /// ClickHouse error codes considered transient and safe to retry.
@@ -34,8 +35,19 @@ public sealed class RetryPolicy
     /// </summary>
     /// <param name="options">The retry options, or null to use defaults.</param>
     public RetryPolicy(RetryOptions? options = null)
+        : this(options, logger: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a new retry policy with the specified options and logger.
+    /// </summary>
+    /// <param name="options">The retry options, or null to use defaults.</param>
+    /// <param name="logger">Optional logger for retry attempts.</param>
+    public RetryPolicy(RetryOptions? options, ClickHouseLogger? logger)
     {
         _options = options ?? RetryOptions.Default;
+        _logger = logger;
     }
 
     /// <summary>
@@ -72,6 +84,8 @@ public sealed class RetryPolicy
 
                 // Record retry telemetry
                 ClickHouseMeter.RecordRetry(attempt, delay, ex.GetType().Name);
+
+                _logger?.RetryAttempt(attempt, _options.MaxRetries, delay.TotalMilliseconds, ex.Message);
 
                 // Raise retry event before delay
                 OnRetry?.Invoke(this, new RetryEventArgs(attempt, _options.MaxRetries, ex, delay));

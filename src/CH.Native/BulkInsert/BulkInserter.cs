@@ -84,7 +84,11 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         var sql = $"INSERT INTO {_tableName} ({columnList}) VALUES";
         // Snapshot to IReadOnlyList so the wire path doesn't observe later mutation.
         var rolesSnapshot = _options.Roles is null ? null : (IReadOnlyList<string>)_options.Roles.ToArray();
-        await _connection.SendInsertQueryAsync(sql, cancellationToken, rolesOverride: rolesSnapshot);
+        await _connection.SendInsertQueryAsync(
+            sql,
+            cancellationToken,
+            rolesOverride: rolesSnapshot,
+            queryId: _options.QueryId);
 
         // Per-call override wins; null falls back to the connection setting.
         var useCache = _options.UseSchemaCache ?? _connection.Settings.UseSchemaCache;
@@ -96,6 +100,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             // The server's schema Data block will be drained by ReceiveEndOfStreamAsync.
             MapPropertiesToSchema(propertyMappings, cachedSchema.ColumnNames, cachedSchema.ColumnTypes);
             _usedCachedSchema = true;
+            _connection.Logger.BulkInsertSchemaFetched(_tableName, cachedSchema.ColumnNames.Length, fromCache: true);
         }
         else
         {
@@ -109,6 +114,8 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             {
                 _connection.SchemaCache.Set(_schemaCacheKey, new BulkInsertSchema(names, types));
             }
+
+            _connection.Logger.BulkInsertSchemaFetched(_tableName, names.Length, fromCache: false);
         }
 
         _initialized = true;
@@ -341,6 +348,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             }
 
             _totalRowsInserted += _buffer.Count;
+            _connection.Logger.BulkInsertFlushed(_tableName, _buffer.Count);
         }
         catch (Exception ex)
         {
