@@ -37,7 +37,9 @@ public class CircuitBreakerLoggingTests
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 1,
-            OpenDuration = TimeSpan.FromMilliseconds(30),
+            // Longer duration so `breaker.State` right after RecordFailure reliably
+            // reads Open on slow runners, without yet auto-transitioning to HalfOpen.
+            OpenDuration = TimeSpan.FromMilliseconds(500),
             FailureWindow = TimeSpan.FromMinutes(1)
         };
         var breaker = new CircuitBreaker(options, logger)
@@ -48,7 +50,7 @@ public class CircuitBreakerLoggingTests
         breaker.RecordFailure();
         Assert.Equal(CircuitBreakerState.Open, breaker.State);
 
-        await Task.Delay(50);
+        await Task.Delay(600);
         _ = breaker.State; // triggers Open -> HalfOpen transition
         breaker.RecordSuccess(); // HalfOpen -> Closed
 
