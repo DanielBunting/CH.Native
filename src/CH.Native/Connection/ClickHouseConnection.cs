@@ -708,6 +708,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="progress">Optional progress reporter.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>The scalar result, or default if no rows returned.</returns>
     public async Task<T?> ExecuteScalarAsync<T>(
         string sql,
@@ -793,6 +794,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="progress">Optional progress reporter.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>The number of rows affected.</returns>
     public async Task<long> ExecuteNonQueryAsync(
         string sql,
@@ -869,6 +871,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// </summary>
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>A data reader for iterating through results.</returns>
     public async Task<ClickHouseDataReader> ExecuteReaderAsync(
         string sql,
@@ -909,6 +912,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// </summary>
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>An async enumerable of rows.</returns>
     public async IAsyncEnumerable<ClickHouseRow> QueryAsync(
         string sql,
@@ -929,6 +933,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// <typeparam name="T">The type to map rows to. Must have a parameterless constructor.</typeparam>
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>An async enumerable of mapped objects.</returns>
     public async IAsyncEnumerable<T> QueryAsync<T>(
         string sql,
@@ -962,6 +967,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// <typeparam name="T">The type to map rows to. Must have a parameterless constructor.</typeparam>
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>An async enumerable of mapped objects.</returns>
     public async IAsyncEnumerable<T> QueryTypedAsync<T>(
         string sql,
@@ -2164,6 +2170,8 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// </summary>
     /// <param name="sql">The INSERT SQL (e.g., "INSERT INTO table (col1, col2) VALUES").</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="rolesOverride">Optional per-call role override.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     internal async Task SendInsertQueryAsync(
         string sql,
         CancellationToken cancellationToken,
