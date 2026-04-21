@@ -242,6 +242,10 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private async Task PerformHandshakeAsync(CancellationToken cancellationToken)
     {
         await SendClientHelloAsync(cancellationToken);
+
+        if (_settings.AuthMethod == ClickHouseAuthMethod.SshKey)
+            await PerformSshChallengeExchangeAsync(cancellationToken);
+
         ServerInfo = await ReceiveServerHelloAsync(cancellationToken);
         NegotiatedProtocolVersion = Math.Min(ProtocolVersion.Current, ServerInfo.ProtocolRevision);
 
@@ -252,13 +256,101 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         }
     }
 
+    private async Task PerformSshChallengeExchangeAsync(CancellationToken cancellationToken)
+    {
+        // 1. Send SSHChallengeRequest (varint packet type only, no body).
+        var requestBuffer = new ArrayBufferWriter<byte>();
+        var requestWriter = new ProtocolWriter(requestBuffer);
+        requestWriter.WriteVarInt((ulong)ClientMessageType.SSHChallengeRequest);
+        await _pipeWriter!.WriteAsync(requestBuffer.WrittenMemory, cancellationToken);
+        await _pipeWriter.FlushAsync(cancellationToken);
+
+        // 2. Read server reply — must be SSHChallenge (18). An Exception (2) typically
+        //    means the server is older than 23.9 or the user's SSH key isn't configured.
+        var challenge = await ReceiveSshChallengeAsync(cancellationToken);
+
+        // 3. Sign: str(protocol_version) + database + user + challenge (raw concat).
+        using var signer = CreateSshSigner();
+        var payload = Auth.SshKeySigner.BuildSignedPayload(
+            ProtocolVersion.Current,
+            _settings.Database,
+            _settings.Username,
+            challenge);
+        var signature = signer.Sign(payload);
+
+        // 4. Send SSHChallengeResponse + length-prefixed signature blob.
+        var responseBuffer = new ArrayBufferWriter<byte>();
+        var responseWriter = new ProtocolWriter(responseBuffer);
+        responseWriter.WriteVarInt((ulong)ClientMessageType.SSHChallengeResponse);
+        responseWriter.WriteVarInt((ulong)signature.Length);
+        responseWriter.WriteBytes(signature);
+        await _pipeWriter.WriteAsync(responseBuffer.WrittenMemory, cancellationToken);
+        await _pipeWriter.FlushAsync(cancellationToken);
+    }
+
+    private async Task<byte[]> ReceiveSshChallengeAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var result = await _pipeReader!.ReadAsync(cancellationToken);
+            var buffer = result.Buffer;
+
+            if (result.IsCanceled)
+                throw new OperationCanceledException(cancellationToken);
+            if (buffer.IsEmpty && result.IsCompleted)
+                throw new ClickHouseConnectionException(
+                    "Server closed connection during SSH challenge. " +
+                    "Verify the server supports SSH auth (revision >= 54466, ClickHouse 23.9+) " +
+                    "and that the user is configured with an ssh_key.");
+
+            try
+            {
+                var reader = new ProtocolReader(buffer);
+                var packetType = reader.ReadVarInt();
+
+                if (packetType == (ulong)ServerMessageType.Exception)
+                {
+                    var ex = ExceptionMessage.Read(ref reader);
+                    _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
+                    throw Exceptions.ClickHouseServerException.FromExceptionMessage(ex);
+                }
+                if (packetType != (ulong)ServerMessageType.SSHChallenge)
+                    throw new ClickHouseConnectionException(
+                        $"Unexpected packet type {packetType} during SSH challenge; expected SSHChallenge ({(int)ServerMessageType.SSHChallenge}) or Exception.");
+
+                var challengeLength = (int)reader.ReadVarInt();
+                var challenge = reader.ReadBytes(challengeLength).ToArray();
+                _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
+                return challenge;
+            }
+            catch (InvalidOperationException)
+            {
+                // Partial frame — wait for more bytes.
+                _pipeReader.AdvanceTo(buffer.Start, buffer.End);
+                if (result.IsCompleted)
+                    throw new ClickHouseConnectionException("Incomplete SSH challenge from server.");
+            }
+        }
+    }
+
+    private Auth.SshKeySigner CreateSshSigner()
+    {
+        if (_settings.SshPrivateKey is not null)
+            return new Auth.SshKeySigner(_settings.SshPrivateKey, _settings.SshPrivateKeyPassphrase);
+        if (_settings.SshPrivateKeyPath is not null)
+            return new Auth.SshKeySigner(_settings.SshPrivateKeyPath, _settings.SshPrivateKeyPassphrase);
+        throw new InvalidOperationException(
+            "AuthMethod is SshKey but neither SshPrivateKey nor SshPrivateKeyPath is set.");
+    }
+
     private async Task SendClientHelloAsync(CancellationToken cancellationToken)
     {
+        var (wireUsername, wirePassword) = BuildHandshakeCredentials(_settings);
         var clientHello = ClientHello.Create(
             _settings.ClientName,
             _settings.Database,
-            _settings.Username,
-            _settings.Password);
+            wireUsername,
+            wirePassword);
 
         var bufferWriter = new ArrayBufferWriter<byte>();
         var writer = new ProtocolWriter(bufferWriter);
@@ -266,6 +358,23 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
         await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
         await _pipeWriter.FlushAsync(cancellationToken);
+    }
+
+    // ClickHouse wire markers for non-password auth, from src/Core/Protocol.h.
+    // Exact literal strings (leading + trailing spaces) as the server parses them.
+    internal const string JwtAuthMarker = " JWT AUTHENTICATION ";
+    internal const string SshKeyAuthMarker = " SSH KEY AUTHENTICATION ";
+
+    internal static (string username, string password) BuildHandshakeCredentials(
+        ClickHouseConnectionSettings settings)
+    {
+        return settings.AuthMethod switch
+        {
+            ClickHouseAuthMethod.Jwt => (JwtAuthMarker, settings.JwtToken ?? ""),
+            ClickHouseAuthMethod.SshKey => (SshKeyAuthMarker + settings.Username, ""),
+            ClickHouseAuthMethod.TlsClientCertificate => (settings.Username, ""),
+            _ => (settings.Username, settings.Password),
+        };
     }
 
     private async Task<ServerHello> ReceiveServerHelloAsync(CancellationToken cancellationToken)

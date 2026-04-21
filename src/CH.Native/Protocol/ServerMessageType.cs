@@ -79,4 +79,10 @@ public enum ServerMessageType : byte
     /// Profile events for monitoring.
     /// </summary>
     ProfileEvents = 14,
+
+    /// <summary>
+    /// Server-issued SSH authentication challenge (32 random bytes that the
+    /// client must sign with its SSH private key).
+    /// </summary>
+    SSHChallenge = 18,
 }

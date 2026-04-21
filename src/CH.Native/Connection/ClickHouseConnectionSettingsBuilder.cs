@@ -35,6 +35,12 @@ public sealed class ClickHouseConnectionSettingsBuilder
     private TelemetrySettings? _telemetry;
     private StringMaterialization _stringMaterialization = StringMaterialization.Eager;
     private bool _useSchemaCache = false;
+    private ClickHouseAuthMethod? _authMethod;
+    private bool _passwordExplicitlySet;
+    private string? _jwtToken;
+    private byte[]? _sshPrivateKey;
+    private string? _sshPrivateKeyPath;
+    private string? _sshPrivateKeyPassphrase;
 
     /// <summary>
     /// Sets the host name or IP address.
@@ -90,6 +96,7 @@ public sealed class ClickHouseConnectionSettingsBuilder
     public ClickHouseConnectionSettingsBuilder WithPassword(string password)
     {
         _password = password ?? "";
+        _passwordExplicitlySet = true;
         return this;
     }
 
@@ -340,6 +347,89 @@ public sealed class ClickHouseConnectionSettingsBuilder
     }
 
     /// <summary>
+    /// Loads a client certificate from a PFX (PKCS#12) or PEM file on disk.
+    /// </summary>
+    /// <param name="path">Path to the certificate file.</param>
+    /// <param name="password">Optional password for an encrypted PFX.</param>
+    /// <returns>This builder for chaining.</returns>
+    public ClickHouseConnectionSettingsBuilder WithTlsClientCertificate(string path, string? password = null)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("Certificate path must be non-empty.", nameof(path));
+        _tlsClientCertificate = new X509Certificate2(path, password);
+        return this;
+    }
+
+    /// <summary>
+    /// Explicitly selects the authentication method. Normally set implicitly by
+    /// calling <see cref="WithPassword"/>, <see cref="WithJwt"/>, <see cref="WithSshKey(byte[],string)"/>,
+    /// or pairing <see cref="WithTls"/> with <see cref="WithTlsClientCertificate"/>.
+    /// Use this when selecting <see cref="ClickHouseAuthMethod.TlsClientCertificate"/>
+    /// to signal that the server-side auth method is cert-based (as opposed to
+    /// a password-based user who happens to be connecting over mTLS).
+    /// </summary>
+    /// <param name="method">The auth method.</param>
+    /// <returns>This builder for chaining.</returns>
+    public ClickHouseConnectionSettingsBuilder WithAuthMethod(ClickHouseAuthMethod method)
+    {
+        _authMethod = method;
+        return this;
+    }
+
+    /// <summary>
+    /// Configures JWT bearer-token authentication. Mutually exclusive with
+    /// <see cref="WithPassword"/> and <see cref="WithSshKey(byte[],string)"/>.
+    /// </summary>
+    /// <param name="token">The JWT bearer token.</param>
+    /// <returns>This builder for chaining.</returns>
+    public ClickHouseConnectionSettingsBuilder WithJwt(string token)
+    {
+        if (string.IsNullOrWhiteSpace(token))
+            throw new ArgumentException("JWT token must be non-empty.", nameof(token));
+        _jwtToken = token;
+        _authMethod = ClickHouseAuthMethod.Jwt;
+        return this;
+    }
+
+    /// <summary>
+    /// Configures SSH key authentication from in-memory key bytes (PEM or OpenSSH
+    /// format). Mutually exclusive with <see cref="WithPassword"/> and
+    /// <see cref="WithJwt"/>.
+    /// </summary>
+    /// <param name="privateKey">The private key bytes.</param>
+    /// <param name="passphrase">Optional passphrase for an encrypted key.</param>
+    /// <returns>This builder for chaining.</returns>
+    public ClickHouseConnectionSettingsBuilder WithSshKey(byte[] privateKey, string? passphrase = null)
+    {
+        ArgumentNullException.ThrowIfNull(privateKey);
+        if (privateKey.Length == 0)
+            throw new ArgumentException("SSH private key bytes must be non-empty.", nameof(privateKey));
+        _sshPrivateKey = privateKey;
+        _sshPrivateKeyPath = null;
+        _sshPrivateKeyPassphrase = passphrase;
+        _authMethod = ClickHouseAuthMethod.SshKey;
+        return this;
+    }
+
+    /// <summary>
+    /// Configures SSH key authentication by loading a key from disk. Mutually
+    /// exclusive with <see cref="WithPassword"/> and <see cref="WithJwt"/>.
+    /// </summary>
+    /// <param name="path">Path to the SSH private key file.</param>
+    /// <param name="passphrase">Optional passphrase for an encrypted key.</param>
+    /// <returns>This builder for chaining.</returns>
+    public ClickHouseConnectionSettingsBuilder WithSshKeyPath(string path, string? passphrase = null)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("SSH private key path must be non-empty.", nameof(path));
+        _sshPrivateKeyPath = path;
+        _sshPrivateKey = null;
+        _sshPrivateKeyPassphrase = passphrase;
+        _authMethod = ClickHouseAuthMethod.SshKey;
+        return this;
+    }
+
+    /// <summary>
     /// Sets the telemetry settings (tracing, metrics, logging).
     /// </summary>
     /// <param name="settings">The telemetry settings.</param>
@@ -378,11 +468,13 @@ public sealed class ClickHouseConnectionSettingsBuilder
     /// Builds the connection settings.
     /// </summary>
     /// <returns>The built settings.</returns>
-    /// <exception cref="InvalidOperationException">Thrown if required settings are missing.</exception>
+    /// <exception cref="InvalidOperationException">Thrown if required settings are missing or auth methods conflict.</exception>
     public ClickHouseConnectionSettings Build()
     {
         if (string.IsNullOrWhiteSpace(_host))
             throw new InvalidOperationException("Host is required.");
+
+        var authMethod = ResolveAndValidateAuthMethod();
 
         return new ClickHouseConnectionSettings(
             _host,
@@ -407,7 +499,45 @@ public sealed class ClickHouseConnectionSettingsBuilder
             _tlsClientCertificate,
             _telemetry,
             _stringMaterialization,
-            _useSchemaCache);
+            _useSchemaCache,
+            authMethod,
+            _jwtToken,
+            _sshPrivateKey,
+            _sshPrivateKeyPath,
+            _sshPrivateKeyPassphrase);
+    }
+
+    private ClickHouseAuthMethod ResolveAndValidateAuthMethod()
+    {
+        var hasJwt = _jwtToken is not null;
+        var hasSsh = _sshPrivateKey is not null || _sshPrivateKeyPath is not null;
+        var explicitCert = _authMethod == ClickHouseAuthMethod.TlsClientCertificate;
+
+        var count = 0;
+        if (_passwordExplicitlySet) count++;
+        if (hasJwt) count++;
+        if (hasSsh) count++;
+        if (explicitCert) count++;
+        if (count > 1)
+            throw new InvalidOperationException(
+                "Multiple authentication methods configured. Choose one of WithPassword, WithJwt, " +
+                "WithSshKey/WithSshKeyPath, or WithAuthMethod(TlsClientCertificate).");
+
+        if (explicitCert)
+        {
+            if (!_useTls)
+                throw new InvalidOperationException(
+                    "AuthMethod.TlsClientCertificate requires TLS. Call WithTls() before building.");
+            if (_tlsClientCertificate is null)
+                throw new InvalidOperationException(
+                    "AuthMethod.TlsClientCertificate requires a client certificate. " +
+                    "Call WithTlsClientCertificate() before building.");
+            return ClickHouseAuthMethod.TlsClientCertificate;
+        }
+
+        if (hasJwt) return ClickHouseAuthMethod.Jwt;
+        if (hasSsh) return ClickHouseAuthMethod.SshKey;
+        return ClickHouseAuthMethod.Password;
     }
 }
 

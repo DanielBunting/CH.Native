@@ -39,4 +39,17 @@ public enum ClientMessageType : byte
     /// Keep-alive message.
     /// </summary>
     KeepAlive = 6,
+
+    /// <summary>
+    /// Request an SSH authentication challenge from the server.
+    /// Sent immediately after Hello when the username carries the
+    /// " SSH KEY AUTHENTICATION " marker.
+    /// </summary>
+    SSHChallengeRequest = 11,
+
+    /// <summary>
+    /// Response to the server's SSH authentication challenge: the client's
+    /// SSH-wire-format signature over str(protocol) + database + user + challenge.
+    /// </summary>
+    SSHChallengeResponse = 12,
 }

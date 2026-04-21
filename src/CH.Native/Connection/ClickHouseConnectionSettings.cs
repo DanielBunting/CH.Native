@@ -115,6 +115,33 @@ public sealed class ClickHouseConnectionSettings
     public X509Certificate2? TlsClientCertificate { get; }
 
     /// <summary>
+    /// Gets the authentication method used during the handshake.
+    /// </summary>
+    public ClickHouseAuthMethod AuthMethod { get; }
+
+    /// <summary>
+    /// Gets the JWT bearer token when <see cref="AuthMethod"/> is <see cref="ClickHouseAuthMethod.Jwt"/>.
+    /// </summary>
+    public string? JwtToken { get; }
+
+    /// <summary>
+    /// Gets the SSH private key bytes (PEM or OpenSSH format) used when
+    /// <see cref="AuthMethod"/> is <see cref="ClickHouseAuthMethod.SshKey"/>.
+    /// </summary>
+    public byte[]? SshPrivateKey { get; }
+
+    /// <summary>
+    /// Gets the filesystem path to an SSH private key, used as an alternative
+    /// to <see cref="SshPrivateKey"/>.
+    /// </summary>
+    public string? SshPrivateKeyPath { get; }
+
+    /// <summary>
+    /// Gets the optional passphrase for a password-protected SSH private key.
+    /// </summary>
+    public string? SshPrivateKeyPassphrase { get; }
+
+    /// <summary>
     /// Gets the telemetry settings (tracing, metrics, logging).
     /// </summary>
     public TelemetrySettings? Telemetry { get; }
@@ -163,7 +190,12 @@ public sealed class ClickHouseConnectionSettings
         X509Certificate2? tlsClientCertificate,
         TelemetrySettings? telemetry,
         StringMaterialization stringMaterialization,
-        bool useSchemaCache)
+        bool useSchemaCache,
+        ClickHouseAuthMethod authMethod = ClickHouseAuthMethod.Password,
+        string? jwtToken = null,
+        byte[]? sshPrivateKey = null,
+        string? sshPrivateKeyPath = null,
+        string? sshPrivateKeyPassphrase = null)
     {
         Host = host;
         Port = port;
@@ -191,6 +223,13 @@ public sealed class ClickHouseConnectionSettings
         AllowInsecureTls = allowInsecureTls;
         TlsCaCertificatePath = tlsCaCertificatePath;
         TlsClientCertificate = tlsClientCertificate;
+
+        // Auth method + credentials
+        AuthMethod = authMethod;
+        JwtToken = jwtToken;
+        SshPrivateKey = sshPrivateKey;
+        SshPrivateKeyPath = sshPrivateKeyPath;
+        SshPrivateKeyPassphrase = sshPrivateKeyPassphrase;
 
         // Telemetry settings
         Telemetry = telemetry;
@@ -226,6 +265,13 @@ public sealed class ClickHouseConnectionSettings
         int? circuitBreakerThreshold = null;
         int? circuitBreakerDurationSec = null;
         int? healthCheckIntervalSec = null;
+
+        // SSH passphrase / client-cert password may appear before their path in the
+        // connection string, so they are collected and applied after the parse loop.
+        string? sshPassphraseFromConnString = null;
+        string? sshKeyPathFromConnString = null;
+        string? clientCertPathFromConnString = null;
+        string? clientCertPasswordFromConnString = null;
 
         foreach (var pair in pairs)
         {
@@ -396,6 +442,32 @@ public sealed class ClickHouseConnectionSettings
                 case "cacert":
                     builder.WithTlsCaCertificate(value);
                     break;
+                case "tlsclientcertificate":
+                case "clientcertificate":
+                case "clientcertificatepath":
+                case "sslcert":
+                    clientCertPathFromConnString = value;
+                    break;
+                case "tlsclientcertificatepassword":
+                case "clientcertificatepassword":
+                case "sslcertpassword":
+                    clientCertPasswordFromConnString = value;
+                    break;
+
+                case "jwt":
+                case "token":
+                case "accesstoken":
+                    builder.WithJwt(value);
+                    break;
+                case "sshkeypath":
+                case "sshprivatekeypath":
+                case "sshkeyfile":
+                    sshKeyPathFromConnString = value;
+                    break;
+                case "sshkeypassphrase":
+                case "sshpassphrase":
+                    sshPassphraseFromConnString = value;
+                    break;
 
                 case "stringmaterialization":
                     if (!Enum.TryParse<StringMaterialization>(value, ignoreCase: true, out var materialization))
@@ -419,6 +491,20 @@ public sealed class ClickHouseConnectionSettings
 
         if (!hasHost)
             throw new InvalidOperationException("Host is required in the connection string.");
+
+        if (sshKeyPathFromConnString is not null)
+            builder.WithSshKeyPath(sshKeyPathFromConnString, sshPassphraseFromConnString);
+        else if (sshPassphraseFromConnString is not null)
+            throw new ArgumentException(
+                "SshKeyPassphrase set in connection string without a corresponding SshKeyPath.",
+                nameof(connectionString));
+
+        if (clientCertPathFromConnString is not null)
+            builder.WithTlsClientCertificate(clientCertPathFromConnString, clientCertPasswordFromConnString);
+        else if (clientCertPasswordFromConnString is not null)
+            throw new ArgumentException(
+                "ClientCertificatePassword set in connection string without a corresponding ClientCertificatePath.",
+                nameof(connectionString));
 
         // Build resilience options if any were specified
         if (maxRetries.HasValue || retryBaseDelayMs.HasValue || circuitBreakerThreshold.HasValue || healthCheckIntervalSec.HasValue)
