@@ -117,6 +117,12 @@ public static class ProtocolVersion
     public const int WithTotalBytesInProgress = 54463;
 
     /// <summary>
+    /// Protocol revision that introduced SSH key authentication (ClickHouse 23.9+).
+    /// See ClickHouse src/Core/ProtocolDefines.h: DBMS_MIN_REVISION_WITH_SSH_AUTHENTICATION.
+    /// </summary>
+    public const int WithSshAuthentication = 54466;
+
+    /// <summary>
     /// Returns true if the given feature is supported at the specified revision.
     /// </summary>
     /// <param name="revision">The negotiated protocol revision.</param>

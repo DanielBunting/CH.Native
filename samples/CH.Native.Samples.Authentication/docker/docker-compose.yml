@@ -1,0 +1,27 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    container_name: ch-native-auth-sample
+    ports:
+      - "9000:9000"    # native
+      - "9440:9440"    # native secure (TLS)
+      - "8123:8123"    # http (handy for debugging)
+    volumes:
+      # users.d is mounted writable because the image's entrypoint drops a
+      # default-user.xml there on first boot. Our auth_users.xml is preserved.
+      - ./generated/users.d:/etc/clickhouse-server/users.d
+      - ./generated/config.d:/etc/clickhouse-server/config.d:ro
+      - ./generated/certs:/etc/clickhouse-server/certs:ro
+      # Runs once on first boot to provision the roles and default-role NONE
+      # assignments that back the sample's --role flag.
+      - ./generated/initdb:/docker-entrypoint-initdb.d:ro
+      - ./generated/logs:/var/log/clickhouse-server
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

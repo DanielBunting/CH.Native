@@ -49,6 +49,14 @@ public sealed class BulkInsertOptions
     public bool? UseSchemaCache { get; set; } = null;
 
     /// <summary>
+    /// Gets or sets the ClickHouse roles to activate for this bulk insert. Overrides
+    /// the connection-level <see cref="Connection.ClickHouseConnectionSettings.Roles"/>.
+    /// Empty list strips all roles (<c>SET ROLE NONE</c>); <c>null</c> inherits the
+    /// connection default.
+    /// </summary>
+    public IList<string>? Roles { get; set; }
+
+    /// <summary>
     /// Gets the default options instance.
     /// </summary>
     public static BulkInsertOptions Default { get; } = new();

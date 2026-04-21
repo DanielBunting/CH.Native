@@ -266,8 +266,5 @@ internal sealed class SqlBuilder
     /// Quotes an identifier with backticks for ClickHouse.
     /// </summary>
     public static string QuoteIdentifier(string identifier)
-    {
-        // Escape backticks within the identifier
-        return $"`{identifier.Replace("`", "``")}`";
-    }
+        => Sql.ClickHouseIdentifier.Quote(identifier);
 }

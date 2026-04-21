@@ -116,6 +116,35 @@ public static class ClickHouseActivitySource
     }
 
     /// <summary>
+    /// Tags the current Activity (if any) with the effective ClickHouse role set.
+    /// Called from <c>EnsureRolesResolvedAsync</c> so the tag attaches to whatever
+    /// span wraps the outgoing query — the CH.Native query Activity, an
+    /// OTEL-instrumented ADO command span, or the bulk-insert Activity.
+    /// Sorted for stable tag values regardless of caller input order.
+    /// </summary>
+    internal static void TagActiveRoles(IReadOnlyList<string>? effectiveRoles)
+    {
+        var activity = Activity.Current;
+        if (activity is null) return;
+
+        if (effectiveRoles is null)
+        {
+            // Server default; no tag (absent = inherit).
+            return;
+        }
+
+        if (effectiveRoles.Count == 0)
+        {
+            activity.SetTag("db.clickhouse.roles", string.Empty);
+            return;
+        }
+
+        var sorted = effectiveRoles.ToArray();
+        Array.Sort(sorted, StringComparer.Ordinal);
+        activity.SetTag("db.clickhouse.roles", string.Join(",", sorted));
+    }
+
+    /// <summary>
     /// Sets server information tags on an Activity after a successful connection.
     /// </summary>
     /// <param name="activity">The Activity to update.</param>

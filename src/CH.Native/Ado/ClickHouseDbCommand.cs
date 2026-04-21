@@ -71,6 +71,24 @@ public sealed class ClickHouseDbCommand : DbCommand
     /// <inheritdoc />
     public override UpdateRowSource UpdatedRowSource { get; set; }
 
+    /// <summary>
+    /// Gets the ClickHouse roles to activate for this command. Overrides the
+    /// connection-level <see cref="Connection.ClickHouseConnectionSettings.Roles"/>
+    /// when non-empty. Matches <c>ClickHouse.Driver</c>'s surface: mutable
+    /// <see cref="IList{T}"/> so callers can use collection initialisers or append
+    /// entries incrementally.
+    /// </summary>
+    /// <remarks>
+    /// Empty list = "inherit the connection default" (parity with
+    /// <c>ClickHouse.Driver</c>, whose <c>IList&lt;string&gt;</c> shape can't
+    /// distinguish null from empty). For an explicit <c>SET ROLE NONE</c>, use
+    /// <see cref="Connection.ClickHouseConnection.ChangeRolesAsync"/> with an
+    /// empty array. Not thread-safe — mutate before <c>ExecuteXxxAsync</c> returns.
+    /// </remarks>
+    public IList<string> Roles => _roles ??= new List<string>();
+
+    private List<string>? _roles;
+
     /// <inheritdoc />
     protected override DbConnection? DbConnection
     {
@@ -122,7 +140,8 @@ public sealed class ClickHouseDbCommand : DbCommand
             _commandText,
             nativeParams,
             progress: null,
-            token).ConfigureAwait(false);
+            token,
+            rolesOverride: _roles is { Count: > 0 } ? _roles : null).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -143,7 +162,8 @@ public sealed class ClickHouseDbCommand : DbCommand
             _commandText,
             nativeParams,
             progress: null,
-            token).ConfigureAwait(false);
+            token,
+            rolesOverride: _roles is { Count: > 0 } ? _roles : null).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -166,7 +186,8 @@ public sealed class ClickHouseDbCommand : DbCommand
         var reader = await _connection!.Inner.ExecuteReaderWithParametersAsync(
             _commandText,
             nativeParams,
-            token).ConfigureAwait(false);
+            token,
+            rolesOverride: _roles is { Count: > 0 } ? _roles : null).ConfigureAwait(false);
         return new ClickHouseDbDataReader(reader);
     }
 

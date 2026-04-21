@@ -409,18 +409,53 @@ public sealed class ResilientConnection : IAsyncDisposable
 
     private ClickHouseConnectionSettings CreateSettingsForServer(ServerAddress server)
     {
-        return ClickHouseConnectionSettings.CreateBuilder()
+        var builder = ClickHouseConnectionSettings.CreateBuilder()
             .WithHost(server.Host)
             .WithPort(server.Port)
             .WithDatabase(_settings.Database)
-            .WithCredentials(_settings.Username, _settings.Password)
+            .WithUsername(_settings.Username)
             .WithConnectTimeout(_settings.ConnectTimeout)
             .WithClientName(_settings.ClientName)
             .WithReceiveBufferSize(_settings.ReceiveBufferSize)
             .WithSendBufferSize(_settings.SendBufferSize)
             .WithCompression(_settings.Compress)
-            .WithCompressionMethod(_settings.CompressionMethod)
-            .Build();
+            .WithCompressionMethod(_settings.CompressionMethod);
+
+        if (_settings.UseTls)
+        {
+            builder.WithTls().WithTlsPort(_settings.TlsPort);
+            if (_settings.AllowInsecureTls) builder.WithAllowInsecureTls();
+            if (_settings.TlsCaCertificatePath is not null)
+                builder.WithTlsCaCertificate(_settings.TlsCaCertificatePath);
+            if (_settings.TlsClientCertificate is not null)
+                builder.WithTlsClientCertificate(_settings.TlsClientCertificate);
+        }
+
+        if (_settings.Roles is not null)
+        {
+            builder.WithRoles(_settings.Roles);
+        }
+
+        switch (_settings.AuthMethod)
+        {
+            case ClickHouseAuthMethod.Jwt when _settings.JwtToken is not null:
+                builder.WithJwt(_settings.JwtToken);
+                break;
+            case ClickHouseAuthMethod.SshKey when _settings.SshPrivateKey is not null:
+                builder.WithSshKey(_settings.SshPrivateKey, _settings.SshPrivateKeyPassphrase);
+                break;
+            case ClickHouseAuthMethod.SshKey when _settings.SshPrivateKeyPath is not null:
+                builder.WithSshKeyPath(_settings.SshPrivateKeyPath, _settings.SshPrivateKeyPassphrase);
+                break;
+            case ClickHouseAuthMethod.TlsClientCertificate:
+                builder.WithAuthMethod(ClickHouseAuthMethod.TlsClientCertificate);
+                break;
+            default:
+                builder.WithPassword(_settings.Password);
+                break;
+        }
+
+        return builder.Build();
     }
 
     private async Task CloseCurrentConnectionAsync()
