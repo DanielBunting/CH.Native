@@ -12,6 +12,9 @@ services:
       - ./generated/users.d:/etc/clickhouse-server/users.d
       - ./generated/config.d:/etc/clickhouse-server/config.d:ro
       - ./generated/certs:/etc/clickhouse-server/certs:ro
+      # Runs once on first boot to provision the roles and default-role NONE
+      # assignments that back the sample's --role flag.
+      - ./generated/initdb:/docker-entrypoint-initdb.d:ro
       - ./generated/logs:/var/log/clickhouse-server
     ulimits:
       nofile:

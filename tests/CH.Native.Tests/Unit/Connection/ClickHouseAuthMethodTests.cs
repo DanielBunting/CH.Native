@@ -216,6 +216,32 @@ public class ClickHouseAuthMethodTests
     }
 
     [Fact]
+    public void BearerToken_IsAliasForJwtToken()
+    {
+        // Parity alias for clickhouse-cs vocabulary; same underlying field.
+        var settings = ClickHouseConnectionSettings.CreateBuilder()
+            .WithHost("localhost")
+            .WithBearerToken("eyJ.test.token")
+            .Build();
+
+        Assert.Equal(ClickHouseAuthMethod.Jwt, settings.AuthMethod);
+        Assert.Equal("eyJ.test.token", settings.JwtToken);
+        Assert.Equal("eyJ.test.token", settings.BearerToken);
+    }
+
+    [Theory]
+    [InlineData("Host=localhost;BearerToken=tok123")]
+    [InlineData("Host=localhost;Bearer=tok123")]
+    public void Parse_BearerTokenAlias_SetsJwtAuthMethod(string connStr)
+    {
+        var settings = ClickHouseConnectionSettings.Parse(connStr);
+
+        Assert.Equal(ClickHouseAuthMethod.Jwt, settings.AuthMethod);
+        Assert.Equal("tok123", settings.JwtToken);
+        Assert.Equal("tok123", settings.BearerToken);
+    }
+
+    [Fact]
     public void Parse_ClientCertificatePath_LoadsCertificate()
     {
         var pfxPath = Path.GetTempFileName();

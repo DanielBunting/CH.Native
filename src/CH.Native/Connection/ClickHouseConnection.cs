@@ -41,6 +41,23 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private volatile bool _cancellationRequested;
     private X509Certificate2? _customCaCertificate;
 
+    // Role-sync state: tracks what we last sent via SET ROLE on this session.
+    // null + !_rolesExplicitlySet = server's login-time defaults still in effect.
+    // null + _rolesExplicitlySet  = SET ROLE DEFAULT already sent (restore requested).
+    // list                         = exact SET ROLE list currently active.
+    // Guarded by _queryLock for reads; only written from inside EnsureRolesResolvedAsync
+    // (which runs serialised behind the same lock by virtue of being inside SendQueryAsync).
+    private IReadOnlyList<string>? _currentServerRoles;
+    private bool _rolesExplicitlySet;
+    private bool _inRoleSync;
+
+    // Sticky override from ChangeRolesAsync. When set, takes precedence over
+    // _settings.DefaultRoles for any call without a per-invocation rolesOverride.
+    // Analogous to how ChangeDatabase changes the default database for
+    // subsequent queries. Cleared on disconnect along with the rest of the state.
+    private IReadOnlyList<string>? _pinnedRoles;
+    private bool _pinnedRolesSet;
+
     /// <summary>
     /// Gets the server information received during handshake.
     /// </summary>
@@ -417,6 +434,40 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
         await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
         await _pipeWriter.FlushAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Changes the active ClickHouse roles for this connection, equivalent to
+    /// running <c>SET ROLE …</c>. Analogous to <c>DbConnection.ChangeDatabase</c>.
+    /// <list type="bullet">
+    ///   <item><c>null</c> — restore the user's server-configured default roles
+    ///   (issues <c>SET ROLE DEFAULT</c> if any prior explicit set is active).</item>
+    ///   <item>empty list — strip all active roles (<c>SET ROLE NONE</c>).</item>
+    ///   <item>populated list — activate exactly these roles.</item>
+    /// </list>
+    /// Calls to this method are no-ops when the requested set already matches the
+    /// session's current roles (tracked per-connection and reset across reconnects).
+    /// </summary>
+    /// <param name="roles">Roles to activate, or null / empty as above.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="InvalidOperationException">Connection is not open.</exception>
+    /// <exception cref="Exceptions.ClickHouseServerException">
+    /// Server refused the SET ROLE (typically <c>ACCESS_DENIED</c> when a role is
+    /// not granted to the current user).
+    /// </exception>
+    public async Task ChangeRolesAsync(IReadOnlyList<string>? roles, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_isOpen)
+            throw new InvalidOperationException("Connection is not open.");
+
+        // Defensive copy so callers can't mutate the pinned reference after pinning.
+        IReadOnlyList<string>? toPin = roles is null ? null : roles.ToArray();
+        await EnsureRolesResolvedAsync(toPin, cancellationToken);
+
+        // Commit the sticky override only after the server accepted the change.
+        _pinnedRoles = toPin;
+        _pinnedRolesSet = true;
     }
 
     /// <summary>
@@ -1281,14 +1332,15 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         string sql,
         ClickHouseParameterCollection parameters,
         IProgress<QueryProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<string>? rolesOverride = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
             throw new InvalidOperationException("Connection is not open.");
 
         var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-        await SendQueryAsync(rewrittenSql, settings, cancellationToken);
+        await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken);
 
         // Register cancellation callback to send Cancel message to server
         await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
@@ -1337,14 +1389,15 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         string sql,
         ClickHouseParameterCollection parameters,
         IProgress<QueryProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<string>? rolesOverride = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
             throw new InvalidOperationException("Connection is not open.");
 
         var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-        await SendQueryAsync(rewrittenSql, settings, cancellationToken);
+        await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken);
 
         // Register cancellation callback to send Cancel message to server
         await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
@@ -1387,14 +1440,15 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     internal async Task<ClickHouseDataReader> ExecuteReaderWithParametersAsync(
         string sql,
         ClickHouseParameterCollection parameters,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IReadOnlyList<string>? rolesOverride = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
             throw new InvalidOperationException("Connection is not open.");
 
         var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-        await SendQueryAsync(rewrittenSql, settings, cancellationToken);
+        await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken);
 
         var enumerator = ReadServerMessagesAsync(cancellationToken)
             .GetAsyncEnumerator(cancellationToken);
@@ -1403,13 +1457,28 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     }
 
     private Task SendQueryAsync(string sql, CancellationToken cancellationToken)
-        => SendQueryAsync(sql, null, cancellationToken);
+        => SendQueryAsync(sql, null, rolesOverride: null, cancellationToken);
+
+    private Task SendQueryAsync(
+        string sql,
+        IReadOnlyDictionary<string, string>? parameters,
+        CancellationToken cancellationToken)
+        => SendQueryAsync(sql, parameters, rolesOverride: null, cancellationToken);
 
     private async Task SendQueryAsync(
         string sql,
         IReadOnlyDictionary<string, string>? parameters,
+        IReadOnlyList<string>? rolesOverride,
         CancellationToken cancellationToken)
     {
+        // Role sync must precede the real query. When rolesOverride is null we fall
+        // back to the connection-level default. The sync itself is a plain query, so
+        // re-entering SendQueryAsync would loop — _inRoleSync short-circuits that.
+        if (!_inRoleSync)
+        {
+            await EnsureRolesResolvedAsync(rolesOverride, cancellationToken);
+        }
+
         // Set compression state for response handling
         _compressionEnabled = _settings.Compress;
         _cancellationRequested = false;
@@ -1462,6 +1531,96 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
         await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
         await _pipeWriter.FlushAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Ensures the server's active role set matches the desired set before executing
+    /// a query. Issues <c>SET ROLE …</c> (or <c>SET ROLE NONE</c> / <c>SET ROLE DEFAULT</c>)
+    /// when the state differs; no-ops otherwise.
+    /// </summary>
+    /// <param name="desired">
+    /// The override roles for this call; null means fall back to the connection-level
+    /// <see cref="ClickHouseConnectionSettings.DefaultRoles"/>.
+    /// </param>
+    private async Task EnsureRolesResolvedAsync(IReadOnlyList<string>? desired, CancellationToken cancellationToken)
+    {
+        // Precedence: per-call override > sticky override from ChangeRolesAsync > connection default.
+        var effective = desired;
+        if (effective is null)
+            effective = _pinnedRolesSet ? _pinnedRoles : _settings.Roles;
+
+        // Tag the surrounding Activity with the effective role set. Attaches to
+        // the CH.Native query Activity or any outer OTEL span (ADO, user-wrapped),
+        // and costs nothing when no Activity is active.
+        Telemetry.ClickHouseActivitySource.TagActiveRoles(effective);
+
+        if (RoleSetsEqual(effective, _currentServerRoles, _rolesExplicitlySet))
+            return;
+
+        string sql;
+        if (effective is null)
+        {
+            // Restore server-assigned default roles (only reachable after a previous
+            // explicit SET — otherwise RoleSetsEqual short-circuits before we get here).
+            sql = "SET ROLE DEFAULT";
+        }
+        else if (effective.Count == 0)
+        {
+            sql = "SET ROLE NONE";
+        }
+        else
+        {
+            var quoted = new List<string>(effective.Count);
+            foreach (var role in effective)
+                quoted.Add(Sql.ClickHouseIdentifier.Quote(role));
+            sql = "SET ROLE " + string.Join(", ", quoted);
+        }
+
+        _inRoleSync = true;
+        try
+        {
+            // Reuse the public non-query path so we get message reading + exception
+            // translation. _inRoleSync prevents EnsureRolesResolvedAsync from
+            // re-entering itself via SendQueryAsync.
+            await ExecuteNonQueryAsync(sql, progress: null, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _inRoleSync = false;
+        }
+
+        // Commit the state only AFTER the server acknowledges — an ACCESS_DENIED on
+        // SET ROLE throws above and we retain the previous _currentServerRoles.
+        _currentServerRoles = effective;
+        _rolesExplicitlySet = true;
+    }
+
+    /// <summary>
+    /// Structural equality over role sets, taking the "explicitly set" latch into
+    /// account so null-on-first-use (server defaults) short-circuits without any
+    /// SET ROLE traffic.
+    /// </summary>
+    private static bool RoleSetsEqual(IReadOnlyList<string>? desired, IReadOnlyList<string>? current, bool explicitlySet)
+    {
+        if (desired is null && !explicitlySet)
+            return true; // first query, caller wants defaults, server has defaults
+
+        if (desired is null && current is null)
+            return true;
+
+        if (desired is null || current is null)
+            return false;
+
+        if (desired.Count != current.Count)
+            return false;
+
+        for (var i = 0; i < desired.Count; i++)
+        {
+            if (!string.Equals(desired[i], current[i], StringComparison.Ordinal))
+                return false;
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -1878,6 +2037,13 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         _isOpen = false;
         _compressionEnabled = false;
         _schemaCache.Clear();
+        // A fresh TCP session starts with the user's default roles; drop our tracking
+        // so the next OpenAsync + query re-resolves from scratch. Sticky ChangeRolesAsync
+        // overrides are dropped with the session — reconnecting is a fresh start.
+        _currentServerRoles = null;
+        _rolesExplicitlySet = false;
+        _pinnedRoles = null;
+        _pinnedRolesSet = false;
 
         if (_pipeWriter != null)
         {
@@ -1948,11 +2114,18 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// </summary>
     /// <param name="sql">The INSERT SQL (e.g., "INSERT INTO table (col1, col2) VALUES").</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    internal async Task SendInsertQueryAsync(string sql, CancellationToken cancellationToken)
+    internal async Task SendInsertQueryAsync(
+        string sql,
+        CancellationToken cancellationToken,
+        IReadOnlyList<string>? rolesOverride = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
             throw new InvalidOperationException("Connection is not open.");
+
+        // Bulk insert bypasses SendQueryAsync, so apply role sync ourselves.
+        if (!_inRoleSync)
+            await EnsureRolesResolvedAsync(rolesOverride, cancellationToken);
 
         // Set compression state for response handling
         _compressionEnabled = _settings.Compress;

@@ -82,7 +82,9 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
 
         // Send INSERT query (required for server-side protocol state even on cache hit)
         var sql = $"INSERT INTO {_tableName} ({columnList}) VALUES";
-        await _connection.SendInsertQueryAsync(sql, cancellationToken);
+        // Snapshot to IReadOnlyList so the wire path doesn't observe later mutation.
+        var rolesSnapshot = _options.Roles is null ? null : (IReadOnlyList<string>)_options.Roles.ToArray();
+        await _connection.SendInsertQueryAsync(sql, cancellationToken, rolesOverride: rolesSnapshot);
 
         // Per-call override wins; null falls back to the connection setting.
         var useCache = _options.UseSchemaCache ?? _connection.Settings.UseSchemaCache;

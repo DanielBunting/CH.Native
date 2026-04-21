@@ -41,6 +41,52 @@ dotnet run -- cert cert_user docker/generated/certs/client.pfx testpass --insecu
 dotnet run -- jwt eyJhbGciOiJIUzI1NiJ9.e30.fake-signature
 ```
 
+## Roles (RBAC on top of auth)
+
+The setup script's `initdb/10_roles.sql` provisions two roles, granted to every
+demo user, with **default role = NONE**:
+
+| Role         | Grants                    |
+|--------------|---------------------------|
+| `analyst`    | `SELECT ON *.*`           |
+| `admin_role` | `ALL ON *.* WITH GRANT OPTION` |
+
+Because the default role is NONE, a bare connection has zero active privileges.
+Pass `--role NAME` (or a comma list) to activate roles for the session:
+
+```bash
+# No role active — the grant-gated probe (CREATE/DROP TABLE) fails
+dotnet run -- password demo_user demo
+# → [password] connected as 'demo_user' roles=[(none)] to ClickHouse ...
+# → [password]   CREATE/DROP probe = ACCESS_DENIED (activate admin_role via --role admin_role ...)
+
+# Activate analyst — analyst has SELECT only, still can't CREATE
+dotnet run -- password demo_user demo --role analyst
+# → [password] connected as 'demo_user' roles=[analyst] to ClickHouse ...
+# → [password]   CREATE/DROP probe = ACCESS_DENIED ...
+
+# Activate admin_role — CREATE + DROP succeed
+dotnet run -- password demo_user demo --role admin_role
+# → [password] connected as 'demo_user' roles=[admin_role] to ClickHouse ...
+# → [password]   CREATE/DROP probe = OK (privileged)
+
+# Multiple roles
+dotnet run -- ssh ssh_user docker/generated/keys/ssh_user --role analyst,admin_role
+
+# Works for every auth method
+dotnet run -- cert cert_user docker/generated/certs/client.pfx testpass --insecure --role admin_role
+```
+
+Each run also emits a `db.clickhouse.roles` tag on the query `Activity` (sorted
+comma-joined), so any OpenTelemetry / Application Insights / Jaeger exporter
+wired to the `CH.Native` ActivitySource sees the effective role set.
+
+Under the hood, `WithRoles(...)` on `ClickHouseConnectionSettings` causes the
+first query on the connection to be preceded by a `SET ROLE \`analyst\`, ...`
+session command. The role state is cached per connection — subsequent queries
+with the same set are no-ops. Per-command overrides are available via
+`ClickHouseDbCommand.Roles` and `BulkInsertOptions.Roles`.
+
 Each command opens a connection, runs `SELECT currentUser()` and `SELECT
 version()`, and prints the principal the server resolved.
 

@@ -5,7 +5,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 rm -rf generated
-mkdir -p generated/certs generated/keys generated/users.d generated/config.d
+mkdir -p generated/certs generated/keys generated/users.d generated/config.d generated/initdb
 cd generated
 
 echo "==> Generating self-signed CA"
@@ -45,35 +45,42 @@ echo "==> Writing users.d/auth_users.xml"
 cat > users.d/auth_users.xml <<EOF
 <clickhouse>
   <users>
-    <!-- Password demo: image's entrypoint locks 'default' to localhost-only
-         when CLICKHOUSE_USER isn't set, so we provision our own user. -->
-    <demo_user>
-      <password>demo</password>
-      <networks><ip>::/0</ip></networks>
-      <profile>default</profile>
-      <quota>default</quota>
-    </demo_user>
-    <ssh_user>
-      <ssh_keys>
-        <ssh_key>
-          <type>ssh-rsa</type>
-          <base64_key>${SSH_PUBKEY}</base64_key>
-        </ssh_key>
-      </ssh_keys>
-      <networks><ip>::/0</ip></networks>
-      <profile>default</profile>
-      <quota>default</quota>
-    </ssh_user>
-    <cert_user>
-      <ssl_certificates>
-        <common_name>cert_user</common_name>
-      </ssl_certificates>
-      <networks><ip>::/0</ip></networks>
-      <profile>default</profile>
-      <quota>default</quota>
-    </cert_user>
+    <!-- 'default' gets access_management so the initdb SQL can
+         CREATE USER / CREATE ROLE / GRANT. All three auth-demo users are
+         provisioned via SQL DDL below (initdb/10_auth_and_roles.sql) so they
+         live in local_directory storage and can be re-granted roles. -->
+    <default>
+      <access_management>1</access_management>
+      <named_collection_control>1</named_collection_control>
+    </default>
   </users>
 </clickhouse>
+EOF
+
+echo "==> Writing initdb/10_auth_and_roles.sql"
+cat > initdb/10_auth_and_roles.sql <<EOF
+-- Runs once on first boot, invoked by the image entrypoint as 'default' (which
+-- has access_management=1 via users.d/auth_users.xml).
+--
+-- All three demo users are created here rather than in users.d so they live in
+-- the mutable local_directory access storage and can receive role grants.
+-- The SSH public key is pinned at setup-time.
+
+CREATE USER IF NOT EXISTS demo_user IDENTIFIED WITH plaintext_password BY 'demo';
+CREATE USER IF NOT EXISTS ssh_user  IDENTIFIED WITH ssh_key BY KEY '${SSH_PUBKEY}' TYPE 'ssh-rsa';
+CREATE USER IF NOT EXISTS cert_user IDENTIFIED WITH ssl_certificate CN 'cert_user';
+
+CREATE ROLE IF NOT EXISTS analyst;
+CREATE ROLE IF NOT EXISTS admin_role;
+
+GRANT SELECT ON *.* TO analyst;
+-- Can't GRANT ALL WITH GRANT OPTION from a user without it; keep admin_role
+-- powerful-but-not-re-grantable for the sample.
+GRANT CREATE, DROP, INSERT, SELECT, ALTER ON *.* TO admin_role;
+
+GRANT analyst, admin_role TO demo_user, ssh_user, cert_user;
+
+SET DEFAULT ROLE NONE TO demo_user, ssh_user, cert_user;
 EOF
 
 echo "==> Writing config.d/tls.xml"

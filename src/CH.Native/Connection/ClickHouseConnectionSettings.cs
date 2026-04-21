@@ -125,6 +125,14 @@ public sealed class ClickHouseConnectionSettings
     public string? JwtToken { get; }
 
     /// <summary>
+    /// Alias for <see cref="JwtToken"/>, matching <c>ClickHouse.Driver</c>'s vocabulary.
+    /// Surfaces the same underlying value; the native-TCP wire format is unchanged
+    /// (the token is sent as-is in the password slot after a <c>" JWT AUTHENTICATION "</c>
+    /// username marker, not as an HTTP <c>Authorization: Bearer</c> header).
+    /// </summary>
+    public string? BearerToken => JwtToken;
+
+    /// <summary>
     /// Gets the SSH private key bytes (PEM or OpenSSH format) used when
     /// <see cref="AuthMethod"/> is <see cref="ClickHouseAuthMethod.SshKey"/>.
     /// </summary>
@@ -140,6 +148,16 @@ public sealed class ClickHouseConnectionSettings
     /// Gets the optional passphrase for a password-protected SSH private key.
     /// </summary>
     public string? SshPrivateKeyPassphrase { get; }
+
+    /// <summary>
+    /// Gets the set of ClickHouse roles to activate on every query executed via
+    /// this connection. When <c>null</c>, the server's login-time default roles
+    /// remain in effect. When an empty list, all roles are stripped (equivalent to
+    /// <c>SET ROLE NONE</c>). Individual commands may override this via
+    /// <see cref="Ado.ClickHouseDbCommand.Roles"/> or
+    /// <see cref="BulkInsert.BulkInsertOptions.Roles"/>.
+    /// </summary>
+    public IReadOnlyList<string>? Roles { get; }
 
     /// <summary>
     /// Gets the telemetry settings (tracing, metrics, logging).
@@ -195,7 +213,8 @@ public sealed class ClickHouseConnectionSettings
         string? jwtToken = null,
         byte[]? sshPrivateKey = null,
         string? sshPrivateKeyPath = null,
-        string? sshPrivateKeyPassphrase = null)
+        string? sshPrivateKeyPassphrase = null,
+        IReadOnlyList<string>? roles = null)
     {
         Host = host;
         Port = port;
@@ -230,6 +249,7 @@ public sealed class ClickHouseConnectionSettings
         SshPrivateKey = sshPrivateKey;
         SshPrivateKeyPath = sshPrivateKeyPath;
         SshPrivateKeyPassphrase = sshPrivateKeyPassphrase;
+        Roles = roles;
 
         // Telemetry settings
         Telemetry = telemetry;
@@ -457,7 +477,17 @@ public sealed class ClickHouseConnectionSettings
                 case "jwt":
                 case "token":
                 case "accesstoken":
+                case "bearertoken":
+                case "bearer":
                     builder.WithJwt(value);
+                    break;
+                case "roles":
+                case "role":
+                    // Empty value means explicit empty-set (SET ROLE NONE); list is comma-separated.
+                    if (value.Length == 0)
+                        builder.WithRoles(Array.Empty<string>());
+                    else
+                        builder.WithRoles(value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
                     break;
                 case "sshkeypath":
                 case "sshprivatekeypath":

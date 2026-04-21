@@ -41,6 +41,7 @@ public sealed class ClickHouseConnectionSettingsBuilder
     private byte[]? _sshPrivateKey;
     private string? _sshPrivateKeyPath;
     private string? _sshPrivateKeyPassphrase;
+    private IReadOnlyList<string>? _defaultRoles;
 
     /// <summary>
     /// Sets the host name or IP address.
@@ -392,6 +393,17 @@ public sealed class ClickHouseConnectionSettingsBuilder
     }
 
     /// <summary>
+    /// Alias for <see cref="WithJwt"/>, matching <c>ClickHouse.Driver</c>'s
+    /// vocabulary. Note: unlike clickhouse-cs (which sends the token as an HTTP
+    /// <c>Authorization: Bearer</c> header), CH.Native embeds the token in the
+    /// native-TCP handshake after the <c>" JWT AUTHENTICATION "</c> username
+    /// marker — the value transmitted is identical.
+    /// </summary>
+    /// <param name="token">The JWT bearer token.</param>
+    /// <returns>This builder for chaining.</returns>
+    public ClickHouseConnectionSettingsBuilder WithBearerToken(string token) => WithJwt(token);
+
+    /// <summary>
     /// Configures SSH key authentication from in-memory key bytes (PEM or OpenSSH
     /// format). Mutually exclusive with <see cref="WithPassword"/> and
     /// <see cref="WithJwt"/>.
@@ -408,6 +420,42 @@ public sealed class ClickHouseConnectionSettingsBuilder
         _sshPrivateKeyPath = null;
         _sshPrivateKeyPassphrase = passphrase;
         _authMethod = ClickHouseAuthMethod.SshKey;
+        return this;
+    }
+
+    /// <summary>
+    /// Sets the default ClickHouse roles to activate on every query run through
+    /// this connection. Pass an empty list to strip all roles explicitly
+    /// (<c>SET ROLE NONE</c>); leave unset (or pass <c>null</c>) to keep the
+    /// server's login-time defaults.
+    /// </summary>
+    /// <param name="roles">Role names to activate. Must not contain nulls.</param>
+    /// <returns>This builder for chaining.</returns>
+    public ClickHouseConnectionSettingsBuilder WithRoles(params string[] roles)
+    {
+        ArgumentNullException.ThrowIfNull(roles);
+        return WithRoles((IEnumerable<string>)roles);
+    }
+
+    /// <summary>
+    /// Sets the default ClickHouse roles to activate on every query run through
+    /// this connection.
+    /// </summary>
+    /// <param name="roles">Role names to activate.</param>
+    /// <returns>This builder for chaining.</returns>
+    public ClickHouseConnectionSettingsBuilder WithRoles(IEnumerable<string> roles)
+    {
+        ArgumentNullException.ThrowIfNull(roles);
+        var list = new List<string>();
+        foreach (var r in roles)
+        {
+            if (r is null)
+                throw new ArgumentException("Role names must not be null.", nameof(roles));
+            if (string.IsNullOrWhiteSpace(r))
+                throw new ArgumentException("Role names must not be empty or whitespace.", nameof(roles));
+            list.Add(r);
+        }
+        _defaultRoles = list;
         return this;
     }
 
@@ -504,7 +552,8 @@ public sealed class ClickHouseConnectionSettingsBuilder
             _jwtToken,
             _sshPrivateKey,
             _sshPrivateKeyPath,
-            _sshPrivateKeyPassphrase);
+            _sshPrivateKeyPassphrase,
+            _defaultRoles);
     }
 
     private ClickHouseAuthMethod ResolveAndValidateAuthMethod()

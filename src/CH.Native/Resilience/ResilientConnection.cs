@@ -431,6 +431,11 @@ public sealed class ResilientConnection : IAsyncDisposable
                 builder.WithTlsClientCertificate(_settings.TlsClientCertificate);
         }
 
+        if (_settings.Roles is not null)
+        {
+            builder.WithRoles(_settings.Roles);
+        }
+
         switch (_settings.AuthMethod)
         {
             case ClickHouseAuthMethod.Jwt when _settings.JwtToken is not null:
