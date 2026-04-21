@@ -19,6 +19,7 @@ namespace CH.Native.Resilience;
 public sealed class CircuitBreaker
 {
     private readonly CircuitBreakerOptions _options;
+    private readonly ClickHouseLogger? _logger;
     private readonly object _lock = new();
 
     private CircuitBreakerState _state = CircuitBreakerState.Closed;
@@ -74,8 +75,19 @@ public sealed class CircuitBreaker
     /// </summary>
     /// <param name="options">The circuit breaker options, or null to use defaults.</param>
     public CircuitBreaker(CircuitBreakerOptions? options = null)
+        : this(options, logger: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a new circuit breaker with the specified options and logger.
+    /// </summary>
+    /// <param name="options">The circuit breaker options, or null to use defaults.</param>
+    /// <param name="logger">Optional logger for state transitions.</param>
+    public CircuitBreaker(CircuitBreakerOptions? options, ClickHouseLogger? logger)
     {
         _options = options ?? CircuitBreakerOptions.Default;
+        _logger = logger;
     }
 
     /// <summary>
@@ -217,6 +229,14 @@ public sealed class CircuitBreaker
         // Record telemetry for state transition
         var serverAddr = ServerAddress ?? "default";
         ClickHouseMeter.RecordCircuitBreakerTransition(serverAddr, oldState, newState);
+
+        if (_logger is not null)
+        {
+            if (newState == CircuitBreakerState.Closed)
+                _logger.CircuitBreakerClosed(serverAddr);
+            else
+                _logger.CircuitBreakerStateChanged(serverAddr, oldState.ToString(), newState.ToString());
+        }
 
         // Invoke outside the lock to prevent potential deadlocks
         var handler = OnStateChanged;

@@ -27,6 +27,8 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private readonly ClickHouseConnectionSettings _settings;
     private readonly ColumnReaderRegistry _columnReaderRegistry;
     private readonly ClickHouseLogger _logger;
+
+    internal ClickHouseLogger Logger => _logger;
     private readonly SchemaCache _schemaCache = new();
     private readonly object _queryLock = new();
     private TcpClient? _tcpClient;
@@ -38,6 +40,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private bool _disposed;
     private bool _compressionEnabled;
     private string? _currentQueryId;
+    private string? _lastQueryId;
     private volatile bool _cancellationRequested;
     private X509Certificate2? _customCaCertificate;
 
@@ -258,6 +261,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
     private async Task PerformHandshakeAsync(CancellationToken cancellationToken)
     {
+        _logger.HandshakeStart(_settings.Host, _settings.EffectivePort);
         await SendClientHelloAsync(cancellationToken);
 
         if (_settings.AuthMethod == ClickHouseAuthMethod.SshKey)
@@ -525,6 +529,36 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     }
 
     /// <summary>
+    /// Gets the ID of the most-recently-executed query (or the currently executing one).
+    /// Persists after the query completes, unlike <see cref="CurrentQueryId"/>. Reflects the
+    /// caller-supplied value when set, otherwise the auto-generated GUID. Null if no query
+    /// has executed on this connection yet.
+    /// </summary>
+    public string? LastQueryId
+    {
+        get
+        {
+            lock (_queryLock)
+            {
+                return _lastQueryId;
+            }
+        }
+    }
+
+    private const int MaxQueryIdLength = 128;
+
+    private static string ResolveQueryId(string? supplied)
+    {
+        if (string.IsNullOrEmpty(supplied))
+            return Guid.NewGuid().ToString("D");
+        if (supplied.Length > MaxQueryIdLength)
+            throw new ArgumentException(
+                $"Query ID must be {MaxQueryIdLength} characters or fewer.",
+                nameof(supplied));
+        return supplied;
+    }
+
+    /// <summary>
     /// Kills a query by its ID using a separate connection.
     /// </summary>
     /// <remarks>
@@ -674,27 +708,29 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="progress">Optional progress reporter.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>The scalar result, or default if no rows returned.</returns>
     public async Task<T?> ExecuteScalarAsync<T>(
         string sql,
         IProgress<QueryProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? queryId = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
             throw new InvalidOperationException("Connection is not open.");
 
-        var queryId = Guid.NewGuid().ToString();
-        using var activity = ClickHouseActivitySource.StartQuery(sql, queryId, _settings.Database, _settings.Telemetry);
+        var effectiveQueryId = ResolveQueryId(queryId);
+        using var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
         var stopwatch = Stopwatch.StartNew();
         long rowsRead = 0;
         var success = false;
 
-        _logger.LogQueryStarted(queryId, sql);
+        _logger.LogQueryStarted(effectiveQueryId, sql);
 
         try
         {
-            await SendQueryAsync(sql, cancellationToken);
+            await SendQueryAsync(sql, cancellationToken, effectiveQueryId);
 
             // Register cancellation callback to send Cancel message to server
             await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
@@ -740,7 +776,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         {
             ClickHouseActivitySource.SetError(activity, ex);
             ClickHouseMeter.ErrorsTotal.Add(1);
-            _logger.QueryFailed(queryId, ex.Message);
+            _logger.QueryFailed(effectiveQueryId, ex.Message);
             throw;
         }
         finally
@@ -748,7 +784,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             stopwatch.Stop();
             ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, rowsRead, success);
             if (success)
-                _logger.QueryCompleted(queryId, rowsRead, stopwatch.Elapsed.TotalMilliseconds);
+                _logger.QueryCompleted(effectiveQueryId, rowsRead, stopwatch.Elapsed.TotalMilliseconds);
         }
     }
 
@@ -758,27 +794,29 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="progress">Optional progress reporter.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>The number of rows affected.</returns>
     public async Task<long> ExecuteNonQueryAsync(
         string sql,
         IProgress<QueryProgress>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? queryId = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
             throw new InvalidOperationException("Connection is not open.");
 
-        var queryId = Guid.NewGuid().ToString();
-        using var activity = ClickHouseActivitySource.StartQuery(sql, queryId, _settings.Database, _settings.Telemetry);
+        var effectiveQueryId = ResolveQueryId(queryId);
+        using var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
         var stopwatch = Stopwatch.StartNew();
         long totalRows = 0;
         var success = false;
 
-        _logger.LogQueryStarted(queryId, sql);
+        _logger.LogQueryStarted(effectiveQueryId, sql);
 
         try
         {
-            await SendQueryAsync(sql, cancellationToken);
+            await SendQueryAsync(sql, cancellationToken, effectiveQueryId);
 
             // Register cancellation callback to send Cancel message to server
             await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
@@ -816,7 +854,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         {
             ClickHouseActivitySource.SetError(activity, ex);
             ClickHouseMeter.ErrorsTotal.Add(1);
-            _logger.QueryFailed(queryId, ex.Message);
+            _logger.QueryFailed(effectiveQueryId, ex.Message);
             throw;
         }
         finally
@@ -824,7 +862,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             stopwatch.Stop();
             ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, totalRows, success);
             if (success)
-                _logger.QueryCompleted(queryId, totalRows, stopwatch.Elapsed.TotalMilliseconds);
+                _logger.QueryCompleted(effectiveQueryId, totalRows, stopwatch.Elapsed.TotalMilliseconds);
         }
     }
 
@@ -833,36 +871,38 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// </summary>
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>A data reader for iterating through results.</returns>
     public async Task<ClickHouseDataReader> ExecuteReaderAsync(
         string sql,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? queryId = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
             throw new InvalidOperationException("Connection is not open.");
 
-        var queryId = Guid.NewGuid().ToString();
+        var effectiveQueryId = ResolveQueryId(queryId);
         // Note: Activity is started here but will continue throughout the reader's lifetime.
         // For full duration tracking, the ClickHouseDataReader would need to record when disposed.
-        var activity = ClickHouseActivitySource.StartQuery(sql, queryId, _settings.Database, _settings.Telemetry);
-        _logger.LogQueryStarted(queryId, sql);
+        var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+        _logger.LogQueryStarted(effectiveQueryId, sql);
 
         try
         {
-            await SendQueryAsync(sql, cancellationToken);
+            await SendQueryAsync(sql, cancellationToken, effectiveQueryId);
 
             var enumerator = ReadServerMessagesAsync(cancellationToken)
                 .GetAsyncEnumerator(cancellationToken);
 
-            return new ClickHouseDataReader(enumerator, this, activity);
+            return new ClickHouseDataReader(enumerator, this, activity, effectiveQueryId);
         }
         catch (Exception ex)
         {
             activity?.Dispose();
             ClickHouseActivitySource.SetError(activity, ex);
             ClickHouseMeter.ErrorsTotal.Add(1);
-            _logger.QueryFailed(queryId, ex.Message);
+            _logger.QueryFailed(effectiveQueryId, ex.Message);
             throw;
         }
     }
@@ -872,12 +912,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// </summary>
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>An async enumerable of rows.</returns>
     public async IAsyncEnumerable<ClickHouseRow> QueryAsync(
         string sql,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default,
+        string? queryId = null)
     {
-        await using var reader = await ExecuteReaderAsync(sql, cancellationToken);
+        await using var reader = await ExecuteReaderAsync(sql, cancellationToken, queryId);
 
         while (await reader.ReadAsync(cancellationToken))
         {
@@ -891,13 +933,15 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// <typeparam name="T">The type to map rows to. Must have a parameterless constructor.</typeparam>
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>An async enumerable of mapped objects.</returns>
     public async IAsyncEnumerable<T> QueryAsync<T>(
         string sql,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default,
+        string? queryId = null)
         where T : new()
     {
-        await using var reader = await ExecuteReaderAsync(sql, cancellationToken);
+        await using var reader = await ExecuteReaderAsync(sql, cancellationToken, queryId);
 
         // Need to call ReadAsync at least once to initialize schema before creating mapper
         if (!await reader.ReadAsync(cancellationToken))
@@ -923,29 +967,31 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// <typeparam name="T">The type to map rows to. Must have a parameterless constructor.</typeparam>
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>An async enumerable of mapped objects.</returns>
     public async IAsyncEnumerable<T> QueryTypedAsync<T>(
         string sql,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default,
+        string? queryId = null)
         where T : new()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
             throw new InvalidOperationException("Connection is not open.");
 
-        var queryId = Guid.NewGuid().ToString();
-        using var activity = ClickHouseActivitySource.StartQuery(sql, queryId, _settings.Database, _settings.Telemetry);
+        var effectiveQueryId = ResolveQueryId(queryId);
+        using var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
         var stopwatch = Stopwatch.StartNew();
         long totalRows = 0;
         var success = false;
 
-        _logger.LogQueryStarted(queryId, sql);
+        _logger.LogQueryStarted(effectiveQueryId, sql);
 
         Mapping.ITypedRowMapper<T>? mapper = null;
 
         try
         {
-            await SendQueryAsync(sql, cancellationToken);
+            await SendQueryAsync(sql, cancellationToken, effectiveQueryId);
 
             // Register cancellation callback to send Cancel message to server
             await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
@@ -977,7 +1023,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             stopwatch.Stop();
             ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, totalRows, success);
             if (success)
-                _logger.QueryCompleted(queryId, totalRows, stopwatch.Elapsed.TotalMilliseconds);
+                _logger.QueryCompleted(effectiveQueryId, totalRows, stopwatch.Elapsed.TotalMilliseconds);
             else
                 ClickHouseMeter.ErrorsTotal.Add(1);
         }
@@ -1333,14 +1379,16 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         ClickHouseParameterCollection parameters,
         IProgress<QueryProgress>? progress = null,
         CancellationToken cancellationToken = default,
-        IReadOnlyList<string>? rolesOverride = null)
+        IReadOnlyList<string>? rolesOverride = null,
+        string? queryId = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
             throw new InvalidOperationException("Connection is not open.");
 
+        var effectiveQueryId = ResolveQueryId(queryId);
         var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-        await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken);
+        await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
 
         // Register cancellation callback to send Cancel message to server
         await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
@@ -1390,14 +1438,16 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         ClickHouseParameterCollection parameters,
         IProgress<QueryProgress>? progress = null,
         CancellationToken cancellationToken = default,
-        IReadOnlyList<string>? rolesOverride = null)
+        IReadOnlyList<string>? rolesOverride = null,
+        string? queryId = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
             throw new InvalidOperationException("Connection is not open.");
 
+        var effectiveQueryId = ResolveQueryId(queryId);
         var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-        await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken);
+        await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
 
         // Register cancellation callback to send Cancel message to server
         await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
@@ -1441,35 +1491,39 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         string sql,
         ClickHouseParameterCollection parameters,
         CancellationToken cancellationToken = default,
-        IReadOnlyList<string>? rolesOverride = null)
+        IReadOnlyList<string>? rolesOverride = null,
+        string? queryId = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
             throw new InvalidOperationException("Connection is not open.");
 
+        var effectiveQueryId = ResolveQueryId(queryId);
         var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-        await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken);
+        await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
 
         var enumerator = ReadServerMessagesAsync(cancellationToken)
             .GetAsyncEnumerator(cancellationToken);
 
-        return new ClickHouseDataReader(enumerator, this);
+        return new ClickHouseDataReader(enumerator, this, queryId: effectiveQueryId);
     }
 
-    private Task SendQueryAsync(string sql, CancellationToken cancellationToken)
-        => SendQueryAsync(sql, null, rolesOverride: null, cancellationToken);
+    private Task SendQueryAsync(string sql, CancellationToken cancellationToken, string? queryId = null)
+        => SendQueryAsync(sql, null, rolesOverride: null, cancellationToken, queryId);
 
     private Task SendQueryAsync(
         string sql,
         IReadOnlyDictionary<string, string>? parameters,
-        CancellationToken cancellationToken)
-        => SendQueryAsync(sql, parameters, rolesOverride: null, cancellationToken);
+        CancellationToken cancellationToken,
+        string? queryId = null)
+        => SendQueryAsync(sql, parameters, rolesOverride: null, cancellationToken, queryId);
 
     private async Task SendQueryAsync(
         string sql,
         IReadOnlyDictionary<string, string>? parameters,
         IReadOnlyList<string>? rolesOverride,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? queryId = null)
     {
         // Role sync must precede the real query. When rolesOverride is null we fall
         // back to the connection-level default. The sync itself is a plain query, so
@@ -1503,12 +1557,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             NegotiatedProtocolVersion,
             useCompression: _settings.Compress,
             parameters: parameters,
-            settings: querySettings);
+            settings: querySettings,
+            queryId: queryId);
 
         // Track the query ID for cancellation support
         lock (_queryLock)
         {
             _currentQueryId = queryMessage.QueryId;
+            _lastQueryId = queryMessage.QueryId;
         }
 
         var bufferWriter = new ArrayBufferWriter<byte>();
@@ -2114,10 +2170,13 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// </summary>
     /// <param name="sql">The INSERT SQL (e.g., "INSERT INTO table (col1, col2) VALUES").</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="rolesOverride">Optional per-call role override.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     internal async Task SendInsertQueryAsync(
         string sql,
         CancellationToken cancellationToken,
-        IReadOnlyList<string>? rolesOverride = null)
+        IReadOnlyList<string>? rolesOverride = null,
+        string? queryId = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
@@ -2130,13 +2189,21 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         // Set compression state for response handling
         _compressionEnabled = _settings.Compress;
 
+        var effectiveQueryId = ResolveQueryId(queryId);
         var queryMessage = QueryMessage.Create(
             sql,
             _settings.ClientName,
             _settings.Username,
             NegotiatedProtocolVersion,
             useCompression: _settings.Compress,
-            parameters: null);
+            parameters: null,
+            queryId: effectiveQueryId);
+
+        lock (_queryLock)
+        {
+            _currentQueryId = queryMessage.QueryId;
+            _lastQueryId = queryMessage.QueryId;
+        }
 
         var bufferWriter = new ArrayBufferWriter<byte>();
         var writer = new ProtocolWriter(bufferWriter);

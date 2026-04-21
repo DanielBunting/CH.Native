@@ -57,6 +57,14 @@ public sealed class BulkInsertOptions
     public IList<string>? Roles { get; set; }
 
     /// <summary>
+    /// Gets or sets the query ID to send with the INSERT query. When non-null and non-empty,
+    /// the supplied value is used; otherwise the driver generates a GUID. Max length 128
+    /// characters. The resolved ID is observable via
+    /// <see cref="Connection.ClickHouseConnection.CurrentQueryId"/> after <c>InitAsync</c>.
+    /// </summary>
+    public string? QueryId { get; set; }
+
+    /// <summary>
     /// Gets the default options instance.
     /// </summary>
     public static BulkInsertOptions Default { get; } = new();

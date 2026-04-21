@@ -124,6 +124,46 @@ public sealed partial class ClickHouseLogger
         Message = "Circuit breaker for {ServerAddress} state changed: {OldState} -> {NewState}")]
     public partial void CircuitBreakerStateChanged(string serverAddress, string oldState, string newState);
 
+    /// <summary>
+    /// Logs that a circuit breaker has closed (recovery).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 22,
+        Level = LogLevel.Information,
+        Message = "Circuit breaker for {ServerAddress} closed (recovered)")]
+    public partial void CircuitBreakerClosed(string serverAddress);
+
+    /// <summary>
+    /// Logs that a health check failed for a server.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 23,
+        Level = LogLevel.Warning,
+        Message = "Health check failed for {ServerAddress}: {ErrorMessage}")]
+    public partial void HealthCheckFailed(string serverAddress, string errorMessage);
+
+    /// <summary>
+    /// Logs that a previously unhealthy server recovered.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 24,
+        Level = LogLevel.Information,
+        Message = "Health check recovered for {ServerAddress}")]
+    public partial void HealthCheckRecovered(string serverAddress);
+
+    #endregion
+
+    #region Handshake Events
+
+    /// <summary>
+    /// Logs the start of a handshake.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 50,
+        Level = LogLevel.Trace,
+        Message = "Opening handshake to {Host}:{Port}")]
+    public partial void HandshakeStart(string host, int port);
+
     #endregion
 
     #region Protocol Events
@@ -149,6 +189,24 @@ public sealed partial class ClickHouseLogger
         Level = LogLevel.Information,
         Message = "Bulk insert to {TableName} completed: {RowCount} rows in {DurationMs:F1}ms")]
     public partial void BulkInsertCompleted(string tableName, long rowCount, double durationMs);
+
+    /// <summary>
+    /// Logs that a bulk insert batch was flushed to the server.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 51,
+        Level = LogLevel.Debug,
+        Message = "Flushed {RowCount} rows to {TableName}")]
+    public partial void BulkInsertFlushed(string tableName, int rowCount);
+
+    /// <summary>
+    /// Logs that a bulk insert schema was resolved (either from server or cache).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 52,
+        Level = LogLevel.Debug,
+        Message = "Schema resolved for {TableName} ({ColumnCount} cols, fromCache={FromCache})")]
+    public partial void BulkInsertSchemaFetched(string tableName, int columnCount, bool fromCache);
 
     #endregion
 }

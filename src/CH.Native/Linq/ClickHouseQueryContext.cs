@@ -28,6 +28,12 @@ internal sealed class ClickHouseQueryContext
     /// </summary>
     public Type ElementType { get; }
 
+    /// <summary>
+    /// Optional caller-supplied query ID to send on the wire. When null, the driver
+    /// generates a GUID per execution. Set via <c>WithQueryId</c>.
+    /// </summary>
+    public string? QueryId { get; internal set; }
+
     public ClickHouseQueryContext(
         ClickHouseConnection? connection,
         string tableName,

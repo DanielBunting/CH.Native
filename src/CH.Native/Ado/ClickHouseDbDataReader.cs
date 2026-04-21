@@ -22,6 +22,12 @@ public sealed class ClickHouseDbDataReader : DbDataReader
     }
 
     /// <summary>
+    /// Gets the query ID sent on the wire for the underlying query. Matches the value
+    /// in ClickHouse's <c>system.query_log</c>.
+    /// </summary>
+    public string? QueryId => _inner.QueryId;
+
+    /// <summary>
     /// Ensures the reader is initialized (has schema info).
     /// The underlying reader requires ReadAsync() to be called to get schema.
     /// We eagerly init and track the first row so ADO.NET semantics are correct.

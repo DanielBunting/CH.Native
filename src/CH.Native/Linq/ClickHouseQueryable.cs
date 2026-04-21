@@ -81,13 +81,14 @@ public sealed class ClickHouseQueryable<T> : IQueryable<T>, IOrderedQueryable<T>
     {
         var sql = _provider.TranslateToSql(_expression);
         var connection = _provider.Context.Connection;
+        var queryId = _provider.Context.QueryId;
 
         // Use reflection to call QueryAsync<T> to avoid requiring new() constraint on the class
         var queryAsyncMethod = typeof(ClickHouseQueryableHelper)
             .GetMethod(nameof(ClickHouseQueryableHelper.QueryAsync))!
             .MakeGenericMethod(typeof(T));
 
-        var enumerable = (IAsyncEnumerable<T>)queryAsyncMethod.Invoke(null, new object[] { connection, sql, cancellationToken })!;
+        var enumerable = (IAsyncEnumerable<T>)queryAsyncMethod.Invoke(null, new object?[] { connection, sql, queryId, cancellationToken })!;
 
         await foreach (var item in enumerable.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
@@ -111,9 +112,9 @@ public sealed class ClickHouseQueryable<T> : IQueryable<T>, IOrderedQueryable<T>
 /// </summary>
 internal static class ClickHouseQueryableHelper
 {
-    public static IAsyncEnumerable<T> QueryAsync<T>(ClickHouseConnection connection, string sql, CancellationToken cancellationToken)
+    public static IAsyncEnumerable<T> QueryAsync<T>(ClickHouseConnection connection, string sql, string? queryId, CancellationToken cancellationToken)
         where T : new()
     {
-        return connection.QueryAsync<T>(sql, cancellationToken);
+        return connection.QueryAsync<T>(sql, cancellationToken, queryId);
     }
 }

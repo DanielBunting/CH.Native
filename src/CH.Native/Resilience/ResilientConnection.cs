@@ -51,10 +51,12 @@ public sealed class ResilientConnection : IAsyncDisposable
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
 
+        var logger = new Telemetry.ClickHouseLogger(_settings.Telemetry?.LoggerFactory);
+
         // Initialize retry policy if configured
         if (settings.Resilience?.HasRetry == true)
         {
-            _retryPolicy = new RetryPolicy(settings.Resilience.Retry);
+            _retryPolicy = new RetryPolicy(settings.Resilience.Retry, logger);
         }
 
         // Initialize circuit breakers for each server if configured
@@ -62,7 +64,10 @@ public sealed class ResilientConnection : IAsyncDisposable
         {
             foreach (var server in settings.Servers)
             {
-                _circuitBreakers[server] = new CircuitBreaker(settings.Resilience.CircuitBreaker);
+                _circuitBreakers[server] = new CircuitBreaker(settings.Resilience.CircuitBreaker, logger)
+                {
+                    ServerAddress = $"{server.Host}:{server.Port}"
+                };
             }
         }
 
@@ -72,7 +77,9 @@ public sealed class ResilientConnection : IAsyncDisposable
             _healthChecker = new HealthChecker(
                 settings.Servers,
                 settings,
-                settings.Resilience?.HealthCheckInterval);
+                settings.Resilience?.HealthCheckInterval,
+                healthCheckTimeout: null,
+                logger);
             _loadBalancer = new LoadBalancer(_healthChecker, settings.LoadBalancing);
         }
     }
