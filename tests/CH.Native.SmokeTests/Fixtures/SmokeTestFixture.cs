@@ -35,6 +35,9 @@ public class SmokeTestFixture : IAsyncLifetime
     public string NativeConnectionStringWithCompression(string method) =>
         $"Host={Host};Port={NativePort};Username={Username};Password={Password};Compression=true;CompressionMethod={method}";
 
+    public string NativeLazyConnectionString =>
+        $"Host={Host};Port={NativePort};Username={Username};Password={Password};StringMaterialization=Lazy";
+
     public async Task InitializeAsync()
     {
         await _container.StartAsync();

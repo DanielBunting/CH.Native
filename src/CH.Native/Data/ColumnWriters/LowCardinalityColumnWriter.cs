@@ -34,9 +34,13 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
     private const int IndexTypeUInt32 = 2;
     private const int IndexTypeUInt64 = 3;
 
-    // Serialization flags
+    // KeysSerializationVersion — ClickHouse only accepts SharedDictionariesWithAdditionalKeys (1).
+    private const ulong KeysSerializationVersion = 1;
+
+    // Serialization flags — must match ClickHouse's
+    // SerializationLowCardinality::IndexesSerializationType.
     private const ulong HasAdditionalKeysBit = 1UL << 9;
-    private const ulong NeedUpdateDictionary = 1UL << 11;
+    private const ulong NeedUpdateDictionary = 1UL << 10;
 
     /// <summary>
     /// Creates a LowCardinality writer that wraps the specified inner writer.
@@ -87,7 +91,7 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
         if (values.Length == 0)
         {
             // Empty column
-            writer.WriteUInt64(0); // Version
+            writer.WriteUInt64(KeysSerializationVersion);
             writer.WriteUInt64(HasAdditionalKeysBit | NeedUpdateDictionary); // Flags
             writer.WriteUInt64(0); // Dictionary size
             writer.WriteUInt64(0); // Index count
@@ -131,8 +135,7 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
                         dictionary.Count <= 65536 ? IndexTypeUInt16 :
                         dictionary.Count <= int.MaxValue ? IndexTypeUInt32 : IndexTypeUInt64;
 
-        // Write version
-        writer.WriteUInt64(0);
+        writer.WriteUInt64(KeysSerializationVersion);
 
         // Write index type and flags
         ulong flags = (ulong)indexType | HasAdditionalKeysBit | NeedUpdateDictionary;

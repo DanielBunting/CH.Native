@@ -10,237 +10,290 @@ using Xunit;
 
 namespace CH.Native.SmokeTests.Helpers;
 
+// Compares what came back from a native SELECT against a pre-write "source of truth":
+// either the original POCO values (for write→read roundtrip tests) or another
+// reader's output (for read-only cross-client tests). Parameters are named
+// postRead / preWritten because the first argument is what the DB just handed
+// back to us and the second is the ground truth we expected.
 public static class ResultComparer
 {
     public static void AssertResultsEqual(
-        List<object?[]> nativeResults,
-        List<object?[]> driverResults,
+        List<object?[]> postReadResults,
+        List<object?[]> preWrittenResults,
         string? context = null)
     {
         var prefix = context != null ? $"[{context}] " : "";
 
-        Assert.Equal(driverResults.Count, nativeResults.Count);
+        Assert.Equal(preWrittenResults.Count, postReadResults.Count);
 
-        for (int row = 0; row < nativeResults.Count; row++)
+        for (int row = 0; row < postReadResults.Count; row++)
         {
-            Assert.Equal(driverResults[row].Length, nativeResults[row].Length);
+            Assert.Equal(preWrittenResults[row].Length, postReadResults[row].Length);
 
-            for (int col = 0; col < nativeResults[row].Length; col++)
+            for (int col = 0; col < postReadResults[row].Length; col++)
             {
-                var nativeVal = nativeResults[row][col];
-                var driverVal = driverResults[row][col];
+                var postRead = postReadResults[row][col];
+                var preWritten = preWrittenResults[row][col];
 
-                AssertValuesEqual(nativeVal, driverVal, $"{prefix}Row {row}, Col {col}");
+                AssertValuesEqual(postRead, preWritten, $"{prefix}Row {row}, Col {col}");
             }
         }
     }
 
-    public static void AssertValuesEqual(object? nativeVal, object? driverVal, string location)
+    public static void AssertValuesEqual(object? postRead, object? preWritten, string location)
     {
         // Both null
-        if (nativeVal is null && driverVal is null)
+        if (postRead is null && preWritten is null)
             return;
 
         // One null, other not
-        if (nativeVal is null || driverVal is null)
+        if (postRead is null || preWritten is null)
         {
-            Assert.Fail($"{location}: Native={nativeVal ?? "null"}, Driver={driverVal ?? "null"}");
+            Assert.Fail($"{location}: PostRead={postRead ?? "null"}, PreWritten={preWritten ?? "null"}");
             return;
         }
 
         // Same type, direct comparison
-        if (nativeVal.GetType() == driverVal.GetType())
+        if (postRead.GetType() == preWritten.GetType())
         {
-            if (nativeVal is double nd && driverVal is double dd)
+            if (postRead is double prd && preWritten is double pwd)
             {
-                AssertDoublesEqual(nd, dd, location);
+                AssertDoublesEqual(prd, pwd, location);
                 return;
             }
 
-            if (nativeVal is float nf && driverVal is float df)
+            if (postRead is float prf && preWritten is float pwf)
             {
-                AssertFloatsEqual(nf, df, location);
+                AssertFloatsEqual(prf, pwf, location);
                 return;
             }
 
-            if (nativeVal is byte[] nb && driverVal is byte[] db)
+            if (postRead is byte[] prb && preWritten is byte[] pwb)
             {
-                Assert.Equal(db, nb);
+                Assert.Equal(pwb, prb);
                 return;
             }
 
-            if (nativeVal is IList nativeList && driverVal is IList driverList)
+            if (postRead is IList postList && preWritten is IList preList)
             {
-                AssertListsEqual(nativeList, driverList, location);
+                AssertListsEqual(postList, preList, location);
                 return;
             }
 
-            Assert.Equal(driverVal, nativeVal);
+            Assert.Equal(preWritten, postRead);
             return;
         }
 
         // Cross-type normalization
 
         // BigInteger conversions (Int128/UInt128/Int256/UInt256)
-        if (TryNormalizeToBigInteger(nativeVal, out var nativeBi) &&
-            TryNormalizeToBigInteger(driverVal, out var driverBi))
+        if (TryNormalizeToBigInteger(postRead, out var postBi) &&
+            TryNormalizeToBigInteger(preWritten, out var preBi))
         {
-            Assert.Equal(driverBi, nativeBi);
+            Assert.Equal(preBi, postBi);
             return;
         }
 
         // IPAddress normalization
-        if (TryNormalizeToIPAddress(nativeVal, out var nativeIp) &&
-            TryNormalizeToIPAddress(driverVal, out var driverIp))
+        if (TryNormalizeToIPAddress(postRead, out var postIp) &&
+            TryNormalizeToIPAddress(preWritten, out var preIp))
         {
-            Assert.Equal(driverIp, nativeIp);
+            Assert.Equal(preIp, postIp);
             return;
         }
 
         // DateOnly vs DateTime
-        if (nativeVal is DateOnly nativeDateOnly && driverVal is DateTime driverDt)
+        if (postRead is DateOnly postDateOnly && preWritten is DateTime preDt)
         {
-            Assert.Equal(DateOnly.FromDateTime(driverDt), nativeDateOnly);
+            Assert.Equal(DateOnly.FromDateTime(preDt), postDateOnly);
             return;
         }
-        if (nativeVal is DateTime nativeDt2 && driverVal is DateOnly driverDateOnly2)
+        if (postRead is DateTime postDt2 && preWritten is DateOnly preDateOnly2)
         {
-            Assert.Equal(driverDateOnly2, DateOnly.FromDateTime(nativeDt2));
+            Assert.Equal(preDateOnly2, DateOnly.FromDateTime(postDt2));
             return;
         }
 
         // DateTimeOffset vs DateTime (timezone-aware columns)
-        if (nativeVal is DateTimeOffset nativeDto && driverVal is DateTime driverDtUtc)
+        if (postRead is DateTimeOffset postDto && preWritten is DateTime preDtUtc)
         {
-            Assert.Equal(driverDtUtc, nativeDto.UtcDateTime);
+            Assert.Equal(preDtUtc, postDto.UtcDateTime);
             return;
         }
-        if (nativeVal is DateTime nativeDtUtc && driverVal is DateTimeOffset driverDto)
+        if (postRead is DateTime postDtUtc && preWritten is DateTimeOffset preDto)
         {
-            Assert.Equal(driverDto.UtcDateTime, nativeDtUtc);
+            Assert.Equal(preDto.UtcDateTime, postDtUtc);
             return;
         }
 
         // Guid vs string
-        if (nativeVal is Guid nativeGuid && driverVal is string driverGuidStr)
+        if (postRead is Guid postGuid && preWritten is string preGuidStr)
         {
-            Assert.Equal(Guid.Parse(driverGuidStr), nativeGuid);
+            Assert.Equal(Guid.Parse(preGuidStr), postGuid);
             return;
         }
-        if (nativeVal is string nativeGuidStr && driverVal is Guid driverGuid)
+        if (postRead is string postGuidStr && preWritten is Guid preGuid)
         {
-            Assert.Equal(driverGuid, Guid.Parse(nativeGuidStr));
+            Assert.Equal(preGuid, Guid.Parse(postGuidStr));
             return;
         }
 
         // byte[] (FixedString) vs string
-        if (nativeVal is byte[] nativeBytes && driverVal is string driverStr)
+        if (postRead is byte[] postBytes && preWritten is string preStr)
         {
-            var nativeStr = Encoding.UTF8.GetString(nativeBytes).TrimEnd('\0');
-            Assert.Equal(driverStr.TrimEnd('\0'), nativeStr);
+            var postStr = Encoding.UTF8.GetString(postBytes).TrimEnd('\0');
+            Assert.Equal(preStr.TrimEnd('\0'), postStr);
             return;
         }
-        if (nativeVal is string nativeStr2 && driverVal is byte[] driverBytes)
+        if (postRead is string postStr2 && preWritten is byte[] preBytes)
         {
-            var driverStr2 = Encoding.UTF8.GetString(driverBytes).TrimEnd('\0');
-            Assert.Equal(driverStr2, nativeStr2);
+            var preStr2 = Encoding.UTF8.GetString(preBytes).TrimEnd('\0');
+            Assert.Equal(preStr2, postStr2);
             return;
         }
 
         // Float special values as string
-        if (nativeVal is double nativeDouble && driverVal is string driverFloatStr)
+        if (postRead is double postDouble && preWritten is string preFloatStr)
         {
-            AssertDoubleMatchesString(nativeDouble, driverFloatStr, location);
+            AssertDoubleMatchesString(postDouble, preFloatStr, location);
             return;
         }
-        if (nativeVal is string nativeFloatStr && driverVal is double driverDouble)
+        if (postRead is string postFloatStr && preWritten is double preDouble)
         {
-            AssertDoubleMatchesString(driverDouble, nativeFloatStr, location);
+            AssertDoubleMatchesString(preDouble, postFloatStr, location);
             return;
         }
 
         // DateTime with different precision
-        if (nativeVal is DateTime nativeDt && driverVal is DateTime driverDt2b)
+        if (postRead is DateTime postDt && preWritten is DateTime preDt2b)
         {
-            Assert.Equal(driverDt2b, nativeDt);
+            Assert.Equal(preDt2b, postDt);
             return;
         }
 
         // Decimal with potentially different scale
-        if (nativeVal is decimal nativeDec && driverVal is decimal driverDec)
+        if (postRead is decimal postDec && preWritten is decimal preDec)
         {
-            Assert.Equal(driverDec, nativeDec);
+            Assert.Equal(preDec, postDec);
             return;
         }
 
         // ClickHouseDecimal cross-type: CH.Native.Numerics.ClickHouseDecimal vs ClickHouse.Driver.Numerics.ClickHouseDecimal
         // Both are BigInteger-backed with identical ToString formatting — compare by string representation.
-        if (nativeVal is NativeClickHouseDecimal nativeChd && driverVal is ClickHouseDecimal driverChd)
+        if (postRead is NativeClickHouseDecimal postChd && preWritten is ClickHouseDecimal preChd)
         {
             Assert.Equal(
-                driverChd.ToString(CultureInfo.InvariantCulture),
-                nativeChd.ToString(null, CultureInfo.InvariantCulture));
+                preChd.ToString(CultureInfo.InvariantCulture),
+                postChd.ToString(null, CultureInfo.InvariantCulture));
+            return;
+        }
+
+        // CH.Native.Numerics.ClickHouseDecimal vs System.Decimal — reader returns
+        // ClickHouseDecimal for wide Decimal types (128/256) even when the value fits
+        // in a CLR decimal. Compare numerically; ClickHouseDecimal preserves scale so
+        // ToString differs from decimal's trailing-zero-stripped format.
+        if (postRead is NativeClickHouseDecimal postChd2 && preWritten is decimal prePlain)
+        {
+            Assert.True(postChd2.CompareTo(prePlain) == 0,
+                $"{location}: ClickHouseDecimal {postChd2} != decimal {prePlain}");
+            return;
+        }
+        if (postRead is decimal postPlain && preWritten is NativeClickHouseDecimal preChd2)
+        {
+            Assert.True(preChd2.CompareTo(postPlain) == 0,
+                $"{location}: decimal {postPlain} != ClickHouseDecimal {preChd2}");
+            return;
+        }
+
+        // ITuple (read-back) vs IList (pre-written as object[]) — surface when a POCO
+        // represents a Tuple column as object[].
+        if (postRead is ITuple postT && preWritten is IList preL && preWritten is not ITuple)
+        {
+            Assert.Equal(preL.Count, postT.Length);
+            for (int i = 0; i < postT.Length; i++)
+                AssertValuesEqual(postT[i], preL[i], $"{location}.Item{i + 1}");
+            return;
+        }
+        if (postRead is IList postL && preWritten is ITuple preT && postRead is not ITuple)
+        {
+            Assert.Equal(preT.Length, postL.Count);
+            for (int i = 0; i < preT.Length; i++)
+                AssertValuesEqual(postL[i], preT[i], $"{location}.Item{i + 1}");
             return;
         }
 
         // IList cross-type
-        if (nativeVal is IList nList && driverVal is IList dList)
+        if (postRead is IList postIList && preWritten is IList preIList)
         {
-            AssertListsEqual(nList, dList, location);
+            AssertListsEqual(postIList, preIList, location);
             return;
         }
 
-        // ITuple cross-type (System.Tuple instances from different drivers)
-        if (nativeVal is ITuple nativeTuple && driverVal is ITuple driverTuple)
+        // ITuple cross-type (different concrete tuple kinds from different sources)
+        if (postRead is ITuple postTuple && preWritten is ITuple preTuple)
         {
-            Assert.Equal(driverTuple.Length, nativeTuple.Length);
-            for (int i = 0; i < nativeTuple.Length; i++)
-                AssertValuesEqual(nativeTuple[i], driverTuple[i], $"{location}.Item{i + 1}");
+            Assert.Equal(preTuple.Length, postTuple.Length);
+            for (int i = 0; i < postTuple.Length; i++)
+                AssertValuesEqual(postTuple[i], preTuple[i], $"{location}.Item{i + 1}");
             return;
         }
 
         // sbyte/short/int/long numeric conversions
-        if (IsNumeric(nativeVal) && IsNumeric(driverVal))
+        if (IsNumeric(postRead) && IsNumeric(preWritten))
         {
-            var nativeDecimal = Convert.ToDecimal(nativeVal);
-            var driverDecimal = Convert.ToDecimal(driverVal);
-            Assert.Equal(driverDecimal, nativeDecimal);
+            var postDecimal = Convert.ToDecimal(postRead);
+            var preDecimal = Convert.ToDecimal(preWritten);
+            Assert.Equal(preDecimal, postDecimal);
+            return;
+        }
+
+        // IDictionary cross-type — element-by-element so inner value normalization
+        // (e.g. byte[] ↔ string for FixedString values) applies.
+        if (postRead is IDictionary postDict && preWritten is IDictionary preDict)
+        {
+            Assert.Equal(preDict.Count, postDict.Count);
+            foreach (DictionaryEntry preEntry in preDict)
+            {
+                Assert.True(postDict.Contains(preEntry.Key),
+                    $"{location}: post-read dict missing key {preEntry.Key}");
+                AssertValuesEqual(postDict[preEntry.Key], preEntry.Value, $"{location}[{preEntry.Key}]");
+            }
             return;
         }
 
         // String representation fallback
-        if (nativeVal is string || driverVal is string)
+        if (postRead is string || preWritten is string)
         {
-            Assert.Equal(driverVal?.ToString(), nativeVal?.ToString());
+            Assert.Equal(preWritten?.ToString(), postRead?.ToString());
             return;
         }
 
-        Assert.Equal(driverVal, nativeVal);
+        Assert.Equal(preWritten, postRead);
     }
 
-    private static void AssertDoublesEqual(double native, double driver, string location)
+    private static void AssertDoublesEqual(double postRead, double preWritten, string location)
     {
-        if (double.IsNaN(native) && double.IsNaN(driver)) return;
-        if (double.IsPositiveInfinity(native) && double.IsPositiveInfinity(driver)) return;
-        if (double.IsNegativeInfinity(native) && double.IsNegativeInfinity(driver)) return;
+        if (double.IsNaN(postRead) && double.IsNaN(preWritten)) return;
+        if (double.IsPositiveInfinity(postRead) && double.IsPositiveInfinity(preWritten)) return;
+        if (double.IsNegativeInfinity(postRead) && double.IsNegativeInfinity(preWritten)) return;
 
         // Check for -0.0
-        if (IsNegativeZero(native) && IsNegativeZero(driver)) return;
-        if (IsNegativeZero(native) != IsNegativeZero(driver))
+        if (IsNegativeZero(postRead) && IsNegativeZero(preWritten)) return;
+        if (IsNegativeZero(postRead) != IsNegativeZero(preWritten))
         {
-            Assert.Fail($"{location}: -0.0 mismatch. Native={native}, Driver={driver}");
+            Assert.Fail($"{location}: -0.0 mismatch. PostRead={postRead}, PreWritten={preWritten}");
             return;
         }
 
-        Assert.Equal(driver, native);
+        Assert.Equal(preWritten, postRead);
     }
 
-    private static void AssertFloatsEqual(float native, float driver, string location)
+    private static void AssertFloatsEqual(float postRead, float preWritten, string location)
     {
-        if (float.IsNaN(native) && float.IsNaN(driver)) return;
-        if (float.IsPositiveInfinity(native) && float.IsPositiveInfinity(driver)) return;
-        if (float.IsNegativeInfinity(native) && float.IsNegativeInfinity(driver)) return;
-        Assert.Equal(driver, native);
+        if (float.IsNaN(postRead) && float.IsNaN(preWritten)) return;
+        if (float.IsPositiveInfinity(postRead) && float.IsPositiveInfinity(preWritten)) return;
+        if (float.IsNegativeInfinity(postRead) && float.IsNegativeInfinity(preWritten)) return;
+        Assert.Equal(preWritten, postRead);
     }
 
     private static bool IsNegativeZero(double d) =>
@@ -261,13 +314,13 @@ public static class ResultComparer
         Assert.Fail($"{location}: Cannot compare double {d} with string '{s}'");
     }
 
-    private static void AssertListsEqual(IList nativeList, IList driverList, string location)
+    private static void AssertListsEqual(IList postList, IList preList, string location)
     {
-        Assert.Equal(driverList.Count, nativeList.Count);
+        Assert.Equal(preList.Count, postList.Count);
 
-        for (int i = 0; i < nativeList.Count; i++)
+        for (int i = 0; i < postList.Count; i++)
         {
-            AssertValuesEqual(nativeList[i], driverList[i], $"{location}[{i}]");
+            AssertValuesEqual(postList[i], preList[i], $"{location}[{i}]");
         }
     }
 
