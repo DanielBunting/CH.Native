@@ -174,6 +174,14 @@ public sealed class ColumnWriterRegistryBuilder
         // JSON type
         Register(new ColumnWriters.JsonColumnWriter());
 
+        // Geo types (aliases for existing Tuple/Array wire formats)
+        Register(new ColumnWriters.PointColumnWriter());
+        Register(new ColumnWriters.RingColumnWriter());
+        Register(new ColumnWriters.LineStringColumnWriter());
+        Register(new ColumnWriters.MultiLineStringColumnWriter());
+        Register(new ColumnWriters.PolygonColumnWriter());
+        Register(new ColumnWriters.MultiPolygonColumnWriter());
+
         return this;
     }
 

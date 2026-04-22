@@ -52,6 +52,14 @@ if (args.Length > 0)
             RunAllBenchmarks();
             break;
 
+        // Geo benchmarks (no Docker required — unit-level)
+        case "geo":
+            BenchmarkRunner.Run<GeoColumnBenchmarks>();
+            break;
+        case "geocompare":
+            BenchmarkRunner.Run<GeoComparisonBenchmarks>();
+            break;
+
         // JSON benchmarks (requires Docker with ClickHouse 25.6+)
         case "jsoncolumn":
             BenchmarkRunner.Run<JsonColumnBenchmarks>();
@@ -120,6 +128,10 @@ static void PrintUsage()
         Synthetic Benchmarks (no Docker required):
           parser      - Type parser benchmarks
           bulk        - Bulk insert serialization benchmarks
+          geo         - Geo column reader/writer/skipper benchmarks
+
+        Protocol Comparison Benchmarks (requires Docker):
+          geocompare  - Geo types: CH.Native (native TCP) vs ClickHouse.Driver (HTTP)
 
         Protocol Comparison Benchmarks (requires Docker):
           simple      - Simple query latency (SELECT 1, COUNT, 100 rows)

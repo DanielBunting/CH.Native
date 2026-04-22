@@ -268,6 +268,14 @@ public sealed class ColumnSkipperRegistryBuilder
         // JSON type
         Register(new JsonColumnSkipper());
 
+        // Geo types (aliases for existing Tuple/Array wire formats)
+        Register(new PointColumnSkipper());
+        Register(new RingColumnSkipper());
+        Register(new LineStringColumnSkipper());
+        Register(new MultiLineStringColumnSkipper());
+        Register(new PolygonColumnSkipper());
+        Register(new MultiPolygonColumnSkipper());
+
         return this;
     }
 

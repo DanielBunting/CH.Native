@@ -12,6 +12,12 @@ public class ClickHouseTypeParserTests
     [InlineData("Float64")]
     [InlineData("Bool")]
     [InlineData("UUID")]
+    [InlineData("Point")]
+    [InlineData("Ring")]
+    [InlineData("LineString")]
+    [InlineData("MultiLineString")]
+    [InlineData("Polygon")]
+    [InlineData("MultiPolygon")]
     public void Parse_SimpleType_ReturnsCorrectBaseName(string typeName)
     {
         var result = ClickHouseTypeParser.Parse(typeName);
@@ -20,6 +26,16 @@ public class ClickHouseTypeParserTests
         Assert.False(result.IsParameterized);
         Assert.Empty(result.TypeArguments);
         Assert.Empty(result.Parameters);
+    }
+
+    [Fact]
+    public void Parse_NullablePoint_HasPointInnerType()
+    {
+        var result = ClickHouseTypeParser.Parse("Nullable(Point)");
+
+        Assert.Equal("Nullable", result.BaseName);
+        Assert.Single(result.TypeArguments);
+        Assert.Equal("Point", result.TypeArguments[0].BaseName);
     }
 
     [Theory]

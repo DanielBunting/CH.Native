@@ -193,6 +193,14 @@ public sealed class ColumnReaderRegistryBuilder
         // JSON type
         Register(new ColumnReaders.JsonColumnReader());
 
+        // Geo types (aliases for existing Tuple/Array wire formats)
+        Register(new ColumnReaders.PointColumnReader());
+        Register(new ColumnReaders.RingColumnReader());
+        Register(new ColumnReaders.LineStringColumnReader());
+        Register(new ColumnReaders.MultiLineStringColumnReader());
+        Register(new ColumnReaders.PolygonColumnReader());
+        Register(new ColumnReaders.MultiPolygonColumnReader());
+
         return this;
     }
 
