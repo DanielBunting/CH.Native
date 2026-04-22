@@ -1,7 +1,10 @@
+using System.Buffers;
 using System.Linq.Expressions;
 using System.Net;
 using System.Numerics;
 using System.Reflection;
+using CH.Native.Data;
+using CH.Native.Data.Variant;
 using CH.Native.Numerics;
 using CH.Native.Protocol;
 
@@ -102,6 +105,12 @@ public static class ColumnExtractorFactory
 
             // IP addresses
             Type t when t == typeof(IPAddress) => CreateIPAddressExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable),
+
+            // Variant — direct extractor that buckets per-arm and writes via the registered
+            // inner column writer for each arm. Eliminates the reflection+boxing fallback that
+            // otherwise fires for any POCO containing a ClickHouseVariant property.
+            Type t when t == typeof(ClickHouseVariant) =>
+                CreateVariantExtractor<TRow>(property, columnName, clickHouseType),
 
             // No direct extractor available for this type
             _ => throw new NotSupportedException(
@@ -459,6 +468,28 @@ public static class ColumnExtractorFactory
         var isIPv6 = clickHouseType.Contains("IPv6");
         var getter = CreateTypedGetter<TRow, IPAddress?>(property);
         return new IPAddressExtractor<TRow>(getter, columnName, clickHouseType, isIPv6, isClickHouseNullable);
+    }
+
+    private static IColumnExtractor<TRow> CreateVariantExtractor<TRow>(
+        PropertyInfo property,
+        string columnName,
+        string clickHouseType)
+    {
+        // Resolve per-arm inner writers once at extractor construction time. We need
+        // ColumnWriterRegistry.Default because BulkInserter doesn't expose its registry
+        // through the column-extractor contract; the registry is process-shared anyway.
+        var parsed = Data.Types.ClickHouseTypeParser.Parse(clickHouseType);
+        if (!parsed.IsVariant)
+            throw new NotSupportedException(
+                $"Variant extractor requires a Variant(T1, T2, ...) type; got '{clickHouseType}'.");
+
+        var armWriters = new IColumnWriter[parsed.TypeArguments.Count];
+        var writerFactory = new ColumnWriterFactory(ColumnWriterRegistry.Default);
+        for (int i = 0; i < parsed.TypeArguments.Count; i++)
+            armWriters[i] = writerFactory.CreateWriter(parsed.TypeArguments[i].OriginalTypeName);
+
+        var getter = CreateTypedGetter<TRow, ClickHouseVariant>(property);
+        return new VariantExtractor<TRow>(getter, columnName, clickHouseType, armWriters);
     }
 
     private static Func<TRow, TValue> CreateTypedGetter<TRow, TValue>(PropertyInfo property)
@@ -1593,4 +1624,87 @@ public static class ColumnExtractorFactory
     }
 
     #endregion
+
+    /// <summary>
+    /// Extractor for Variant(T1, T2, ...) columns. Buckets rows per-arm and delegates each
+    /// arm's packed write to the registered inner column writer. Avoids the boxed-column
+    /// fallback path so POCOs containing <see cref="ClickHouseVariant"/> properties can be
+    /// bulk-inserted without reflection-boxing every value.
+    /// </summary>
+    private sealed class VariantExtractor<TRow> : IColumnExtractor<TRow>
+    {
+        private const ulong DiscriminatorVersion0 = 0;
+
+        private readonly Func<TRow, ClickHouseVariant> _getter;
+        private readonly IColumnWriter[] _armWriters;
+
+        public string ColumnName { get; }
+        public string TypeName { get; }
+
+        public VariantExtractor(
+            Func<TRow, ClickHouseVariant> getter,
+            string columnName,
+            string typeName,
+            IColumnWriter[] armWriters)
+        {
+            _getter = getter;
+            ColumnName = columnName;
+            TypeName = typeName;
+            _armWriters = armWriters;
+        }
+
+        public void ExtractAndWrite(ref ProtocolWriter writer, IReadOnlyList<TRow> rows, int rowCount)
+        {
+            writer.WriteUInt64(DiscriminatorVersion0);
+
+            if (rowCount == 0)
+                return;
+
+            var armCount = _armWriters.Length;
+
+            // First pass: collect discriminator bytes into a pooled buffer, tallying arm counts.
+            var counts = armCount <= 32 ? stackalloc int[armCount] : new int[armCount];
+            var discPooled = ArrayPool<byte>.Shared.Rent(rowCount);
+            var discSpan = discPooled.AsSpan(0, rowCount);
+            for (int i = 0; i < rowCount; i++)
+            {
+                var v = _getter(rows[i]);
+                var disc = v.Discriminator;
+                discSpan[i] = disc;
+                if (disc == ClickHouseVariant.NullDiscriminator) continue;
+                if (disc >= armCount)
+                    throw new ArgumentOutOfRangeException(
+                        nameof(rows),
+                        $"Row {i} has Variant discriminator {disc} but column declares only {armCount} arms.");
+                counts[disc]++;
+            }
+            writer.WriteBytes(discSpan);
+
+            // Second pass: per arm, materialise a bucket of exact length and delegate.
+            // The buckets can't be pooled because IColumnWriter iterates values.Length —
+            // they are the only irreducible allocation on this hot path.
+            var buckets = ArrayPool<object?[]>.Shared.Rent(armCount);
+            try
+            {
+                for (int arm = 0; arm < armCount; arm++)
+                    buckets[arm] = counts[arm] == 0 ? Array.Empty<object?>() : new object?[counts[arm]];
+
+                var cursors = armCount <= 32 ? stackalloc int[armCount] : new int[armCount];
+                for (int i = 0; i < rowCount; i++)
+                {
+                    var disc = discSpan[i];
+                    if (disc == ClickHouseVariant.NullDiscriminator) continue;
+                    buckets[disc][cursors[disc]++] = _getter(rows[i]).Value;
+                }
+
+                for (int arm = 0; arm < armCount; arm++)
+                    _armWriters[arm].WriteColumn(ref writer, buckets[arm]);
+            }
+            finally
+            {
+                ArrayPool<object?[]>.Shared.Return(buckets, clearArray: true);
+                ArrayPool<byte>.Shared.Return(discPooled);
+            }
+        }
+    }
 }

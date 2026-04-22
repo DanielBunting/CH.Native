@@ -1,3 +1,5 @@
+using CH.Native.Data.Variant;
+
 namespace CH.Native.Data;
 
 /// <summary>
@@ -60,6 +62,19 @@ public sealed class TypedBlock : IDisposable
     public TypedColumn<T> GetColumn<T>(int index)
     {
         return (TypedColumn<T>)Columns[index];
+    }
+
+    /// <summary>
+    /// Reads a single Variant cell as <see cref="VariantValue{T0,T1}"/> without boxing.
+    /// The column at <paramref name="column"/> must be a <see cref="VariantTypedColumn"/>
+    /// with 2 arms whose element types match <typeparamref name="T0"/> and <typeparamref name="T1"/>.
+    /// </summary>
+    public VariantValue<T0, T1> GetVariant<T0, T1>(int row, int column)
+    {
+        if (Columns[column] is not VariantTypedColumn variant)
+            throw new InvalidCastException(
+                $"Column {column} is not a VariantTypedColumn (element type {Columns[column].ElementType}).");
+        return variant.GetTyped<T0, T1>(row);
     }
 
     /// <summary>

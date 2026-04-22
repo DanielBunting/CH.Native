@@ -6,13 +6,29 @@ namespace CH.Native.Data.ColumnSkippers;
 /// Column skipper for JSON values.
 /// </summary>
 /// <remarks>
-/// JSON columns have a serialization version prefix (UInt64) followed by data.
-/// Version 1 (string serialization) is supported, where each value is a length-prefixed UTF-8 string.
+/// Supports:
+/// <list type="bullet">
+/// <item><description>Version 1 — string serialisation (length-prefixed UTF-8).</description></item>
+/// <item><description>Version 0 — flat typed-path binary format (requires a factory for inner skippers).</description></item>
+/// </list>
+/// Version 3 (typed paths + Dynamic sub-column) is not yet fully implemented.
 /// </remarks>
 public sealed class JsonColumnSkipper : IColumnSkipper
 {
-    // JSON serialization versions from ClickHouse
+    private const ulong JsonDeprecatedObjectSerializationVersion = 0;
     private const ulong JsonStringSerializationVersion = 1;
+    private const ulong JsonObjectSerializationVersion = 3;
+
+    private readonly ColumnSkipperFactory? _factory;
+
+    public JsonColumnSkipper()
+    {
+    }
+
+    public JsonColumnSkipper(ColumnSkipperFactory factory)
+    {
+        _factory = factory;
+    }
 
     /// <inheritdoc />
     public string TypeName => "JSON";
@@ -20,13 +36,11 @@ public sealed class JsonColumnSkipper : IColumnSkipper
     /// <inheritdoc />
     public bool TrySkipColumn(ref ProtocolReader reader, int rowCount)
     {
-        // Read the serialization version (UInt64) that precedes the column data
         if (!reader.TryReadUInt64(out var serializationVersion))
             return false;
 
         if (serializationVersion == JsonStringSerializationVersion)
         {
-            // Version 1: JSON is serialized as strings
             for (int i = 0; i < rowCount; i++)
             {
                 if (!reader.TrySkipString())
@@ -34,14 +48,44 @@ public sealed class JsonColumnSkipper : IColumnSkipper
             }
             return true;
         }
-        else
+
+        if (serializationVersion == JsonDeprecatedObjectSerializationVersion && _factory is not null)
         {
-            // Version 0 or 3 (object format) cannot be reliably skipped without
-            // understanding the complex internal structure
-            throw new NotSupportedException(
-                $"Cannot skip JSON column with serialization version {serializationVersion}. " +
-                "Only string serialization (version 1) is supported. " +
-                "Set 'output_format_native_write_json_as_string=1' in your ClickHouse settings.");
+            return TrySkipVersion0(ref reader, rowCount);
         }
+
+        throw new NotSupportedException(
+            $"Cannot skip JSON column with serialization version {serializationVersion}. " +
+            "Version 1 (string) is supported directly, version 0 is supported when a factory is attached, " +
+            "version 3 is not yet implemented. " +
+            "Set 'output_format_native_write_json_as_string=1' in your ClickHouse settings to use string serialization.");
+    }
+
+    private bool TrySkipVersion0(ref ProtocolReader reader, int rowCount)
+    {
+        if (!reader.TryReadUInt64(out var pathCountU)) return false;
+        var pathCount = (int)pathCountU;
+
+        var typeNames = new string[pathCount];
+        for (int i = 0; i < pathCount; i++)
+        {
+            if (!reader.TrySkipString()) return false; // path name
+        }
+        for (int i = 0; i < pathCount; i++)
+        {
+            try { typeNames[i] = reader.ReadString(); }
+            catch { return false; }
+        }
+
+        for (int i = 0; i < pathCount; i++)
+        {
+            IColumnSkipper inner;
+            try { inner = _factory!.CreateSkipper(typeNames[i]); }
+            catch { return false; }
+
+            if (!inner.TrySkipColumn(ref reader, rowCount)) return false;
+        }
+
+        return true;
     }
 }

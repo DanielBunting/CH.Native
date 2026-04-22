@@ -195,7 +195,7 @@ public static class ClickHouseTypeParser
         private bool IsTypeArgumentType(string baseName)
         {
             // These types have nested type arguments, not just literal parameters
-            return baseName is "Nullable" or "Array" or "Map" or "Tuple" or "LowCardinality" or "Nested";
+            return baseName is "Nullable" or "Array" or "Map" or "Tuple" or "LowCardinality" or "Nested" or "Variant";
         }
 
         private bool IsLiteralStart()

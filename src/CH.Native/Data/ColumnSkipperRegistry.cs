@@ -46,8 +46,9 @@ public sealed class ColumnSkipperRegistry
         // Handle parameterized types using the factory with caching
         var baseType = ExtractBaseType(typeName);
 
-        // Check if this is a composite type that needs factory handling
-        if (IsCompositeType(baseType))
+        // Check if this is a composite type that needs factory handling.
+        // Also handle bare parameterless composites like `Dynamic`.
+        if (IsCompositeType(baseType) || IsCompositeType(typeName))
         {
             // Use GetOrAdd to ensure thread-safe caching of parameterized type skippers
             return _parameterizedCache.GetOrAdd(typeName, static (key, registry) =>
@@ -82,7 +83,7 @@ public sealed class ColumnSkipperRegistry
         return baseType is "Nullable" or "Array" or "Map" or "Tuple" or "LowCardinality"
             or "FixedString" or "DateTime" or "DateTime64" or "Time64" or "Nested"
             or "Decimal" or "Decimal32" or "Decimal64" or "Decimal128" or "Decimal256"
-            or "JSON";
+            or "JSON" or "Variant" or "Dynamic";
     }
 
     /// <summary>

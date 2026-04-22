@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Frozen;
 
 namespace CH.Native.Data;
@@ -8,6 +9,8 @@ namespace CH.Native.Data;
 public sealed class ColumnReaderRegistry
 {
     private readonly FrozenDictionary<string, IColumnReader> _readers;
+    private readonly ConcurrentDictionary<string, IColumnReader> _compositeCache = new(StringComparer.Ordinal);
+    private ColumnReaderFactory? _factory;
 
     /// <summary>
     /// Gets the default registry with all built-in column readers (eager string materialization).
@@ -47,11 +50,16 @@ public sealed class ColumnReaderRegistry
         // Handle parameterized types using the factory
         var baseType = ExtractBaseType(typeName);
 
-        // Check if this is a composite type that needs factory handling
-        if (IsCompositeType(baseType))
+        // Check if this is a composite type that needs factory handling.
+        // Also handle bare parameterless composites like `Dynamic`.
+        if (IsCompositeType(baseType) || IsCompositeType(typeName))
         {
-            var factory = new ColumnReaderFactory(this);
-            return factory.CreateReader(typeName);
+            if (_compositeCache.TryGetValue(typeName, out var cached))
+                return cached;
+
+            var factory = _factory ??= new ColumnReaderFactory(this);
+            var built = factory.CreateReader(typeName);
+            return _compositeCache.GetOrAdd(typeName, built);
         }
 
         // For simple parameterized types (e.g., Enum8('foo' = 1)), try base type lookup
@@ -79,7 +87,7 @@ public sealed class ColumnReaderRegistry
         return baseType is "Nullable" or "Array" or "Map" or "Tuple" or "LowCardinality" or "Nested"
             or "FixedString" or "DateTime" or "DateTime64" or "Time64"
             or "Decimal" or "Decimal32" or "Decimal64" or "Decimal128" or "Decimal256"
-            or "JSON";
+            or "JSON" or "Variant" or "Dynamic";
     }
 
     /// <summary>

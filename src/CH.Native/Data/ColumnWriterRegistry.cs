@@ -36,8 +36,10 @@ public sealed class ColumnWriterRegistry
         // Handle parameterized types using the factory
         var baseType = ExtractBaseType(typeName);
 
-        // Check if this is a composite type that needs factory handling
-        if (IsCompositeType(baseType))
+        // Check if this is a composite type that needs factory handling.
+        // Also handle bare parameterless composites like `Dynamic` whose baseType is null
+        // because there are no parens.
+        if (IsCompositeType(baseType) || IsCompositeType(typeName))
         {
             var factory = new ColumnWriterFactory(this);
             return factory.CreateWriter(typeName);
@@ -68,7 +70,7 @@ public sealed class ColumnWriterRegistry
         return baseType is "Nullable" or "Array" or "Map" or "Tuple" or "LowCardinality" or "Nested"
             or "FixedString" or "DateTime" or "DateTime64" or "Time64"
             or "Decimal" or "Decimal32" or "Decimal64" or "Decimal128" or "Decimal256"
-            or "JSON";
+            or "JSON" or "Variant" or "Dynamic";
     }
 
     /// <summary>

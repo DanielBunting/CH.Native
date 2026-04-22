@@ -180,7 +180,11 @@ public sealed class BufferWriterPool
     /// <summary>
     /// Gets the default shared pool instance.
     /// </summary>
-    public static BufferWriterPool Shared { get; } = new(initialCapacity: 4096, maxRetainedCapacity: 64 * 1024);
+    // Retain up to 1 MB per pooled writer — this matches ArrayPool<byte>.Shared's typical
+    // per-bucket ceiling and lets hot bulk-insert paths reuse the 500–700 KB buffers they
+    // need per block without re-renting them every flush. Previously capped at 64 KB which
+    // forced a shrink-and-regrow cycle on every non-trivial block.
+    public static BufferWriterPool Shared { get; } = new(initialCapacity: 4096, maxRetainedCapacity: 1024 * 1024);
 
     /// <summary>
     /// Creates a new buffer writer pool.

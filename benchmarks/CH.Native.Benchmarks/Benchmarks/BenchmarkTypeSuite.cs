@@ -1,6 +1,8 @@
 using System.Net;
 using BenchmarkDotNet.Attributes;
 using CH.Native.Benchmarks.Infrastructure;
+using CH.Native.Data.Dynamic;
+using CH.Native.Data.Variant;
 using NativeConnection = CH.Native.Connection.ClickHouseConnection;
 using DriverConnection = ClickHouse.Driver.ADO.ClickHouseConnection;
 
@@ -56,6 +58,8 @@ public class BenchmarkTypeSuite
     private const string TIPv4 = "ts_ipv4";
     private const string TIPv6 = "ts_ipv6";
     private const string TDecimal64 = "ts_dec64";
+    private const string TVariant = "ts_variant";
+    private const string TDynamic = "ts_dynamic";
 
     private NativeConnection _native = null!;
     private DriverConnection _driver = null!;
@@ -69,6 +73,8 @@ public class BenchmarkTypeSuite
         _native = new NativeConnection(manager.NativeConnectionString);
         await _native.OpenAsync();
         await _native.ExecuteNonQueryAsync("SET enable_time_time64_type=1");
+        await _native.ExecuteNonQueryAsync("SET allow_experimental_variant_type=1");
+        await _native.ExecuteNonQueryAsync("SET allow_experimental_dynamic_type=1");
 
         _driver = new DriverConnection(manager.DriverConnectionString);
         await _driver.OpenAsync();
@@ -103,6 +109,14 @@ public class BenchmarkTypeSuite
         await EnsureAsync(TIPv4, "IPv4", "toIPv4('10.0.0.0') + number % 65536");
         await EnsureAsync(TIPv6, "IPv6", "toIPv6(concat('::1.0.0.', toString(number % 256)))");
         await EnsureAsync(TDecimal64, "Decimal64(4)", "toDecimal64(number * 1.234, 4)");
+        await EnsureVariantAsync(
+            TVariant,
+            "Variant(Int64, String)",
+            "if(number % 2 = 0, CAST(toInt64(number) AS Variant(Int64, String)), CAST(concat('s', toString(number)) AS Variant(Int64, String)))");
+        await EnsureVariantAsync(
+            TDynamic,
+            "Dynamic",
+            "if(number % 2 = 0, CAST(toInt64(number) AS Dynamic), CAST(concat('s', toString(number)) AS Dynamic))");
     }
 
     [GlobalCleanup]
@@ -127,6 +141,23 @@ public class BenchmarkTypeSuite
             INSERT INTO {table}
             SELECT number AS id, {genExpr} AS v FROM numbers({BulkRowCount})
             SETTINGS enable_time_time64_type=1");
+    }
+
+    private async Task EnsureVariantAsync(string table, string columnType, string genExpr)
+    {
+        await _native.ExecuteNonQueryAsync($@"
+            CREATE TABLE IF NOT EXISTS {table} (id UInt64, v {columnType})
+            ENGINE = MergeTree() ORDER BY id
+            SETTINGS allow_experimental_variant_type=1, allow_experimental_dynamic_type=1");
+
+        var existing = await _native.ExecuteScalarAsync<ulong>($"SELECT count() FROM {table}");
+        if (existing == (ulong)BulkRowCount) return;
+
+        await _native.ExecuteNonQueryAsync($"TRUNCATE TABLE {table}");
+        await _native.ExecuteNonQueryAsync($@"
+            INSERT INTO {table}
+            SELECT number AS id, {genExpr} AS v FROM numbers({BulkRowCount})
+            SETTINGS allow_experimental_variant_type=1, allow_experimental_dynamic_type=1");
     }
 
     // --- Native helpers ---
@@ -228,6 +259,9 @@ public class BenchmarkTypeSuite
     [Benchmark] public Task<long> Bulk_Native_IPv4() => NativeBulkRefAsync<IPAddress>(TIPv4);
     [Benchmark] public Task<long> Bulk_Native_IPv6() => NativeBulkRefAsync<IPAddress>(TIPv6);
     [Benchmark] public Task<long> Bulk_Native_Decimal64() => NativeBulkAsync<decimal>(TDecimal64);
+    [Benchmark] public Task<long> Bulk_Native_Variant() => NativeBulkAsync<ClickHouseVariant>(TVariant);
+    [Benchmark] public Task<long> Bulk_Native_Variant_Typed() => NativeBulkAsync<VariantValue<long, string>>(TVariant);
+    [Benchmark] public Task<long> Bulk_Native_Dynamic() => NativeBulkAsync<ClickHouseDynamic>(TDynamic);
 
     // --- Bulk Driver ---
     [Benchmark] public Task<long> Bulk_Driver_Int8() => DriverBulkAsync(TInt8);
@@ -260,6 +294,8 @@ public class BenchmarkTypeSuite
     [Benchmark] public Task<long> Bulk_Driver_IPv4() => DriverBulkAsync(TIPv4);
     [Benchmark] public Task<long> Bulk_Driver_IPv6() => DriverBulkAsync(TIPv6);
     [Benchmark] public Task<long> Bulk_Driver_Decimal64() => DriverBulkAsync(TDecimal64);
+    [Benchmark] public Task<long> Bulk_Driver_Variant() => DriverBulkAsync(TVariant);
+    [Benchmark] public Task<long> Bulk_Driver_Dynamic() => DriverBulkAsync(TDynamic);
 
     // --- Single Native ---
     [Benchmark] public Task<sbyte> Single_Native_Int8() => NativeSingleAsync<sbyte>(TInt8);
@@ -292,6 +328,9 @@ public class BenchmarkTypeSuite
     [Benchmark] public Task<IPAddress?> Single_Native_IPv4() => NativeSingleRefAsync<IPAddress>(TIPv4);
     [Benchmark] public Task<IPAddress?> Single_Native_IPv6() => NativeSingleRefAsync<IPAddress>(TIPv6);
     [Benchmark] public Task<decimal> Single_Native_Decimal64() => NativeSingleAsync<decimal>(TDecimal64);
+    [Benchmark] public Task<ClickHouseVariant> Single_Native_Variant() => NativeSingleAsync<ClickHouseVariant>(TVariant);
+    [Benchmark] public Task<VariantValue<long, string>> Single_Native_Variant_Typed() => NativeSingleAsync<VariantValue<long, string>>(TVariant);
+    [Benchmark] public Task<ClickHouseDynamic> Single_Native_Dynamic() => NativeSingleAsync<ClickHouseDynamic>(TDynamic);
 
     // --- Single Driver ---
     [Benchmark] public Task<object?> Single_Driver_Int8() => DriverSingleAsync(TInt8);
@@ -324,4 +363,6 @@ public class BenchmarkTypeSuite
     [Benchmark] public Task<object?> Single_Driver_IPv4() => DriverSingleAsync(TIPv4);
     [Benchmark] public Task<object?> Single_Driver_IPv6() => DriverSingleAsync(TIPv6);
     [Benchmark] public Task<object?> Single_Driver_Decimal64() => DriverSingleAsync(TDecimal64);
+    [Benchmark] public Task<object?> Single_Driver_Variant() => DriverSingleAsync(TVariant);
+    [Benchmark] public Task<object?> Single_Driver_Dynamic() => DriverSingleAsync(TDynamic);
 }

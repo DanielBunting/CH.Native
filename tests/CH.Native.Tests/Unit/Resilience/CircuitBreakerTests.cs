@@ -499,8 +499,9 @@ public class CircuitBreakerTests
 
         breaker.Reset();
 
-        // Wait for async event dispatch
-        await Task.Delay(50);
+        // Poll for async event dispatch (Task.Run) to complete on loaded CI runners
+        for (int i = 0; i < 50 && stateChanges.Count < 1; i++)
+            await Task.Delay(20);
 
         Assert.Single(stateChanges);
         Assert.Equal(CircuitBreakerState.Open, stateChanges[0].OldState);
@@ -519,19 +520,23 @@ public class CircuitBreakerTests
 
         breaker.RecordFailure(); // Triggers Open
 
-        await Task.Delay(50); // Wait for HalfOpen transition
+        // Poll until OpenDuration has elapsed so the next State read transitions to HalfOpen
+        for (int i = 0; i < 50; i++)
+        {
+            await Task.Delay(20);
+            if (breaker.State == CircuitBreakerState.HalfOpen)
+                break;
+        }
 
         var stateChanges = new List<CircuitBreakerStateChangedEventArgs>();
         breaker.OnStateChanged += (_, args) => stateChanges.Add(args);
 
-        // Trigger HalfOpen by accessing state, then success to close
-        _ = breaker.State;
         breaker.RecordSuccess();
 
-        // Wait for async event dispatch
-        await Task.Delay(50);
+        // Poll for async event dispatch (Task.Run) to complete on loaded CI runners
+        for (int i = 0; i < 50 && stateChanges.Count < 1; i++)
+            await Task.Delay(20);
 
-        // Should have HalfOpen transition and then Closed transition
         Assert.True(stateChanges.Count >= 1);
         var closeEvent = stateChanges.FirstOrDefault(e => e.NewState == CircuitBreakerState.Closed);
         Assert.NotNull(closeEvent);

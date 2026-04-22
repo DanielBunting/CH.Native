@@ -24,6 +24,11 @@ public sealed class ColumnReaderFactory
     /// <exception cref="NotSupportedException">Thrown if the type is not supported.</exception>
     public IColumnReader CreateReader(string typeName)
     {
+        // JSON needs the factory reference for binary-format (v0/v3) decoding.
+        // Bypass the registry so we always attach `this` to the reader.
+        if (typeName == "JSON")
+            return new ColumnReaders.JsonColumnReader(this);
+
         // Try direct registry lookup first for simple types
         if (_registry.TryGetReader(typeName, out var directReader))
             return directReader!;
@@ -44,7 +49,9 @@ public sealed class ColumnReaderFactory
             "Tuple" => CreateTupleReader(type),
             "Nested" => CreateNestedReader(type),
             "LowCardinality" => CreateLowCardinalityReader(type),
-            "JSON" => new ColumnReaders.JsonColumnReader(),
+            "Variant" => CreateVariantReader(type),
+            "Dynamic" => CreateDynamicReader(type),
+            "JSON" => new ColumnReaders.JsonColumnReader(this),
 
             // Parameterized simple types
             "FixedString" => CreateFixedStringReader(type),
@@ -81,6 +88,11 @@ public sealed class ColumnReaderFactory
             throw new FormatException($"Nullable requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
+        if (innerType.IsDynamic)
+            throw new FormatException("Nullable(Dynamic) is not allowed — Dynamic already represents NULL via its discriminator.");
+        if (innerType.IsVariant)
+            throw new FormatException("Nullable(Variant) is not allowed — Variant already represents NULL via its discriminator.");
+
         var innerReader = CreateReaderForType(innerType);
 
         // For lazy string mode, use the specialized lazy nullable string reader
@@ -178,6 +190,11 @@ public sealed class ColumnReaderFactory
             throw new FormatException($"LowCardinality requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
+        if (innerType.IsDynamic)
+            throw new FormatException("LowCardinality(Dynamic) is not allowed by ClickHouse.");
+        if (innerType.IsVariant)
+            throw new FormatException("LowCardinality(Variant) is not allowed by ClickHouse.");
+
         var isNullable = innerType.BaseName == "Nullable" && innerType.TypeArguments.Count == 1;
 
         // For Nullable inner types, ClickHouse serializes the LowCardinality dictionary
@@ -196,6 +213,34 @@ public sealed class ColumnReaderFactory
 
         var readerType = typeof(LowCardinalityColumnReader<>).MakeGenericType(innerReader.ClrType);
         return (IColumnReader)Activator.CreateInstance(readerType, innerReader, isNullable)!;
+    }
+
+    private IColumnReader CreateVariantReader(ClickHouseType type)
+    {
+        if (type.TypeArguments.Count == 0)
+            throw new FormatException($"Variant requires at least one arm, got: {type.OriginalTypeName}");
+
+        foreach (var arm in type.TypeArguments)
+        {
+            if (arm.IsNullable)
+                throw new FormatException(
+                    $"Nullable is not allowed inside Variant (arm: {arm.OriginalTypeName}). ClickHouse represents NULL via the Variant discriminator.");
+            if (arm.IsLowCardinality)
+                throw new FormatException(
+                    $"LowCardinality is not allowed inside Variant (arm: {arm.OriginalTypeName}).");
+        }
+
+        var innerReaders = type.TypeArguments
+            .Select(CreateReaderForType)
+            .ToArray();
+
+        return new ColumnReaders.VariantColumnReader(innerReaders);
+    }
+
+    private IColumnReader CreateDynamicReader(ClickHouseType type)
+    {
+        var maxTypes = type.GetDynamicMaxTypes();
+        return new ColumnReaders.DynamicColumnReader(this, maxTypes);
     }
 
     private IColumnReader CreateFixedStringReader(ClickHouseType type)
