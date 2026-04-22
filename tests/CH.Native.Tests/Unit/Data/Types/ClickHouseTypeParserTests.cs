@@ -385,4 +385,117 @@ public class ClickHouseTypeParserTests
         Assert.Single(result.Parameters);
         Assert.Equal("max_dynamic_paths=100", result.Parameters[0]);
     }
+
+    // Variant tests
+
+    [Fact]
+    public void Parse_VariantSingleArm_ParsesCorrectly()
+    {
+        var result = ClickHouseTypeParser.Parse("Variant(String)");
+
+        Assert.Equal("Variant", result.BaseName);
+        Assert.True(result.IsVariant);
+        Assert.Single(result.TypeArguments);
+        Assert.Equal("String", result.TypeArguments[0].BaseName);
+    }
+
+    [Fact]
+    public void Parse_VariantTwoArms_PreservesOrder()
+    {
+        var result = ClickHouseTypeParser.Parse("Variant(Int64, String)");
+
+        Assert.True(result.IsVariant);
+        Assert.Equal(2, result.TypeArguments.Count);
+        Assert.Equal("Int64", result.TypeArguments[0].BaseName);
+        Assert.Equal("String", result.TypeArguments[1].BaseName);
+    }
+
+    [Fact]
+    public void Parse_VariantWithNestedArms_ParsesCorrectly()
+    {
+        var result = ClickHouseTypeParser.Parse("Variant(Int64, Array(String), Map(String, Int32))");
+
+        Assert.True(result.IsVariant);
+        Assert.Equal(3, result.TypeArguments.Count);
+        Assert.Equal("Int64", result.TypeArguments[0].BaseName);
+        Assert.Equal("Array", result.TypeArguments[1].BaseName);
+        Assert.Equal("String", result.TypeArguments[1].TypeArguments[0].BaseName);
+        Assert.Equal("Map", result.TypeArguments[2].BaseName);
+    }
+
+    [Fact]
+    public void Parse_VariantPreservesArmOrder_WhenTypesSwapped()
+    {
+        var a = ClickHouseTypeParser.Parse("Variant(Int64, String)");
+        var b = ClickHouseTypeParser.Parse("Variant(String, Int64)");
+
+        Assert.Equal("Int64", a.TypeArguments[0].BaseName);
+        Assert.Equal("String", b.TypeArguments[0].BaseName);
+    }
+
+    [Fact]
+    public void CreateReader_VariantWithNullableArm_RejectsAtFactory()
+    {
+        var factory = new CH.Native.Data.ColumnReaderFactory(CH.Native.Data.ColumnReaderRegistry.Default);
+
+        var ex = Assert.Throws<FormatException>(() => factory.CreateReader("Variant(Nullable(Int64), String)"));
+        Assert.Contains("Nullable", ex.Message);
+    }
+
+    [Fact]
+    public void CreateReader_VariantWithLowCardinalityArm_RejectsAtFactory()
+    {
+        var factory = new CH.Native.Data.ColumnReaderFactory(CH.Native.Data.ColumnReaderRegistry.Default);
+
+        var ex = Assert.Throws<FormatException>(() => factory.CreateReader("Variant(LowCardinality(String), Int64)"));
+        Assert.Contains("LowCardinality", ex.Message);
+    }
+
+    // Dynamic tests
+
+    [Fact]
+    public void Parse_Dynamic_NoParams_ParsesCorrectly()
+    {
+        var result = ClickHouseTypeParser.Parse("Dynamic");
+
+        Assert.Equal("Dynamic", result.BaseName);
+        Assert.True(result.IsDynamic);
+        Assert.False(result.IsParameterized);
+        Assert.Equal(32, result.GetDynamicMaxTypes());
+    }
+
+    [Fact]
+    public void Parse_DynamicWithMaxTypes_ReadsParameter()
+    {
+        var result = ClickHouseTypeParser.Parse("Dynamic(max_types=64)");
+
+        Assert.True(result.IsDynamic);
+        Assert.Single(result.Parameters);
+        Assert.Equal(64, result.GetDynamicMaxTypes());
+    }
+
+    [Fact]
+    public void Parse_ArrayOfDynamic_ParsesCorrectly()
+    {
+        var result = ClickHouseTypeParser.Parse("Array(Dynamic)");
+
+        Assert.Equal("Array", result.BaseName);
+        Assert.True(result.TypeArguments[0].IsDynamic);
+    }
+
+    [Fact]
+    public void CreateReader_NullableDynamic_IsRejected()
+    {
+        var factory = new CH.Native.Data.ColumnReaderFactory(CH.Native.Data.ColumnReaderRegistry.Default);
+        var ex = Assert.Throws<FormatException>(() => factory.CreateReader("Nullable(Dynamic)"));
+        Assert.Contains("Nullable(Dynamic)", ex.Message);
+    }
+
+    [Fact]
+    public void CreateReader_LowCardinalityDynamic_IsRejected()
+    {
+        var factory = new CH.Native.Data.ColumnReaderFactory(CH.Native.Data.ColumnReaderRegistry.Default);
+        var ex = Assert.Throws<FormatException>(() => factory.CreateReader("LowCardinality(Dynamic)"));
+        Assert.Contains("LowCardinality(Dynamic)", ex.Message);
+    }
 }

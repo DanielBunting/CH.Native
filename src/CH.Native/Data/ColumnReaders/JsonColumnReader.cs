@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Text.Json;
+using CH.Native.Data.Json;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnReaders;
@@ -9,20 +10,37 @@ namespace CH.Native.Data.ColumnReaders;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This reader supports ClickHouse 25.6+ JSON columns. When the server sends JSON with
-/// serialization version 1 (string format), data is read as length-prefixed UTF-8 strings.
+/// Supports three ClickHouse JSON serialization versions:
+/// <list type="bullet">
+/// <item><description><b>Version 1</b> — JSON-as-string (default when <c>output_format_native_write_json_as_string=1</c>).</description></item>
+/// <item><description><b>Version 0</b> — legacy flat typed-path "object" format, routed through <see cref="JsonBinaryDecoder"/>.</description></item>
+/// <item><description><b>Version 3</b> — typed paths plus a <c>Dynamic</c> sub-column. Experimental; requires Dynamic support.</description></item>
+/// </list>
 /// </para>
 /// <para>
-/// <b>Important:</b> <see cref="JsonDocument"/> is <see cref="IDisposable"/>.
-/// Callers are responsible for disposing returned documents.
+/// <b>Important:</b> <see cref="JsonDocument"/> is <see cref="IDisposable"/>. Callers are responsible
+/// for disposing returned documents.
 /// </para>
 /// </remarks>
 public sealed class JsonColumnReader : IColumnReader<JsonDocument>
 {
-    // JSON serialization versions from ClickHouse
     private const ulong JsonDeprecatedObjectSerializationVersion = 0;
     private const ulong JsonStringSerializationVersion = 1;
     private const ulong JsonObjectSerializationVersion = 3;
+
+    private readonly ColumnReaderFactory? _factory;
+
+    public JsonColumnReader()
+    {
+    }
+
+    /// <summary>
+    /// Creates a JSON reader with a factory reference; required to decode binary formats (v0/v3).
+    /// </summary>
+    public JsonColumnReader(ColumnReaderFactory factory)
+    {
+        _factory = factory;
+    }
 
     /// <inheritdoc />
     public string TypeName => "JSON";
@@ -40,29 +58,20 @@ public sealed class JsonColumnReader : IColumnReader<JsonDocument>
     /// <inheritdoc />
     public TypedColumn<JsonDocument> ReadTypedColumn(ref ProtocolReader reader, int rowCount)
     {
-        // Read the serialization version (UInt64) that precedes the column data
         var serializationVersion = reader.ReadUInt64();
 
         if (serializationVersion == JsonStringSerializationVersion)
-        {
-            // Version 1: JSON is serialized as strings - simple and compatible
             return ReadStringSerializedColumn(ref reader, rowCount);
-        }
-        else if (serializationVersion == JsonDeprecatedObjectSerializationVersion ||
-                 serializationVersion == JsonObjectSerializationVersion)
-        {
-            // Version 0 or 3: Complex object serialization
-            throw new NotSupportedException(
-                $"JSON serialization version {serializationVersion} (object format) is not supported. " +
-                "Set 'output_format_native_write_json_as_string=1' in your ClickHouse settings or append " +
-                "'SETTINGS output_format_native_write_json_as_string=1' to your query to use string serialization.");
-        }
-        else
-        {
-            throw new NotSupportedException(
-                $"Unknown JSON serialization version: {serializationVersion}. " +
-                "This may indicate an incompatible ClickHouse server version.");
-        }
+
+        if (serializationVersion == JsonDeprecatedObjectSerializationVersion)
+            return ReadBinaryColumn(ref reader, rowCount, version: 0);
+
+        if (serializationVersion == JsonObjectSerializationVersion)
+            return ReadBinaryColumn(ref reader, rowCount, version: 3);
+
+        throw new NotSupportedException(
+            $"Unknown JSON serialization version: {serializationVersion}. " +
+            "This may indicate an incompatible ClickHouse server version.");
     }
 
     private static TypedColumn<JsonDocument> ReadStringSerializedColumn(ref ProtocolReader reader, int rowCount)
@@ -77,6 +86,33 @@ public sealed class JsonColumnReader : IColumnReader<JsonDocument>
         }
 
         return new TypedColumn<JsonDocument>(values, rowCount, pool);
+    }
+
+    private TypedColumn<JsonDocument> ReadBinaryColumn(ref ProtocolReader reader, int rowCount, int version)
+    {
+        if (_factory is null)
+            throw new NotSupportedException(
+                $"JSON serialization version {version} (binary/object format) requires a ColumnReaderFactory. " +
+                "This decoder path is routed by the connection layer; if you're constructing JsonColumnReader directly, " +
+                "use the constructor that accepts a ColumnReaderFactory. Alternatively, set " +
+                "'output_format_native_write_json_as_string=1' in your ClickHouse settings to fall back to string mode.");
+
+        if (version == 0)
+        {
+            var docs = JsonBinaryDecoder.DecodeVersion0(ref reader, rowCount, _factory);
+            return new TypedColumn<JsonDocument>(docs);
+        }
+
+        // Version 3 binary decoding is experimental: a typed-path section followed by a Dynamic
+        // sub-column. Implementation deferred until wire-format bytes are verified against a
+        // concrete ClickHouse reference; throw a descriptive error in the meantime so callers
+        // know to fall back to string serialization.
+        throw new NotSupportedException(
+            "JSON serialization version 3 (typed paths + Dynamic sub-column) is not yet fully implemented. " +
+            "The Variant and Dynamic readers are in place (see VariantColumnReader / DynamicColumnReader); " +
+            "connecting them into the JSON path table requires a verified wire-format trace from " +
+            "ClickHouse's SerializationJSON.cpp. " +
+            "Set 'output_format_native_write_json_as_string=1' in your ClickHouse settings to use string serialization.");
     }
 
     ITypedColumn IColumnReader.ReadTypedColumn(ref ProtocolReader reader, int rowCount)

@@ -1,6 +1,9 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Reflection;
 using CH.Native.Connection;
 using CH.Native.Data;
+using CH.Native.Data.Variant;
 using CH.Native.Protocol.Messages;
 
 namespace CH.Native.Results;
@@ -138,6 +141,15 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
     /// <returns>The typed value at the specified column.</returns>
     public T GetFieldValue<T>(int ordinal)
     {
+        // Fast path: VariantValue<T0, T1> — skip the boxed ClickHouseVariant materialisation
+        // and read directly from VariantTypedColumn arm columns.
+        if (VariantValueDispatcher<T>.IsVariantValue)
+        {
+            EnsureCanRead();
+            ValidateOrdinal(ordinal);
+            return VariantValueDispatcher<T>.Read(_currentBlock!, _currentRowIndex, ordinal);
+        }
+
         var value = GetValue(ordinal);
 
         if (value is null)
@@ -431,4 +443,32 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
             throw new ArgumentOutOfRangeException(nameof(ordinal),
                 $"Ordinal {ordinal} is out of range. Valid range: 0 to {columns.Length - 1}.");
     }
+}
+
+/// <summary>
+/// Per-T cached dispatcher that detects <c>VariantValue&lt;T0, T1&gt;</c> and invokes
+/// <see cref="TypedBlock.GetVariant{T0,T1}"/> via a closed delegate, avoiding reflection
+/// on the hot read path.
+/// </summary>
+internal static class VariantValueDispatcher<T>
+{
+    public static readonly bool IsVariantValue;
+    private static readonly Func<TypedBlock, int, int, T>? _reader;
+
+    static VariantValueDispatcher()
+    {
+        var t = typeof(T);
+        if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(VariantValue<,>))
+        {
+            var args = t.GetGenericArguments();
+            var method = typeof(TypedBlock)
+                .GetMethod(nameof(TypedBlock.GetVariant), BindingFlags.Instance | BindingFlags.Public)!
+                .MakeGenericMethod(args[0], args[1]);
+            _reader = (Func<TypedBlock, int, int, T>)Delegate.CreateDelegate(
+                typeof(Func<TypedBlock, int, int, T>), method);
+            IsVariantValue = true;
+        }
+    }
+
+    public static T Read(TypedBlock block, int row, int column) => _reader!(block, row, column);
 }

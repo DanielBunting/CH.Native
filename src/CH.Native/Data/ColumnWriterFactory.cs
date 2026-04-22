@@ -43,6 +43,8 @@ public sealed class ColumnWriterFactory
             "Map" => CreateMapWriter(type),
             "Tuple" => CreateTupleWriter(type),
             "LowCardinality" => CreateLowCardinalityWriter(type),
+            "Variant" => CreateVariantWriter(type),
+            "Dynamic" => CreateDynamicWriter(type),
             "JSON" => new JsonColumnWriter(),
 
             // Parameterized simple types
@@ -80,6 +82,11 @@ public sealed class ColumnWriterFactory
             throw new FormatException($"Nullable requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
+        if (innerType.IsDynamic)
+            throw new FormatException("Nullable(Dynamic) is not allowed.");
+        if (innerType.IsVariant)
+            throw new FormatException("Nullable(Variant) is not allowed.");
+
         var innerWriter = CreateWriterForType(innerType);
 
         // Use reflection to create the appropriate generic nullable writer
@@ -145,6 +152,11 @@ public sealed class ColumnWriterFactory
             throw new FormatException($"LowCardinality requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
+        if (innerType.IsDynamic)
+            throw new FormatException("LowCardinality(Dynamic) is not allowed by ClickHouse.");
+        if (innerType.IsVariant)
+            throw new FormatException("LowCardinality(Variant) is not allowed by ClickHouse.");
+
         var isNullable = innerType.BaseName == "Nullable" && innerType.TypeArguments.Count == 1;
 
         // For Nullable inner types, ClickHouse serializes the LowCardinality dictionary
@@ -163,6 +175,34 @@ public sealed class ColumnWriterFactory
 
         var writerType = typeof(LowCardinalityColumnWriter<>).MakeGenericType(innerWriter.ClrType);
         return (IColumnWriter)Activator.CreateInstance(writerType, innerWriter, isNullable)!;
+    }
+
+    private IColumnWriter CreateVariantWriter(ClickHouseType type)
+    {
+        if (type.TypeArguments.Count == 0)
+            throw new FormatException($"Variant requires at least one arm, got: {type.OriginalTypeName}");
+
+        foreach (var arm in type.TypeArguments)
+        {
+            if (arm.IsNullable)
+                throw new FormatException(
+                    $"Nullable is not allowed inside Variant (arm: {arm.OriginalTypeName}). ClickHouse represents NULL via the Variant discriminator.");
+            if (arm.IsLowCardinality)
+                throw new FormatException(
+                    $"LowCardinality is not allowed inside Variant (arm: {arm.OriginalTypeName}).");
+        }
+
+        var innerWriters = type.TypeArguments
+            .Select(CreateWriterForType)
+            .ToArray();
+
+        return new VariantColumnWriter(innerWriters);
+    }
+
+    private IColumnWriter CreateDynamicWriter(ClickHouseType type)
+    {
+        var maxTypes = type.GetDynamicMaxTypes();
+        return new DynamicColumnWriter(this, maxTypes);
     }
 
     private IColumnWriter CreateFixedStringWriter(ClickHouseType type)

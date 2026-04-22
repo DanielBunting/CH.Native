@@ -24,6 +24,10 @@ public sealed class ColumnSkipperFactory
     /// <exception cref="NotSupportedException">Thrown if the type is not supported.</exception>
     public IColumnSkipper CreateSkipper(string typeName)
     {
+        // JSON needs the factory reference to skip binary (v0/v3) formats.
+        if (typeName == "JSON")
+            return new JsonColumnSkipper(this);
+
         // Try direct registry lookup first for simple types
         if (_registry.TryGetSkipper(typeName, out var directSkipper))
             return directSkipper!;
@@ -44,7 +48,9 @@ public sealed class ColumnSkipperFactory
             "Tuple" => CreateTupleSkipper(type),
             "Nested" => CreateNestedSkipper(type),
             "LowCardinality" => CreateLowCardinalitySkipper(type),
-            "JSON" => new JsonColumnSkipper(),
+            "Variant" => CreateVariantSkipper(type),
+            "Dynamic" => new DynamicColumnSkipper(this, type.OriginalTypeName),
+            "JSON" => new JsonColumnSkipper(this),
 
             // Parameterized simple types
             "FixedString" => CreateFixedStringSkipper(type),
@@ -81,6 +87,11 @@ public sealed class ColumnSkipperFactory
             throw new FormatException($"Nullable requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
+        if (innerType.IsDynamic)
+            throw new FormatException("Nullable(Dynamic) is not allowed.");
+        if (innerType.IsVariant)
+            throw new FormatException("Nullable(Variant) is not allowed.");
+
         var innerSkipper = CreateSkipperForType(innerType);
 
         return new NullableColumnSkipper(innerSkipper, innerType.OriginalTypeName);
@@ -152,6 +163,10 @@ public sealed class ColumnSkipperFactory
             throw new FormatException($"LowCardinality requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
+        if (innerType.IsDynamic)
+            throw new FormatException("LowCardinality(Dynamic) is not allowed by ClickHouse.");
+        if (innerType.IsVariant)
+            throw new FormatException("LowCardinality(Variant) is not allowed by ClickHouse.");
 
         // For Nullable inner types, ClickHouse serializes the LowCardinality dictionary
         // using the base type (without the Nullable wrapper). Strip it for correct skipping.
@@ -164,6 +179,31 @@ public sealed class ColumnSkipperFactory
 
         var innerSkipper = CreateSkipperForType(innerType);
         return new LowCardinalityColumnSkipper(innerSkipper, innerType.OriginalTypeName);
+    }
+
+    private IColumnSkipper CreateVariantSkipper(ClickHouseType type)
+    {
+        if (type.TypeArguments.Count == 0)
+            throw new FormatException($"Variant requires at least one arm, got: {type.OriginalTypeName}");
+
+        foreach (var arm in type.TypeArguments)
+        {
+            if (arm.IsNullable)
+                throw new FormatException(
+                    $"Nullable is not allowed inside Variant (arm: {arm.OriginalTypeName}).");
+            if (arm.IsLowCardinality)
+                throw new FormatException(
+                    $"LowCardinality is not allowed inside Variant (arm: {arm.OriginalTypeName}).");
+        }
+
+        var innerSkippers = type.TypeArguments
+            .Select(CreateSkipperForType)
+            .ToArray();
+        var innerTypeNames = type.TypeArguments
+            .Select(t => t.OriginalTypeName)
+            .ToArray();
+
+        return new VariantColumnSkipper(innerSkippers, innerTypeNames);
     }
 
     private IColumnSkipper CreateFixedStringSkipper(ClickHouseType type)

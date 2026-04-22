@@ -60,6 +60,17 @@ if (args.Length > 0)
             BenchmarkRunner.Run<GeoComparisonBenchmarks>();
             break;
 
+        // Variant benchmarks (micro: no Docker; compare: requires Docker)
+        case "variant":
+            BenchmarkRunner.Run<VariantColumnBenchmarks>();
+            break;
+        case "variantcompare":
+            BenchmarkRunner.Run<VariantComparisonBenchmarks>();
+            break;
+        case "opt":
+            BenchmarkRunner.Run<OptimizationBenchmarks>();
+            break;
+
         // JSON benchmarks (requires Docker with ClickHouse 25.6+)
         case "jsoncolumn":
             BenchmarkRunner.Run<JsonColumnBenchmarks>();

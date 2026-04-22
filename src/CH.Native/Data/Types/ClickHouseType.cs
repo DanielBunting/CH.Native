@@ -113,6 +113,39 @@ public sealed class ClickHouseType
     /// </summary>
     public bool IsNested => BaseName == "Nested";
 
+    /// <summary>
+    /// Whether this is a Variant(T1, T2, …) tagged-union type.
+    /// </summary>
+    public bool IsVariant => BaseName == "Variant";
+
+    /// <summary>
+    /// Whether this is a Dynamic or Dynamic(max_types=N) self-describing variant type.
+    /// </summary>
+    public bool IsDynamic => BaseName == "Dynamic";
+
+    /// <summary>
+    /// Returns the max_types parameter for a Dynamic type, defaulting to 32 when unspecified.
+    /// </summary>
+    public int GetDynamicMaxTypes()
+    {
+        if (!IsDynamic)
+            throw new InvalidOperationException($"GetDynamicMaxTypes is only valid on Dynamic types, not {BaseName}.");
+
+        foreach (var param in Parameters)
+        {
+            var eq = param.IndexOf('=');
+            if (eq < 0) continue;
+            var key = param.AsSpan(0, eq).Trim();
+            if (key.SequenceEqual("max_types"))
+            {
+                var value = param.AsSpan(eq + 1).Trim();
+                if (int.TryParse(value, out var n))
+                    return n;
+            }
+        }
+        return 32;
+    }
+
     public override string ToString()
     {
         if (!IsParameterized)
