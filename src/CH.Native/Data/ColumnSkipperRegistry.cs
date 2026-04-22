@@ -276,6 +276,9 @@ public sealed class ColumnSkipperRegistryBuilder
         Register(new PolygonColumnSkipper());
         Register(new MultiPolygonColumnSkipper());
 
+        // Geometry — discriminated union over the six geo arms (ClickHouse Variant internally)
+        Register(new GeometryColumnSkipper());
+
         return this;
     }
 

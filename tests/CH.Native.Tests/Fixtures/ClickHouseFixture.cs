@@ -14,7 +14,7 @@ public class ClickHouseFixture : IAsyncLifetime
     private const string TestPassword = "test_password";
 
     private readonly ClickHouseContainer _container = new ClickHouseBuilder()
-        .WithImage("clickhouse/clickhouse-server:25.10")
+        .WithImage("clickhouse/clickhouse-server:26.2")
         .WithUsername(TestUsername)
         .WithPassword(TestPassword)
         .WithWaitStrategy(Wait.ForUnixContainer()

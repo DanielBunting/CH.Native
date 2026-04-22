@@ -25,9 +25,12 @@ public class GeoColumnBenchmarks
     private const int RingRowCount = 1_000;
     private const int RingAveragePoints = 16;
     private const int MultiPolygonRowCount = 100;
+    private const int GeometryRowCount = 1_000;
 
     private byte[] _pointColumnBytes = null!;
     private byte[] _ringColumnBytes = null!;
+    private byte[] _geometryColumnBytes = null!;
+    private Geometry[] _geometryValues = null!;
     private byte[] _multiPolygonColumnBytes = null!;
 
     private Point[] _pointValues = null!;
@@ -61,9 +64,33 @@ public class GeoColumnBenchmarks
             _multiPolygonValues[i] = new Point[][][] { poly1, poly2 };
         }
 
+        // Geometry — mixed-arm discriminated union. Distribute rows across arms in a realistic mix
+        // (Points are common; polygons less so). One NULL every 10 rows.
+        _geometryValues = new Geometry[GeometryRowCount];
+        for (int i = 0; i < GeometryRowCount; i++)
+        {
+            if (i % 10 == 0)
+            {
+                _geometryValues[i] = Geometry.Null;
+            }
+            else
+            {
+                _geometryValues[i] = (i % 6) switch
+                {
+                    0 => Geometry.From(new Point(rng.NextDouble(), rng.NextDouble())),
+                    1 => Geometry.FromRing(GenerateRing(rng, 4)),
+                    2 => Geometry.FromLineString(GenerateRing(rng, 4)),
+                    3 => Geometry.FromPolygon(new Point[][] { GenerateRing(rng, 4) }),
+                    4 => Geometry.FromMultiLineString(new Point[][] { GenerateRing(rng, 4), GenerateRing(rng, 4) }),
+                    _ => Geometry.FromMultiPolygon(new Point[][][] { new Point[][] { GenerateRing(rng, 4) } }),
+                };
+            }
+        }
+
         _pointColumnBytes = SerializeColumn(new PointColumnWriter(), _pointValues);
         _ringColumnBytes = SerializeColumn(new RingColumnWriter(), _ringValues);
         _multiPolygonColumnBytes = SerializeColumn(new MultiPolygonColumnWriter(), _multiPolygonValues);
+        _geometryColumnBytes = SerializeColumn(new GeometryColumnWriter(), _geometryValues);
     }
 
     private static Point[] GenerateRing(Random rng, int count)
@@ -158,6 +185,32 @@ public class GeoColumnBenchmarks
     {
         var reader = new ProtocolReader(new ReadOnlySequence<byte>(_multiPolygonColumnBytes));
         return new MultiPolygonColumnSkipper().TrySkipColumn(ref reader, MultiPolygonRowCount);
+    }
+
+    // --- Geometry (discriminated union over all six arms) ---
+
+    [Benchmark(Description = "Read 1K Geometry (mixed arms)")]
+    public int Reader_GeometryColumn()
+    {
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(_geometryColumnBytes));
+        using var column = new GeometryColumnReader().ReadTypedColumn(ref reader, GeometryRowCount);
+        return column.Count;
+    }
+
+    [Benchmark(Description = "Write 1K Geometry (mixed arms)")]
+    public int Writer_GeometryColumn()
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+        new GeometryColumnWriter().WriteColumn(ref writer, _geometryValues);
+        return buffer.WrittenCount;
+    }
+
+    [Benchmark(Description = "Skip 1K Geometry")]
+    public bool Skipper_GeometryColumn()
+    {
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(_geometryColumnBytes));
+        return new GeometryColumnSkipper().TrySkipColumn(ref reader, GeometryRowCount);
     }
 
     // --- Delegation-overhead comparison: Point via alias vs raw Tuple(Float64, Float64) ---

@@ -182,6 +182,9 @@ public sealed class ColumnWriterRegistryBuilder
         Register(new ColumnWriters.PolygonColumnWriter());
         Register(new ColumnWriters.MultiPolygonColumnWriter());
 
+        // Geometry — discriminated union over the six geo arms (ClickHouse Variant internally)
+        Register(new ColumnWriters.GeometryColumnWriter());
+
         return this;
     }
 

@@ -18,6 +18,7 @@ public class ClickHouseTypeParserTests
     [InlineData("MultiLineString")]
     [InlineData("Polygon")]
     [InlineData("MultiPolygon")]
+    [InlineData("Geometry")]
     public void Parse_SimpleType_ReturnsCorrectBaseName(string typeName)
     {
         var result = ClickHouseTypeParser.Parse(typeName);

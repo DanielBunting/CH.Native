@@ -201,6 +201,9 @@ public sealed class ColumnReaderRegistryBuilder
         Register(new ColumnReaders.PolygonColumnReader());
         Register(new ColumnReaders.MultiPolygonColumnReader());
 
+        // Geometry — discriminated union over the six geo arms (ClickHouse Variant internally)
+        Register(new ColumnReaders.GeometryColumnReader());
+
         return this;
     }
 

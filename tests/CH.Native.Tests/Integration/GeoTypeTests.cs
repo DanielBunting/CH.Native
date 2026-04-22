@@ -309,10 +309,16 @@ public class GeoTypeTests
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
-        var ex = await Assert.ThrowsAsync<CH.Native.Exceptions.ClickHouseServerException>(() =>
+        // ClickHouse error message changed across server versions; the consistent signal is
+        // that some ClickHouseServerException is thrown on CREATE TABLE. Assert the shape and
+        // confirm the table was NOT created — that's the actual contract.
+        await Assert.ThrowsAsync<CH.Native.Exceptions.ClickHouseServerException>(() =>
             connection.ExecuteNonQueryAsync(
                 $"CREATE TABLE {tableName} (id Int32, geom Nullable(Point)) ENGINE = Memory"));
-        Assert.Contains("cannot be inside Nullable", ex.Message, StringComparison.OrdinalIgnoreCase);
+
+        var exists = await connection.ExecuteScalarAsync<byte>(
+            $"SELECT count() > 0 FROM system.tables WHERE name = '{tableName}'");
+        Assert.Equal(0, exists);
     }
 
     #region Test POCOs
