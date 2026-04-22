@@ -10,7 +10,7 @@ public class SmokeTestFixture : IAsyncLifetime
     private const string TestPassword = "smoke_password";
 
     private readonly ClickHouseContainer _container = new ClickHouseBuilder()
-        .WithImage("clickhouse/clickhouse-server:25.3")
+        .WithImage("clickhouse/clickhouse-server:25.11")
         .WithUsername(TestUsername)
         .WithPassword(TestPassword)
         .WithPortBinding(9000, true)
@@ -34,6 +34,9 @@ public class SmokeTestFixture : IAsyncLifetime
 
     public string NativeConnectionStringWithCompression(string method) =>
         $"Host={Host};Port={NativePort};Username={Username};Password={Password};Compression=true;CompressionMethod={method}";
+
+    public string NativeLazyConnectionString =>
+        $"Host={Host};Port={NativePort};Username={Username};Password={Password};StringMaterialization=Lazy";
 
     public async Task InitializeAsync()
     {

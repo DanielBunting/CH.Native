@@ -33,6 +33,7 @@ public class VariantColumnReaderTests
         // No per-arm data (counts are zero).
 
         var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        reader.ReadPrefix(ref pr);
         using var col = reader.ReadTypedColumn(ref pr, 3);
 
         Assert.Equal(3, col.Count);
@@ -60,6 +61,7 @@ public class VariantColumnReaderTests
         // Arm 1 packed column: 0 String values (nothing to write).
 
         var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        reader.ReadPrefix(ref pr);
         using var col = reader.ReadTypedColumn(ref pr, 3);
 
         Assert.Equal(3, col.Count);
@@ -95,6 +97,7 @@ public class VariantColumnReaderTests
         writer.WriteString("ok");
 
         var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        reader.ReadPrefix(ref pr);
         using var col = reader.ReadTypedColumn(ref pr, 5);
 
         var row0 = (ClickHouseVariant)col.GetValue(0)!;
@@ -121,6 +124,7 @@ public class VariantColumnReaderTests
         writer.WriteUInt64(0);
 
         var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        reader.ReadPrefix(ref pr);
         using var col = reader.ReadTypedColumn(ref pr, 0);
 
         Assert.Equal(0, col.Count);
@@ -140,12 +144,13 @@ public class VariantColumnReaderTests
         Assert.Throws<InvalidOperationException>(() =>
         {
             var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+            reader.ReadPrefix(ref pr);
             using var _ = reader.ReadTypedColumn(ref pr, 1);
         });
     }
 
     [Fact]
-    public void ReadTypedColumn_UnsupportedVersion_Throws()
+    public void ReadPrefix_UnsupportedVersion_Throws()
     {
         var reader = (VariantColumnReader)ReaderFactory.CreateReader("Variant(Int64)");
 
@@ -156,7 +161,7 @@ public class VariantColumnReaderTests
         Assert.Throws<NotSupportedException>(() =>
         {
             var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
-            using var _ = reader.ReadTypedColumn(ref pr, 0);
+            reader.ReadPrefix(ref pr);
         });
     }
 
@@ -296,6 +301,9 @@ public class VariantColumnReaderTests
 
         using var buffer = new PooledBufferWriter();
         var pw = new ProtocolWriter(buffer);
+        // Match the Block dispatch sequence: prefix bytes (state prefix) precede
+        // the column's bulk data, which is what the skipper expects on the wire.
+        w.WritePrefix(ref pw);
         w.WriteColumn(ref pw, source);
 
         var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));

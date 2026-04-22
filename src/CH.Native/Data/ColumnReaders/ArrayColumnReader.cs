@@ -50,6 +50,9 @@ public sealed class ArrayColumnReader<T> : IColumnReader<T[]>
     public Type ClrType => typeof(T[]);
 
     /// <inheritdoc />
+    public void ReadPrefix(ref ProtocolReader reader) => _elementReader.ReadPrefix(ref reader);
+
+    /// <inheritdoc />
     public T[] ReadValue(ref ProtocolReader reader)
     {
         // Single value reading uses UInt64 offset format too

@@ -86,7 +86,14 @@ public static class ColumnExtractorFactory
             Type t when t == typeof(string) =>
                 clickHouseType.Contains("FixedString(")
                     ? CreateFixedStringExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable)
-                    : CreateStringExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable),
+                    : clickHouseType == "JSON" || clickHouseType.StartsWith("JSON(", StringComparison.Ordinal)
+                        // JSON has a column-level state prefix (JsonStringSerializationVersion)
+                        // that the direct-string-extractor path cannot emit. Kick to the boxed
+                        // fallback so JsonColumnWriter.WritePrefix/WriteColumn are both called.
+                        ? throw new NotSupportedException(
+                            $"Direct string extraction is disabled for JSON columns (column '{columnName}'). " +
+                            $"BulkInserter will use the standard column writer path.")
+                        : CreateStringExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable),
 
             // DateTime types
             Type t when t == typeof(DateTime) => CreateDateTimeExtractor<TRow>(property, columnName, clickHouseType, isNullable, isClickHouseNullable),
@@ -323,18 +330,21 @@ public static class ColumnExtractorFactory
         bool isNullable,
         bool isClickHouseNullable)
     {
-        // DateTimeOffset maps to DateTime64 in ClickHouse
-        var precision = ExtractDateTime64Precision(clickHouseType);
+        // DateTimeOffset maps to either DateTime (UInt32 seconds) or DateTime64 (Int64
+        // scaled) depending on the declared column type. ExtractDateTime64Precision
+        // returns a sentinel for the latter; for the former we emit UInt32 seconds.
+        var isDateTime64 = clickHouseType.Contains("DateTime64", StringComparison.Ordinal);
+        var precision = isDateTime64 ? ExtractDateTime64Precision(clickHouseType) : 0;
 
         if (isNullable)
         {
             var getter = CreateTypedGetter<TRow, DateTimeOffset?>(property);
-            return new NullableDateTimeOffsetExtractor<TRow>(getter, columnName, clickHouseType, precision, isClickHouseNullable);
+            return new NullableDateTimeOffsetExtractor<TRow>(getter, columnName, clickHouseType, precision, isDateTime64, isClickHouseNullable);
         }
         else
         {
             var getter = CreateTypedGetter<TRow, DateTimeOffset>(property);
-            return new DateTimeOffsetExtractor<TRow>(getter, columnName, clickHouseType, precision, isClickHouseNullable);
+            return new DateTimeOffsetExtractor<TRow>(getter, columnName, clickHouseType, precision, isDateTime64, isClickHouseNullable);
         }
     }
 
@@ -1170,21 +1180,21 @@ public static class ColumnExtractorFactory
     private sealed class DateTimeOffsetExtractor<TRow> : IColumnExtractor<TRow>
     {
         private readonly Func<TRow, DateTimeOffset> _getter;
-        private readonly int _precision;
         private readonly long _ticksMultiplier;
+        private readonly bool _isDateTime64;
         private readonly bool _isClickHouseNullable;
         private static readonly DateTimeOffset UnixEpoch = new(1970, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
         public string ColumnName { get; }
         public string TypeName { get; }
 
-        public DateTimeOffsetExtractor(Func<TRow, DateTimeOffset> getter, string columnName, string typeName, int precision, bool isClickHouseNullable)
+        public DateTimeOffsetExtractor(Func<TRow, DateTimeOffset> getter, string columnName, string typeName, int precision, bool isDateTime64, bool isClickHouseNullable)
         {
             _getter = getter;
             ColumnName = columnName;
             TypeName = typeName;
-            _precision = precision;
             _ticksMultiplier = (long)Math.Pow(10, precision);
+            _isDateTime64 = isDateTime64;
             _isClickHouseNullable = isClickHouseNullable;
         }
 
@@ -1200,8 +1210,14 @@ public static class ColumnExtractorFactory
             {
                 var value = _getter(rows[i]);
                 var totalSeconds = (value.UtcDateTime - UnixEpoch.UtcDateTime).TotalSeconds;
-                var scaledValue = (long)(totalSeconds * _ticksMultiplier);
-                writer.WriteInt64(scaledValue);
+                if (_isDateTime64)
+                {
+                    writer.WriteInt64((long)(totalSeconds * _ticksMultiplier));
+                }
+                else
+                {
+                    writer.WriteUInt32((uint)Math.Max(0, Math.Min(totalSeconds, uint.MaxValue)));
+                }
             }
         }
     }
@@ -1209,21 +1225,21 @@ public static class ColumnExtractorFactory
     private sealed class NullableDateTimeOffsetExtractor<TRow> : IColumnExtractor<TRow>
     {
         private readonly Func<TRow, DateTimeOffset?> _getter;
-        private readonly int _precision;
         private readonly long _ticksMultiplier;
+        private readonly bool _isDateTime64;
         private readonly bool _isClickHouseNullable;
         private static readonly DateTimeOffset UnixEpoch = new(1970, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
         public string ColumnName { get; }
         public string TypeName { get; }
 
-        public NullableDateTimeOffsetExtractor(Func<TRow, DateTimeOffset?> getter, string columnName, string typeName, int precision, bool isClickHouseNullable)
+        public NullableDateTimeOffsetExtractor(Func<TRow, DateTimeOffset?> getter, string columnName, string typeName, int precision, bool isDateTime64, bool isClickHouseNullable)
         {
             _getter = getter;
             ColumnName = columnName;
             TypeName = typeName;
-            _precision = precision;
             _ticksMultiplier = (long)Math.Pow(10, precision);
+            _isDateTime64 = isDateTime64;
             _isClickHouseNullable = isClickHouseNullable;
         }
 
@@ -1241,15 +1257,29 @@ public static class ColumnExtractorFactory
             for (int i = 0; i < rowCount; i++)
             {
                 var value = _getter(rows[i]);
-                if (value.HasValue)
+                if (_isDateTime64)
                 {
-                    var totalSeconds = (value.Value.UtcDateTime - UnixEpoch.UtcDateTime).TotalSeconds;
-                    var scaledValue = (long)(totalSeconds * _ticksMultiplier);
-                    writer.WriteInt64(scaledValue);
+                    if (value.HasValue)
+                    {
+                        var totalSeconds = (value.Value.UtcDateTime - UnixEpoch.UtcDateTime).TotalSeconds;
+                        writer.WriteInt64((long)(totalSeconds * _ticksMultiplier));
+                    }
+                    else
+                    {
+                        writer.WriteInt64(0);
+                    }
                 }
                 else
                 {
-                    writer.WriteInt64(0);
+                    if (value.HasValue)
+                    {
+                        var totalSeconds = (value.Value.UtcDateTime - UnixEpoch.UtcDateTime).TotalSeconds;
+                        writer.WriteUInt32((uint)Math.Max(0, Math.Min(totalSeconds, uint.MaxValue)));
+                    }
+                    else
+                    {
+                        writer.WriteUInt32(0);
+                    }
                 }
             }
         }
@@ -1279,15 +1309,21 @@ public static class ColumnExtractorFactory
                     writer.WriteByte(0);
             }
 
-            // Use stackalloc to avoid heap allocation - ProtocolWriter is a ref struct so this is safe
+            // Matches UuidColumnWriter/UuidColumnReader: ClickHouse wire format is each
+            // 8-byte half reversed, with the first half's three LE fields byte-swapped.
             Span<byte> buffer = stackalloc byte[16];
             for (int i = 0; i < rowCount; i++)
             {
                 var value = _getter(rows[i]);
                 value.TryWriteBytes(buffer);
-                // ClickHouse UUID is stored as two UInt64 in big-endian byte order, but reversed
-                writer.WriteBytes(buffer[8..16]); // Second half first
-                writer.WriteBytes(buffer[0..8]); // First half second
+                writer.WriteByte(buffer[6]); writer.WriteByte(buffer[7]);
+                writer.WriteByte(buffer[4]); writer.WriteByte(buffer[5]);
+                writer.WriteByte(buffer[0]); writer.WriteByte(buffer[1]);
+                writer.WriteByte(buffer[2]); writer.WriteByte(buffer[3]);
+                writer.WriteByte(buffer[15]); writer.WriteByte(buffer[14]);
+                writer.WriteByte(buffer[13]); writer.WriteByte(buffer[12]);
+                writer.WriteByte(buffer[11]); writer.WriteByte(buffer[10]);
+                writer.WriteByte(buffer[9]); writer.WriteByte(buffer[8]);
             }
         }
     }
@@ -1319,15 +1355,20 @@ public static class ColumnExtractorFactory
                 }
             }
 
-            // Use stackalloc to avoid heap allocation
             Span<byte> buffer = stackalloc byte[16];
             for (int i = 0; i < rowCount; i++)
             {
                 var value = _getter(rows[i]);
                 var guid = value ?? Guid.Empty;
                 guid.TryWriteBytes(buffer);
-                writer.WriteBytes(buffer[8..16]);
-                writer.WriteBytes(buffer[0..8]);
+                writer.WriteByte(buffer[6]); writer.WriteByte(buffer[7]);
+                writer.WriteByte(buffer[4]); writer.WriteByte(buffer[5]);
+                writer.WriteByte(buffer[0]); writer.WriteByte(buffer[1]);
+                writer.WriteByte(buffer[2]); writer.WriteByte(buffer[3]);
+                writer.WriteByte(buffer[15]); writer.WriteByte(buffer[14]);
+                writer.WriteByte(buffer[13]); writer.WriteByte(buffer[12]);
+                writer.WriteByte(buffer[11]); writer.WriteByte(buffer[10]);
+                writer.WriteByte(buffer[9]); writer.WriteByte(buffer[8]);
             }
         }
     }

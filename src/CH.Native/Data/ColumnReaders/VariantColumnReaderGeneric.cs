@@ -41,13 +41,17 @@ public sealed class VariantColumnReader<T0, T1> : IColumnReader<VariantValue<T0,
     }
 
     /// <inheritdoc />
-    public TypedColumn<VariantValue<T0, T1>> ReadTypedColumn(ref ProtocolReader reader, int rowCount)
+    public void ReadPrefix(ref ProtocolReader reader)
     {
         var version = reader.ReadUInt64();
         if (version != DiscriminatorVersion0)
             throw new NotSupportedException(
                 $"Variant discriminator serialization version {version} is not supported; expected {DiscriminatorVersion0}.");
+    }
 
+    /// <inheritdoc />
+    public TypedColumn<VariantValue<T0, T1>> ReadTypedColumn(ref ProtocolReader reader, int rowCount)
+    {
         if (rowCount == 0)
             return new TypedColumn<VariantValue<T0, T1>>(Array.Empty<VariantValue<T0, T1>>());
 

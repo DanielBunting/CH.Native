@@ -55,22 +55,30 @@ public sealed class JsonColumnReader : IColumnReader<JsonDocument>
         return JsonDocument.Parse(json);
     }
 
+    // Version is the column-level state prefix; cached on the instance so the data
+    // method can dispatch to the correct sub-format.
+    private ulong _serializationVersion;
+
+    /// <inheritdoc />
+    public void ReadPrefix(ref ProtocolReader reader)
+    {
+        _serializationVersion = reader.ReadUInt64();
+    }
+
     /// <inheritdoc />
     public TypedColumn<JsonDocument> ReadTypedColumn(ref ProtocolReader reader, int rowCount)
     {
-        var serializationVersion = reader.ReadUInt64();
-
-        if (serializationVersion == JsonStringSerializationVersion)
+        if (_serializationVersion == JsonStringSerializationVersion)
             return ReadStringSerializedColumn(ref reader, rowCount);
 
-        if (serializationVersion == JsonDeprecatedObjectSerializationVersion)
+        if (_serializationVersion == JsonDeprecatedObjectSerializationVersion)
             return ReadBinaryColumn(ref reader, rowCount, version: 0);
 
-        if (serializationVersion == JsonObjectSerializationVersion)
+        if (_serializationVersion == JsonObjectSerializationVersion)
             return ReadBinaryColumn(ref reader, rowCount, version: 3);
 
         throw new NotSupportedException(
-            $"Unknown JSON serialization version: {serializationVersion}. " +
+            $"Unknown JSON serialization version: {_serializationVersion}. " +
             "This may indicate an incompatible ClickHouse server version.");
     }
 

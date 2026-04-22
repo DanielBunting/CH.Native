@@ -14,7 +14,7 @@ public static class ProtocolVersion
     /// <summary>
     /// Current protocol revision we advertise to the server.
     /// </summary>
-    public const int Current = 54467;
+    public const int Current = 54473;
 
     /// <summary>
     /// Protocol revision that introduced server timezone and display name in hello.
@@ -121,6 +121,35 @@ public static class ProtocolVersion
     /// See ClickHouse src/Core/ProtocolDefines.h: DBMS_MIN_REVISION_WITH_SSH_AUTHENTICATION.
     /// </summary>
     public const int WithSshAuthentication = 54466;
+
+    /// <summary>
+    /// Protocol revision that introduced rows-before-aggregation in progress packets.
+    /// </summary>
+    public const int WithRowsBeforeAggregation = 54469;
+
+    /// <summary>
+    /// Protocol revision that introduced the chunked-packets handshake (proto_send_chunked /
+    /// proto_recv_chunked strings in both hello and addendum).
+    /// </summary>
+    public const int WithChunkedPackets = 54470;
+
+    /// <summary>
+    /// Protocol revision that introduced the versioned parallel-replicas protocol number
+    /// in hello and addendum.
+    /// </summary>
+    public const int WithVersionedParallelReplicas = 54471;
+
+    /// <summary>
+    /// Protocol revision that introduced the interserver externally-granted-roles field
+    /// in the Query packet (between the settings terminator and the interserver secret).
+    /// </summary>
+    public const int WithInterServerExternallyGrantedRoles = 54472;
+
+    /// <summary>
+    /// Protocol revision that introduced FLATTENED native serialization for Dynamic and JSON.
+    /// See ClickHouse src/Core/ProtocolDefines.h: DBMS_MIN_REVISION_WITH_V2_DYNAMIC_AND_JSON_SERIALIZATION.
+    /// </summary>
+    public const int WithV2DynamicAndJsonSerialization = 54473;
 
     /// <summary>
     /// Returns true if the given feature is supported at the specified revision.

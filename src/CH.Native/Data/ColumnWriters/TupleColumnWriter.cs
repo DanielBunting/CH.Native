@@ -63,6 +63,17 @@ public sealed class TupleColumnWriter : IColumnWriter<object[]>
     public IReadOnlyList<string>? FieldNames => _fieldNames;
 
     /// <inheritdoc />
+    // Emit each element writer's prefix in field order — needed so a Tuple(…, LC(T), …)
+    // column's LC KeysSerializationVersion precedes the tuple field bytes.
+    public void WritePrefix(ref ProtocolWriter writer)
+    {
+        for (int i = 0; i < _elementWriters.Length; i++)
+        {
+            _elementWriters[i].WritePrefix(ref writer);
+        }
+    }
+
+    /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, object[][] values)
     {
         // Write in columnar layout: all first elements, then all second elements, etc.

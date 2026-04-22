@@ -48,10 +48,13 @@ public sealed class VariantColumnWriter : IColumnWriter<ClickHouseVariant>
     }
 
     /// <inheritdoc />
+    // DiscriminatorVersion0 is the column-level state prefix for SerializationVariant —
+    // must precede outer composite data (same shape as LowCardinality's KeysSerializationVersion).
+    public void WritePrefix(ref ProtocolWriter writer) => writer.WriteUInt64(DiscriminatorVersion0);
+
+    /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, ClickHouseVariant[] values)
     {
-        writer.WriteUInt64(DiscriminatorVersion0);
-
         if (values.Length == 0)
             return;
 

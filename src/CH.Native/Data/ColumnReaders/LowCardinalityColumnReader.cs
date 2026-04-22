@@ -93,15 +93,28 @@ public sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
     }
 
     /// <inheritdoc />
+    // Mirrors LowCardinalityColumnWriter.WritePrefix — the server sends the
+    // KeysSerializationVersion UInt64 at the column-level state-prefix phase,
+    // before any outer composite's structural bytes.
+    public void ReadPrefix(ref ProtocolReader reader)
+    {
+        var version = reader.ReadUInt64();
+        if (version != KeysSerializationVersion)
+        {
+            throw new InvalidDataException(
+                $"Unsupported LowCardinality KeysSerializationVersion: {version} (expected {KeysSerializationVersion}).");
+        }
+    }
+
+    private const ulong KeysSerializationVersion = 1;
+
+    /// <inheritdoc />
     public TypedColumn<T> ReadTypedColumn(ref ProtocolReader reader, int rowCount)
     {
         if (rowCount == 0)
             return new TypedColumn<T>(Array.Empty<T>());
 
-        // Read serialization state/version
-        var version = reader.ReadUInt64();
-
-        // Read index type and flags
+        // Read index type and flags (version was consumed via ReadPrefix)
         var flags = reader.ReadUInt64();
         var indexType = (int)(flags & 0xFF);
 
@@ -169,10 +182,7 @@ public sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
         if (rowCount == 0)
             return new DictionaryEncodedColumn<T>(Array.Empty<T>(), Array.Empty<int>(), 0, null);
 
-        // Read serialization state/version
-        var version = reader.ReadUInt64();
-
-        // Read index type and flags
+        // Read index type and flags (version was consumed via ReadPrefix)
         var flags = reader.ReadUInt64();
         var indexType = (int)(flags & 0xFF);
 

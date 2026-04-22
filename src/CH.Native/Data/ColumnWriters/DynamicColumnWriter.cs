@@ -1,22 +1,26 @@
 using System.Buffers;
 using CH.Native.Data.Dynamic;
-using CH.Native.Data.Variant;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnWriters;
 
 /// <summary>
-/// Column writer for <c>Dynamic</c> values.
+/// Column writer for <c>Dynamic</c> values using ClickHouse's FLATTENED native
+/// serialization (structure version 3, ClickHouse 25.6+).
 /// </summary>
 /// <remarks>
-/// Mirrors <see cref="ColumnReaders.DynamicColumnReader"/>. Distinct declared type names in
-/// first-seen order populate the arm list up to <c>max_types</c>; overflow types are written
-/// via the shared-variant arm.
+/// Wire format per block:
+/// <list type="bullet">
+///   <item><description>State prefix: <c>UInt64</c> structure version = 3.</description></item>
+///   <item><description>Column: <c>VARINT</c> number of types, <c>N</c> length-prefixed
+///     type-name strings, an indexes column sized to the smallest <c>UIntN</c> that can
+///     represent <c>N+1</c> distinct values (index = N marks NULL), then each type's
+///     column data concatenated in declared order.</description></item>
+/// </list>
 /// </remarks>
 public sealed class DynamicColumnWriter : IColumnWriter<ClickHouseDynamic>
 {
-    private const ulong StructureVersion1 = 1;
-    private const ulong DiscriminatorVersion0 = 0;
+    private const ulong StructureVersionFlattened = 3;
 
     private readonly ColumnWriterFactory _factory;
     private readonly int _maxTypes;
@@ -45,6 +49,9 @@ public sealed class DynamicColumnWriter : IColumnWriter<ClickHouseDynamic>
     }
 
     /// <inheritdoc />
+    public void WritePrefix(ref ProtocolWriter writer) => writer.WriteUInt64(StructureVersionFlattened);
+
+    /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, ClickHouseDynamic[] values)
     {
         // Step 1: collect distinct declared type names in first-seen order (NULL rows skipped).
@@ -60,37 +67,30 @@ public sealed class DynamicColumnWriter : IColumnWriter<ClickHouseDynamic>
             if (typeIndex.ContainsKey(name))
                 continue;
 
-            if (typeIndex.Count < _maxTypes)
-            {
-                typeIndex.Add(name, typeNames.Count);
-                typeNames.Add(name);
-            }
-            else
-            {
-                // Overflow — routed to shared arm; no arm index allocated.
-                typeIndex.Add(name, -1);
-            }
+            if (typeIndex.Count >= _maxTypes)
+                throw new ArgumentException(
+                    $"Row {i} declares type '{name}', which would exceed max_types={_maxTypes}. FLATTENED serialization cannot route overflow types through a shared variant.",
+                    nameof(values));
+
+            typeIndex.Add(name, typeNames.Count);
+            typeNames.Add(name);
         }
 
         var numberOfTypes = typeNames.Count;
-        var sharedArm = numberOfTypes;
-        var armCount = numberOfTypes + 1;
+        var nullIndex = numberOfTypes;
+        var totalIndexValues = numberOfTypes + 1;
 
-        // Step 2: header + type-name table.
-        writer.WriteUInt64(StructureVersion1);
-        writer.WriteUInt64((ulong)_maxTypes);
-        writer.WriteUInt64((ulong)numberOfTypes);
+        // Step 2: type-name table.
+        writer.WriteVarInt((ulong)numberOfTypes);
         for (int i = 0; i < numberOfTypes; i++)
             writer.WriteString(typeNames[i]);
-
-        // Step 3: Variant discriminator version + discriminator bytes.
-        writer.WriteUInt64(DiscriminatorVersion0);
 
         if (values.Length == 0)
             return;
 
-        var discriminators = ArrayPool<byte>.Shared.Rent(values.Length);
-        Span<int> counts = armCount <= 32 ? stackalloc int[armCount] : new int[armCount];
+        // Step 3: indexes column. Pick the smallest UIntN holding N+1 distinct values.
+        Span<int> counts = totalIndexValues <= 32 ? stackalloc int[totalIndexValues] : new int[totalIndexValues];
+        var indexes = ArrayPool<int>.Shared.Rent(values.Length);
 
         try
         {
@@ -98,20 +98,17 @@ public sealed class DynamicColumnWriter : IColumnWriter<ClickHouseDynamic>
             {
                 if (values[i].IsNull)
                 {
-                    discriminators[i] = ClickHouseDynamic.NullDiscriminator;
+                    indexes[i] = nullIndex;
                     continue;
                 }
-
-                var name = values[i].DeclaredTypeName!;
-                var arm = typeIndex[name];
-                if (arm < 0) arm = sharedArm;
-                discriminators[i] = (byte)arm;
-                counts[arm]++;
+                var idx = typeIndex[values[i].DeclaredTypeName!];
+                indexes[i] = idx;
+                counts[idx]++;
             }
 
-            writer.WriteBytes(discriminators.AsSpan(0, values.Length));
+            WriteIndexes(ref writer, indexes.AsSpan(0, values.Length), totalIndexValues);
 
-            // Step 4: bucket declared arms in a single pass.
+            // Step 4: per-type column data in declared order, length-equal to count of that index.
             var buckets = ArrayPool<object?[]>.Shared.Rent(numberOfTypes > 0 ? numberOfTypes : 1);
             try
             {
@@ -125,9 +122,9 @@ public sealed class DynamicColumnWriter : IColumnWriter<ClickHouseDynamic>
                 Span<int> cursors = numberOfTypes <= 32 ? stackalloc int[numberOfTypes] : new int[numberOfTypes];
                 for (int i = 0; i < values.Length; i++)
                 {
-                    var disc = discriminators[i];
-                    if (disc == ClickHouseDynamic.NullDiscriminator || disc >= numberOfTypes) continue;
-                    buckets[disc][cursors[disc]++] = values[i].Value;
+                    var idx = indexes[i];
+                    if (idx == nullIndex) continue;
+                    buckets[idx][cursors[idx]++] = values[i].Value;
                 }
 
                 for (int arm = 0; arm < numberOfTypes; arm++)
@@ -140,37 +137,35 @@ public sealed class DynamicColumnWriter : IColumnWriter<ClickHouseDynamic>
             {
                 ArrayPool<object?[]>.Shared.Return(buckets, clearArray: true);
             }
-
-            // Step 5: shared arm — per row write (string type_name, binary value). We still
-            // emit (type_name, binary_value) pairs in row order per the wire format, but we
-            // cache inner writers by type name to avoid re-resolving on every row, and share
-            // a single-row scratch array across rows.
-            if (counts[sharedArm] > 0)
-            {
-                Dictionary<string, IColumnWriter>? writerCache = null;
-                // Inner writers iterate values.Length so the scratch must be exactly length 1.
-                var scratch = new object?[1];
-
-                for (int i = 0; i < values.Length; i++)
-                {
-                    if (discriminators[i] != sharedArm) continue;
-                    var name = values[i].DeclaredTypeName!;
-                    writer.WriteString(name);
-
-                    writerCache ??= new Dictionary<string, IColumnWriter>(StringComparer.Ordinal);
-                    if (!writerCache.TryGetValue(name, out var innerWriter))
-                    {
-                        innerWriter = _factory.CreateWriter(name);
-                        writerCache[name] = innerWriter;
-                    }
-                    scratch[0] = values[i].Value;
-                    innerWriter.WriteColumn(ref writer, scratch);
-                }
-            }
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(discriminators);
+            ArrayPool<int>.Shared.Return(indexes);
+        }
+    }
+
+    private static void WriteIndexes(ref ProtocolWriter writer, ReadOnlySpan<int> indexes, int totalIndexValues)
+    {
+        if (totalIndexValues <= byte.MaxValue + 1)
+        {
+            var buffer = ArrayPool<byte>.Shared.Rent(indexes.Length);
+            try
+            {
+                for (int i = 0; i < indexes.Length; i++)
+                    buffer[i] = (byte)indexes[i];
+                writer.WriteBytes(buffer.AsSpan(0, indexes.Length));
+            }
+            finally { ArrayPool<byte>.Shared.Return(buffer); }
+        }
+        else if (totalIndexValues <= ushort.MaxValue + 1)
+        {
+            for (int i = 0; i < indexes.Length; i++)
+                writer.WriteUInt16((ushort)indexes[i]);
+        }
+        else
+        {
+            for (int i = 0; i < indexes.Length; i++)
+                writer.WriteUInt32((uint)indexes[i]);
         }
     }
 

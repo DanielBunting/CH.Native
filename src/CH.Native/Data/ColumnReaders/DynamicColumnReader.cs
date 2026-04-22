@@ -1,31 +1,30 @@
 using System.Buffers;
 using CH.Native.Data.Dynamic;
-using CH.Native.Data.Variant;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnReaders;
 
 /// <summary>
-/// Column reader for the self-describing <c>Dynamic</c> / <c>Dynamic(max_types=N)</c> type.
+/// Column reader for the self-describing <c>Dynamic</c> / <c>Dynamic(max_types=N)</c> type
+/// using ClickHouse's FLATTENED native serialization (structure version 3, ClickHouse 25.6+).
 /// </summary>
 /// <remarks>
 /// <para>Wire format per block:</para>
 /// <list type="number">
-/// <item><description><see langword="UInt64"/> structure version (currently <c>1</c>).</description></item>
-/// <item><description><see langword="UInt64"/> max_types.</description></item>
-/// <item><description><see langword="UInt64"/> numberOfTypes.</description></item>
-/// <item><description>numberOfTypes string type-names.</description></item>
-/// <item><description>Variant encoding with numberOfTypes + 1 arms; the last arm is the shared overflow arm.</description></item>
+/// <item><description><see langword="UInt64"/> structure version (must be <c>3</c>).</description></item>
+/// <item><description><c>VARINT</c> number of types.</description></item>
+/// <item><description><c>N</c> length-prefixed type-name strings.</description></item>
+/// <item><description>Indexes column — smallest <c>UIntN</c> holding <c>N+1</c> distinct
+///     values; index <c>N</c> marks NULL.</description></item>
+/// <item><description>Each type's column data concatenated in declared order, sized to
+///     the count of rows whose index equals that arm.</description></item>
 /// </list>
-/// <para>Each row in the shared arm is a <c>(String type_name, binary_value)</c> pair whose
-/// binary encoding is the single-value native format for that type name.</para>
-/// <para>Produces a <see cref="DynamicTypedColumn"/>; <see cref="ClickHouseDynamic"/> values
-/// are materialised on demand from the raw arm columns.</para>
+/// <para>Requires <c>SET output_format_native_use_flattened_dynamic_and_json_serialization = 1</c>
+/// on the server session (CH.Native injects this by default on ClickHouse 25.6+).</para>
 /// </remarks>
 public sealed class DynamicColumnReader : IColumnReader
 {
-    private const ulong StructureVersion1 = 1;
-    private const ulong DiscriminatorVersion0 = 0;
+    private const ulong StructureVersionFlattened = 3;
 
     private readonly ColumnReaderFactory _factory;
     private readonly int _configuredMaxTypes;
@@ -45,15 +44,20 @@ public sealed class DynamicColumnReader : IColumnReader
     public Type ClrType => typeof(ClickHouseDynamic);
 
     /// <inheritdoc />
-    public ITypedColumn ReadTypedColumn(ref ProtocolReader reader, int rowCount)
+    public void ReadPrefix(ref ProtocolReader reader)
     {
         var structureVersion = reader.ReadUInt64();
-        if (structureVersion != StructureVersion1)
+        if (structureVersion != StructureVersionFlattened)
             throw new NotSupportedException(
-                $"Dynamic structure version {structureVersion} is not supported; expected {StructureVersion1}.");
+                $"Dynamic structure version {structureVersion} is not supported. CH.Native requires FLATTENED " +
+                "(version 3); set output_format_native_use_flattened_dynamic_and_json_serialization = 1 on the " +
+                "server session (ClickHouse 25.6+).");
+    }
 
-        _ = reader.ReadUInt64(); // max_types — block-level limit; we accept whatever the server sent.
-        var numberOfTypes = checked((int)reader.ReadUInt64());
+    /// <inheritdoc />
+    public ITypedColumn ReadTypedColumn(ref ProtocolReader reader, int rowCount)
+    {
+        var numberOfTypes = checked((int)reader.ReadVarInt());
 
         var typeNames = new string[numberOfTypes];
         var innerReaders = new IColumnReader[numberOfTypes];
@@ -71,14 +75,8 @@ public sealed class DynamicColumnReader : IColumnReader
             }
         }
 
-        // Variant section follows.
-        var variantVersion = reader.ReadUInt64();
-        if (variantVersion != DiscriminatorVersion0)
-            throw new NotSupportedException(
-                $"Dynamic's inner Variant discriminator version {variantVersion} is not supported.");
-
-        var armCount = numberOfTypes + 1; // +1 for the shared variant arm
-        var sharedArm = numberOfTypes;
+        var nullIndex = numberOfTypes;
+        var totalIndexValues = numberOfTypes + 1;
 
         if (rowCount == 0)
         {
@@ -86,112 +84,90 @@ public sealed class DynamicColumnReader : IColumnReader
             for (int i = 0; i < numberOfTypes; i++)
                 emptyArms[i] = innerReaders[i].ReadTypedColumn(ref reader, 0);
             return new DynamicTypedColumn(
-                Array.Empty<byte>(), 0, emptyArms, typeNames,
-                sharedArmTypeNames: null, sharedArmValues: null,
-                rowToArmOffset: Array.Empty<int>());
+                Array.Empty<int>(), 0, emptyArms, typeNames, Array.Empty<int>());
         }
 
-        var discPool = ArrayPool<byte>.Shared;
-        var discBuffer = discPool.Rent(rowCount);
+        var indexPool = ArrayPool<int>.Shared;
+        var indexes = indexPool.Rent(rowCount);
+        var armColumns = new ITypedColumn[numberOfTypes];
+        var armColumnsBuilt = 0;
 
         try
         {
-            using (var pooled = reader.ReadPooledBytes(rowCount))
+            ReadIndexes(ref reader, indexes.AsSpan(0, rowCount), totalIndexValues);
+            var counts = CountPerArm(indexes.AsSpan(0, rowCount), totalIndexValues);
+
+            for (int arm = 0; arm < numberOfTypes; arm++)
             {
-                pooled.Span.CopyTo(discBuffer.AsSpan(0, rowCount));
+                armColumns[arm] = innerReaders[arm].ReadTypedColumn(ref reader, counts[arm]);
+                armColumnsBuilt++;
             }
 
-            var discriminators = discBuffer.AsSpan(0, rowCount);
-            var counts = VariantBucketing.CountPerArm(discriminators, armCount);
-
-            var armColumns = new ITypedColumn[numberOfTypes];
-            var armColumnsBuilt = 0;
+            var offsetPool = ArrayPool<int>.Shared;
+            var rowToArmOffset = offsetPool.Rent(rowCount);
             try
             {
-                for (int arm = 0; arm < numberOfTypes; arm++)
-                {
-                    armColumns[arm] = innerReaders[arm].ReadTypedColumn(ref reader, counts[arm]);
-                    armColumnsBuilt++;
-                }
+                Span<int> cursors = numberOfTypes <= 32 ? stackalloc int[numberOfTypes] : new int[numberOfTypes];
+                cursors.Clear();
 
-                // Shared arm: per-row (type_name, binary value) pairs.
-                string[]? sharedArmTypeNames = null;
-                object?[]? sharedArmValues = null;
-                var sharedCount = counts[sharedArm];
-                if (sharedCount > 0)
+                for (int i = 0; i < rowCount; i++)
                 {
-                    sharedArmTypeNames = new string[sharedCount];
-                    sharedArmValues = new object?[sharedCount];
-                    Dictionary<string, IColumnReader>? readerCache = null;
-                    for (int r = 0; r < sharedCount; r++)
+                    var idx = indexes[i];
+                    if (idx == nullIndex)
                     {
-                        var sharedTypeName = reader.ReadString();
-                        readerCache ??= new Dictionary<string, IColumnReader>(StringComparer.Ordinal);
-                        if (!readerCache.TryGetValue(sharedTypeName, out var sharedReader))
-                        {
-                            try { sharedReader = _factory.CreateReader(sharedTypeName); }
-                            catch (Exception ex)
-                            {
-                                throw new NotSupportedException(
-                                    $"Dynamic shared-arm row {r} has unresolvable type '{sharedTypeName}'.", ex);
-                            }
-                            readerCache[sharedTypeName] = sharedReader;
-                        }
-                        using var oneCol = sharedReader.ReadTypedColumn(ref reader, 1);
-                        sharedArmTypeNames[r] = sharedTypeName;
-                        sharedArmValues[r] = oneCol.GetValue(0);
+                        rowToArmOffset[i] = -1;
+                        continue;
                     }
+                    if ((uint)idx >= (uint)numberOfTypes)
+                        throw new InvalidOperationException(
+                            $"Index {idx} out of range for Dynamic ({numberOfTypes} types) at row {i}.");
+                    rowToArmOffset[i] = cursors[idx]++;
                 }
 
-                var offsetPool = ArrayPool<int>.Shared;
-                var rowToArmOffset = offsetPool.Rent(rowCount);
-                try
-                {
-                    Span<int> cursors = armCount <= 32 ? stackalloc int[armCount] : new int[armCount];
-                    cursors.Clear();
-
-                    for (int i = 0; i < rowCount; i++)
-                    {
-                        var disc = discriminators[i];
-                        if (disc == ClickHouseDynamic.NullDiscriminator)
-                        {
-                            rowToArmOffset[i] = -1;
-                            continue;
-                        }
-                        if (disc >= armCount)
-                            throw new InvalidOperationException(
-                                $"Discriminator {disc} out of range for Dynamic ({armCount}-arm including shared) at row {i}.");
-                        rowToArmOffset[i] = cursors[disc]++;
-                    }
-
-                    return new DynamicTypedColumn(
-                        discBuffer,
-                        rowCount,
-                        armColumns,
-                        typeNames,
-                        sharedArmTypeNames,
-                        sharedArmValues,
-                        rowToArmOffset,
-                        discPool,
-                        offsetPool);
-                }
-                catch
-                {
-                    offsetPool.Return(rowToArmOffset);
-                    throw;
-                }
+                return new DynamicTypedColumn(
+                    indexes, rowCount, armColumns, typeNames, rowToArmOffset, indexPool, offsetPool);
             }
             catch
             {
-                for (int i = 0; i < armColumnsBuilt; i++)
-                    armColumns[i]?.Dispose();
+                offsetPool.Return(rowToArmOffset);
                 throw;
             }
         }
         catch
         {
-            discPool.Return(discBuffer);
+            for (int i = 0; i < armColumnsBuilt; i++)
+                armColumns[i]?.Dispose();
+            indexPool.Return(indexes);
             throw;
         }
+    }
+
+    private static void ReadIndexes(ref ProtocolReader reader, Span<int> indexes, int totalIndexValues)
+    {
+        if (totalIndexValues <= byte.MaxValue + 1)
+        {
+            using var pooled = reader.ReadPooledBytes(indexes.Length);
+            var span = pooled.Span;
+            for (int i = 0; i < indexes.Length; i++)
+                indexes[i] = span[i];
+        }
+        else if (totalIndexValues <= ushort.MaxValue + 1)
+        {
+            for (int i = 0; i < indexes.Length; i++)
+                indexes[i] = reader.ReadUInt16();
+        }
+        else
+        {
+            for (int i = 0; i < indexes.Length; i++)
+                indexes[i] = checked((int)reader.ReadUInt32());
+        }
+    }
+
+    private static int[] CountPerArm(ReadOnlySpan<int> indexes, int totalIndexValues)
+    {
+        var counts = new int[totalIndexValues];
+        for (int i = 0; i < indexes.Length; i++)
+            counts[indexes[i]]++;
+        return counts;
     }
 }

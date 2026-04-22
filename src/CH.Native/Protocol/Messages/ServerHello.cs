@@ -69,6 +69,14 @@ public sealed class ServerHello
         var versionMinor = (int)reader.ReadVarInt();
         var protocolRevision = (int)reader.ReadVarInt();
 
+        // Server wire order (see TCPHandler::sendHello): parallel-replicas version (54471),
+        // then timezone/display name (54423), then version patch, then chunked-packets
+        // caps (54470), then password rules, then nonce.
+        if (protocolRevision >= ProtocolVersion.WithVersionedParallelReplicas)
+        {
+            _ = reader.ReadVarInt(); // server parallel replicas protocol version
+        }
+
         string? timezone = null;
         string? displayName = null;
 
@@ -82,6 +90,14 @@ public sealed class ServerHello
         if (protocolRevision >= ProtocolVersion.WithVersionPatch)
         {
             _ = reader.ReadVarInt(); // versionPatch - we don't use it
+        }
+
+        // Read the server's chunked-packets capabilities. We always advertise "notchunked"
+        // in the client addendum, so we ignore what the server reports.
+        if (protocolRevision >= ProtocolVersion.WithChunkedPackets)
+        {
+            _ = reader.ReadString(); // proto_send_chunked_srv
+            _ = reader.ReadString(); // proto_recv_chunked_srv
         }
 
         // Read password complexity rules if supported

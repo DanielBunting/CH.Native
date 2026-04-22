@@ -18,6 +18,16 @@ public interface IColumnWriter
     Type ClrType { get; }
 
     /// <summary>
+    /// Writes any column-level state prefix (e.g. LowCardinality's
+    /// KeysSerializationVersion) that ClickHouse expects before the main data phase.
+    /// Most writers have nothing to emit; composite writers recursively invoke their
+    /// inner writers' prefixes so nested state (e.g. Array(LowCardinality(T))) emits
+    /// its version before the outer composite's structural bytes.
+    /// </summary>
+    /// <param name="writer">The protocol writer.</param>
+    void WritePrefix(ref ProtocolWriter writer) { }
+
+    /// <summary>
     /// Writes column data for the specified values.
     /// </summary>
     /// <param name="writer">The protocol writer.</param>

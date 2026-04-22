@@ -67,6 +67,15 @@ public sealed class MapColumnWriter<TKey, TValue> : IColumnWriter<Dictionary<TKe
     public Type ClrType => typeof(Dictionary<TKey, TValue>);
 
     /// <inheritdoc />
+    // Emit both inner writers' prefixes (keys first, then values). Map has no prefix
+    // of its own — offsets are per-row data.
+    public void WritePrefix(ref ProtocolWriter writer)
+    {
+        _keyWriter.WritePrefix(ref writer);
+        _valueWriter.WritePrefix(ref writer);
+    }
+
+    /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, Dictionary<TKey, TValue>[] values)
     {
         // Step 1: Write cumulative offsets (UInt64 per row)
@@ -125,39 +134,80 @@ public sealed class MapColumnWriter<TKey, TValue> : IColumnWriter<Dictionary<TKe
 
     void IColumnWriter.WriteColumn(ref ProtocolWriter writer, object?[] values)
     {
-        // Step 1: Write offsets
+        // Step 1: Write offsets. Accept any IDictionary so e.g. Dictionary<string,string>
+        // can pass through to FixedStringColumnWriter (ClrType=byte[] but accepts strings
+        // via its non-generic WriteValue).
         ulong offset = 0;
         int totalEntries = 0;
+        bool allMatch = true;
         for (int i = 0; i < values.Length; i++)
         {
-            var dict = values[i] as Dictionary<TKey, TValue>;
-            var count = dict?.Count ?? 0;
+            int count;
+            if (values[i] is Dictionary<TKey, TValue> typedDict)
+            {
+                count = typedDict.Count;
+            }
+            else if (values[i] is System.Collections.IDictionary d)
+            {
+                count = d.Count;
+                allMatch = false;
+            }
+            else
+            {
+                count = 0;
+            }
             offset += (ulong)count;
             totalEntries += count;
             writer.WriteUInt64(offset);
         }
 
-        // Step 2: Flatten all keys and write as a column
-        var allKeys = new TKey[totalEntries];
-        int pos = 0;
-        for (int i = 0; i < values.Length; i++)
+        // Fast/correct path: when every row is the exact typed Dictionary, use the
+        // bulk WriteColumn on the inner writers (preserves per-column headers such as
+        // NullableColumnWriter's null bitmap).
+        if (allMatch)
         {
-            if (values[i] is Dictionary<TKey, TValue> dict)
-                foreach (var key in dict.Keys)
-                    allKeys[pos++] = key;
+            var allKeys = new TKey[totalEntries];
+            var allValues = new TValue[totalEntries];
+            int pos = 0;
+            for (int i = 0; i < values.Length; i++)
+            {
+                if (values[i] is Dictionary<TKey, TValue> dict)
+                {
+                    foreach (var kvp in dict)
+                    {
+                        allKeys[pos] = kvp.Key;
+                        allValues[pos] = kvp.Value;
+                        pos++;
+                    }
+                }
+            }
+            _keyWriter.WriteColumn(ref writer, allKeys);
+            _valueWriter.WriteColumn(ref writer, allValues);
+            return;
         }
-        _keyWriter.WriteColumn(ref writer, allKeys);
 
-        // Step 3: Flatten all values and write as a column
-        var allValues = new TValue[totalEntries];
-        pos = 0;
+        // Compat path: CLR types don't exactly match — iterate entries and write
+        // each key/value via the non-generic per-value writer. Only safe when the
+        // inner writers don't emit per-column state prefixes (true for String /
+        // FixedString / numerics; not true for Nullable / LowCardinality at inner).
+        IColumnWriter keyWriterNg = _keyWriter;
+        IColumnWriter valueWriterNg = _valueWriter;
         for (int i = 0; i < values.Length; i++)
         {
-            if (values[i] is Dictionary<TKey, TValue> dict)
-                foreach (var val in dict.Values)
-                    allValues[pos++] = val;
+            if (values[i] is System.Collections.IDictionary dict)
+            {
+                foreach (System.Collections.DictionaryEntry entry in dict)
+                    keyWriterNg.WriteValue(ref writer, entry.Key);
+            }
         }
-        _valueWriter.WriteColumn(ref writer, allValues);
+        for (int i = 0; i < values.Length; i++)
+        {
+            if (values[i] is System.Collections.IDictionary dict)
+            {
+                foreach (System.Collections.DictionaryEntry entry in dict)
+                    valueWriterNg.WriteValue(ref writer, entry.Value);
+            }
+        }
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)

@@ -19,6 +19,15 @@ public interface IColumnReader
     Type ClrType { get; }
 
     /// <summary>
+    /// Reads any column-level state prefix (e.g. LowCardinality's
+    /// KeysSerializationVersion) emitted by the server before the main data phase.
+    /// Symmetric with <see cref="IColumnWriter.WritePrefix"/>. Most readers consume
+    /// nothing; composite readers recursively invoke their inner readers' prefixes.
+    /// </summary>
+    /// <param name="reader">The protocol reader.</param>
+    void ReadPrefix(ref ProtocolReader reader) { }
+
+    /// <summary>
     /// Reads column data into typed storage without boxing value types.
     /// </summary>
     /// <param name="reader">The protocol reader.</param>
