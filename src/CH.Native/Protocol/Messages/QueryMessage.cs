@@ -108,6 +108,13 @@ public readonly struct QueryMessage
         // Empty string terminates settings list
         writer.WriteString(string.Empty);
 
+        // Interserver externally-granted roles (empty for regular non-interserver clients).
+        // Added in 54472; must come between the settings terminator and the interserver secret.
+        if (protocolRevision >= ProtocolVersion.WithInterServerExternallyGrantedRoles)
+        {
+            writer.WriteString(string.Empty);
+        }
+
         // Inter-server secret (empty for regular clients, if protocol supports)
         if (protocolRevision >= ProtocolVersion.WithInterServerSecret)
         {

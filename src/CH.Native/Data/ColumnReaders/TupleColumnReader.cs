@@ -59,6 +59,15 @@ public sealed class TupleColumnReader : IColumnReader<object>
     /// <inheritdoc />
     public Type ClrType => typeof(object);
 
+    /// <inheritdoc />
+    public void ReadPrefix(ref ProtocolReader reader)
+    {
+        for (int i = 0; i < _elementReaders.Length; i++)
+        {
+            _elementReaders[i].ReadPrefix(ref reader);
+        }
+    }
+
     /// <summary>
     /// Gets the number of elements in the tuple.
     /// </summary>

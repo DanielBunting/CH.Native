@@ -86,12 +86,20 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
     public Type ClrType => typeof(T);
 
     /// <inheritdoc />
+    // The KeysSerializationVersion is a column-level state prefix that ClickHouse
+    // expects BEFORE any outer composite's structural bytes (Array offsets, etc.),
+    // so it lives on WritePrefix rather than inline at the top of WriteColumn.
+    public void WritePrefix(ref ProtocolWriter writer)
+    {
+        writer.WriteUInt64(KeysSerializationVersion);
+    }
+
+    /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, T[] values)
     {
         if (values.Length == 0)
         {
-            // Empty column
-            writer.WriteUInt64(KeysSerializationVersion);
+            // Empty column — flags + dict size + index count (version was written via WritePrefix).
             writer.WriteUInt64(HasAdditionalKeysBit | NeedUpdateDictionary); // Flags
             writer.WriteUInt64(0); // Dictionary size
             writer.WriteUInt64(0); // Index count
@@ -103,11 +111,13 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
         var indexMap = new Dictionary<T, int>(EqualityComparer<T>.Default);
         var indices = new int[values.Length];
 
-        // For Nullable types, reserve index 0 for the null/default value
+        // For Nullable types, reserve dictionary slot 0 for the null/default value.
+        // Don't insert `default!` into indexMap — null is handled via the explicit
+        // null-check below, and for reference-type T (e.g. string) Dictionary rejects
+        // null keys with ArgumentNullException.
         if (_isNullable)
         {
             dictionary.Add(default!);
-            indexMap[default!] = 0;
         }
 
         for (int i = 0; i < values.Length; i++)
@@ -135,9 +145,7 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
                         dictionary.Count <= 65536 ? IndexTypeUInt16 :
                         dictionary.Count <= int.MaxValue ? IndexTypeUInt32 : IndexTypeUInt64;
 
-        writer.WriteUInt64(KeysSerializationVersion);
-
-        // Write index type and flags
+        // Write index type and flags (version was written via WritePrefix)
         ulong flags = (ulong)indexType | HasAdditionalKeysBit | NeedUpdateDictionary;
         writer.WriteUInt64(flags);
 

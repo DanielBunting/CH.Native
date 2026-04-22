@@ -100,6 +100,7 @@ public class JsonBinaryDecoderTests
 
         var columnReader = new JsonColumnReader();
         var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        columnReader.ReadPrefix(ref pr);
         using var result = columnReader.ReadTypedColumn(ref pr, 1);
 
         Assert.Equal(1, result.Count);
@@ -117,6 +118,7 @@ public class JsonBinaryDecoderTests
         var ex = Assert.Throws<NotSupportedException>(() =>
         {
             var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+            columnReader.ReadPrefix(ref pr);
             using var _ = columnReader.ReadTypedColumn(ref pr, 1);
         });
         Assert.Contains("ColumnReaderFactory", ex.Message);
@@ -133,6 +135,7 @@ public class JsonBinaryDecoderTests
         var ex = Assert.Throws<NotSupportedException>(() =>
         {
             var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+            columnReader.ReadPrefix(ref pr);
             using var _ = columnReader.ReadTypedColumn(ref pr, 1);
         });
         Assert.Contains("version 3", ex.Message);

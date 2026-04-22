@@ -60,6 +60,7 @@ public class JsonColumnReaderNestedTests
         var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
 
         var columnReader = new JsonColumnReader();
+        columnReader.ReadPrefix(ref reader);
         var result = columnReader.ReadTypedColumn(ref reader, 1);
 
         Assert.Equal(1, result.Count);
@@ -87,6 +88,7 @@ public class JsonColumnReaderNestedTests
         var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
 
         var columnReader = new JsonColumnReader();
+        columnReader.ReadPrefix(ref reader);
         var result = columnReader.ReadTypedColumn(ref reader, 1);
 
         using var doc = result[0];
@@ -115,6 +117,7 @@ public class JsonColumnReaderNestedTests
         var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
 
         var columnReader = new JsonColumnReader();
+        columnReader.ReadPrefix(ref reader);
         var result = columnReader.ReadTypedColumn(ref reader, 1);
 
         using var doc = result[0];
@@ -143,6 +146,7 @@ public class JsonColumnReaderNestedTests
         var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
 
         var columnReader = new JsonColumnReader();
+        columnReader.ReadPrefix(ref reader);
         var result = columnReader.ReadTypedColumn(ref reader, 1);
 
         using var doc = result[0];
@@ -174,6 +178,7 @@ public class JsonColumnReaderNestedTests
         var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
 
         var columnReader = new JsonColumnReader();
+        columnReader.ReadPrefix(ref reader);
         var result = columnReader.ReadTypedColumn(ref reader, 1);
 
         using var doc = result[0];
@@ -195,6 +200,7 @@ public class JsonColumnReaderNestedTests
         var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
 
         var columnReader = new JsonColumnReader();
+        columnReader.ReadPrefix(ref reader);
         var result = columnReader.ReadTypedColumn(ref reader, 1);
 
         using var doc = result[0];
@@ -225,6 +231,7 @@ public class JsonColumnReaderNestedTests
         var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
 
         var columnReader = new JsonColumnReader();
+        columnReader.ReadPrefix(ref reader);
         var result = columnReader.ReadTypedColumn(ref reader, 1);
 
         using var doc = result[0];

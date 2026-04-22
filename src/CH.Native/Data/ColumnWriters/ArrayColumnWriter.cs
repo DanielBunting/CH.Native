@@ -49,6 +49,12 @@ public sealed class ArrayColumnWriter<T> : IColumnWriter<T[]>
     public Type ClrType => typeof(T[]);
 
     /// <inheritdoc />
+    // Recursively emit the element writer's prefix. Array has no prefix bytes of its
+    // own — its offsets are per-row data. But if the element is LowCardinality (or
+    // wraps one), its KeysSerializationVersion must precede our offsets.
+    public void WritePrefix(ref ProtocolWriter writer) => _elementWriter.WritePrefix(ref writer);
+
+    /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, T[][] values)
     {
         // Step 1: Write cumulative offsets (UInt64 per row)
@@ -121,9 +127,9 @@ public sealed class ArrayColumnWriter<T> : IColumnWriter<T[]>
             writer.WriteUInt64(offset);
         }
 
-        // Step 2a (fast/correct path): when every row is a T[], flatten and delegate
-        // to _elementWriter.WriteColumn so element writers that emit per-column
-        // headers (e.g. NullableColumnWriter's null bitmap) do so correctly.
+        // Step 2a (typed fast path): every row already matches T[] — flatten and
+        // delegate to the typed WriteColumn so inner writers that emit per-column
+        // headers (Nullable null bitmap, LowCardinality flags/dict) see one call.
         if (allMatchT)
         {
             var allElements = new T[totalElements];
@@ -140,18 +146,39 @@ public sealed class ArrayColumnWriter<T> : IColumnWriter<T[]>
             return;
         }
 
-        // Step 2b (compat path): element CLR type doesn't match T — iterate via the
-        // non-generic per-value writer. Only safe for element types whose wire
-        // format is self-contained per value (String, FixedString, numerics).
-        IColumnWriter elementWriterNonGeneric = _elementWriter;
+        // Step 2b (CLR-mismatch path): flatten into object?[] and delegate to the
+        // element writer's non-generic WriteColumn, which applies its own coercion
+        // (FixedString/string, Decimal128/decimal, etc.). This still keeps the one-
+        // call contract — crucial for LowCardinality (per-element WriteValue would
+        // emit one LC header per element, corrupting the stream).
+        var flattened = new object?[totalElements];
+        int fp = 0;
         for (int i = 0; i < values.Length; i++)
         {
             if (values[i] is System.Collections.IList list)
             {
                 for (int j = 0; j < list.Count; j++)
-                    elementWriterNonGeneric.WriteValue(ref writer, list[j]);
+                {
+                    flattened[fp++] = CoerceForInnerWriter(list[j]);
+                }
             }
         }
+        IColumnWriter elementWriterNonGeneric = _elementWriter;
+        elementWriterNonGeneric.WriteColumn(ref writer, flattened);
+    }
+
+    // Pre-coerce for cases where the inner writer's non-generic WriteColumn won't
+    // coerce itself. Currently only FixedString-shaped writers (ClrType = byte[])
+    // when wrapped in another writer (e.g. LowCardinality) don't chain through the
+    // inner element's non-generic WriteValue, so a string POCO value would get cast
+    // to default(byte[]) = null. Re-encode to UTF-8 up-front here.
+    private static object? CoerceForInnerWriter(object? value)
+    {
+        if (typeof(T) == typeof(byte[]) && value is string s)
+        {
+            return System.Text.Encoding.UTF8.GetBytes(s);
+        }
+        return value;
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)

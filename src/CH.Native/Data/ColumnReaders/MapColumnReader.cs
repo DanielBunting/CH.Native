@@ -67,6 +67,13 @@ public sealed class MapColumnReader<TKey, TValue> : IColumnReader<Dictionary<TKe
     public Type ClrType => typeof(Dictionary<TKey, TValue>);
 
     /// <inheritdoc />
+    public void ReadPrefix(ref ProtocolReader reader)
+    {
+        _keyReader.ReadPrefix(ref reader);
+        _valueReader.ReadPrefix(ref reader);
+    }
+
+    /// <inheritdoc />
     public Dictionary<TKey, TValue> ReadValue(ref ProtocolReader reader)
     {
         // Single value uses UInt64 offset

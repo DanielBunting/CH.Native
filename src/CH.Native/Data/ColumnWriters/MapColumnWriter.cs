@@ -67,6 +67,15 @@ public sealed class MapColumnWriter<TKey, TValue> : IColumnWriter<Dictionary<TKe
     public Type ClrType => typeof(Dictionary<TKey, TValue>);
 
     /// <inheritdoc />
+    // Emit both inner writers' prefixes (keys first, then values). Map has no prefix
+    // of its own — offsets are per-row data.
+    public void WritePrefix(ref ProtocolWriter writer)
+    {
+        _keyWriter.WritePrefix(ref writer);
+        _valueWriter.WritePrefix(ref writer);
+    }
+
+    /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, Dictionary<TKey, TValue>[] values)
     {
         // Step 1: Write cumulative offsets (UInt64 per row)

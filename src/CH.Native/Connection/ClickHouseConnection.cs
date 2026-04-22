@@ -431,10 +431,22 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
     private async Task SendHelloAddendumAsync(CancellationToken cancellationToken)
     {
-        // Send client hello addendum containing quota key (empty for regular clients)
+        // Server addendum wire order (see TCPHandler::receiveAddendum): quota_key,
+        // proto_send_chunked + proto_recv_chunked (54470+), parallel-replicas version (54471+).
         var bufferWriter = new ArrayBufferWriter<byte>();
         var writer = new ProtocolWriter(bufferWriter);
         writer.WriteString(string.Empty); // quota_key
+
+        if (NegotiatedProtocolVersion >= ProtocolVersion.WithChunkedPackets)
+        {
+            writer.WriteString("notchunked");
+            writer.WriteString("notchunked");
+        }
+
+        if (NegotiatedProtocolVersion >= ProtocolVersion.WithVersionedParallelReplicas)
+        {
+            writer.WriteVarInt(0); // we do not initiate parallel-replicas reads
+        }
 
         await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
         await _pipeWriter.FlushAsync(cancellationToken);
@@ -1537,16 +1549,18 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         _compressionEnabled = _settings.Compress;
         _cancellationRequested = false;
 
-        // Build settings dictionary for JSON serialization on CH 25.6+
-        // These settings tell ClickHouse to serialize JSON/Dynamic columns as
-        // length-prefixed strings in the Native protocol instead of complex binary format
+        // Build settings dictionary for JSON/Dynamic serialization on CH 25.6+.
+        // write_json_as_string keeps JSON columns on the simple String path; the FLATTENED
+        // flag routes Dynamic columns through the Native-only FLATTENED encoding. Server
+        // precedence (SerializationObject.cpp:268-271) means STRING wins over FLATTENED for
+        // Object, so JSON is unaffected by the second setting.
         Dictionary<string, string>? querySettings = null;
         if (IsClickHouse25_6OrLater())
         {
             querySettings = new Dictionary<string, string>
             {
-                // Recommended by clickhouse-go for JSON type support
-                ["output_format_native_write_json_as_string"] = "1"
+                ["output_format_native_write_json_as_string"] = "1",
+                ["output_format_native_use_flattened_dynamic_and_json_serialization"] = "1",
             };
         }
 
@@ -2059,21 +2073,28 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         return algorithmId == 0x82 || algorithmId == 0x90;
     }
 
-    private static void SkipProfileInfo(ref ProtocolReader reader)
+    private void SkipProfileInfo(ref ProtocolReader reader)
     {
-        // ProfileInfo structure:
+        // ProfileInfo structure (QueryPipeline/ProfileInfo.cpp::read):
         // - rows (VarInt)
         // - blocks (VarInt)
         // - bytes (VarInt)
         // - applied_limit (UInt8)
         // - rows_before_limit (VarInt)
-        // - calculated_rows_before_limit (UInt8)
+        // - calculated_rows_before_limit (UInt8) — the server's obsolete_field
+        // Added at 54469: applied_aggregation (UInt8) + rows_before_aggregation (VarInt)
         reader.ReadVarInt(); // rows
         reader.ReadVarInt(); // blocks
         reader.ReadVarInt(); // bytes
         reader.ReadByte();   // applied_limit
         reader.ReadVarInt(); // rows_before_limit
-        reader.ReadByte();   // calculated_rows_before_limit
+        reader.ReadByte();   // calculated_rows_before_limit / obsolete
+
+        if (NegotiatedProtocolVersion >= ProtocolVersion.WithRowsBeforeAggregation)
+        {
+            reader.ReadByte();   // applied_aggregation
+            reader.ReadVarInt(); // rows_before_aggregation
+        }
     }
 
     private static T? ConvertResult<T>(object? value)

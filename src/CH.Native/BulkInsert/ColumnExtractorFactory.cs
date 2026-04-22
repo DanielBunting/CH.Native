@@ -86,7 +86,14 @@ public static class ColumnExtractorFactory
             Type t when t == typeof(string) =>
                 clickHouseType.Contains("FixedString(")
                     ? CreateFixedStringExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable)
-                    : CreateStringExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable),
+                    : clickHouseType == "JSON" || clickHouseType.StartsWith("JSON(", StringComparison.Ordinal)
+                        // JSON has a column-level state prefix (JsonStringSerializationVersion)
+                        // that the direct-string-extractor path cannot emit. Kick to the boxed
+                        // fallback so JsonColumnWriter.WritePrefix/WriteColumn are both called.
+                        ? throw new NotSupportedException(
+                            $"Direct string extraction is disabled for JSON columns (column '{columnName}'). " +
+                            $"BulkInserter will use the standard column writer path.")
+                        : CreateStringExtractor<TRow>(property, columnName, clickHouseType, isClickHouseNullable),
 
             // DateTime types
             Type t when t == typeof(DateTime) => CreateDateTimeExtractor<TRow>(property, columnName, clickHouseType, isNullable, isClickHouseNullable),

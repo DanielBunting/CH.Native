@@ -51,6 +51,9 @@ public sealed class NullableColumnReader<T> : IColumnReader<T?>
     public Type ClrType => typeof(T?);
 
     /// <inheritdoc />
+    public void ReadPrefix(ref ProtocolReader reader) => _innerReader.ReadPrefix(ref reader);
+
+    /// <inheritdoc />
     public T? ReadValue(ref ProtocolReader reader)
     {
         var isNull = reader.ReadByte() != 0;
@@ -153,6 +156,9 @@ public sealed class NullableRefColumnReader<T> : IColumnReader<T?>
 
     /// <inheritdoc />
     public Type ClrType => typeof(T);
+
+    /// <inheritdoc />
+    public void ReadPrefix(ref ProtocolReader reader) => _innerReader.ReadPrefix(ref reader);
 
     /// <inheritdoc />
     public T? ReadValue(ref ProtocolReader reader)

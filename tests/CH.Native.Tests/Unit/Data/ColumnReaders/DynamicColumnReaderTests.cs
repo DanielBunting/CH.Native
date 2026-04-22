@@ -24,22 +24,22 @@ public class DynamicColumnReaderTests
 
         using var buffer = new PooledBufferWriter();
         var writer = new ProtocolWriter(buffer);
-        writer.WriteUInt64(1);      // structure version
-        writer.WriteUInt64(32);     // max_types
-        writer.WriteUInt64(1);      // numberOfTypes
+        writer.WriteUInt64(3);          // structure version = FLATTENED
+        writer.WriteVarInt(1ul);        // numberOfTypes
         writer.WriteString("Int64");
 
-        // Variant section
-        writer.WriteUInt64(0);      // discriminator version
+        // Indexes column — totalIndexValues = 2, so UInt8. All three rows select arm 0.
         writer.WriteByte(0);
         writer.WriteByte(0);
         writer.WriteByte(0);
+
+        // Arm 0 (Int64) data.
         writer.WriteInt64(10);
         writer.WriteInt64(20);
         writer.WriteInt64(30);
-        // Shared arm — zero rows.
 
         var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        reader.ReadPrefix(ref pr);
         using var col = reader.ReadTypedColumn(ref pr, 3);
 
         Assert.Equal(3, col.Count);
@@ -56,25 +56,23 @@ public class DynamicColumnReaderTests
 
         using var buffer = new PooledBufferWriter();
         var writer = new ProtocolWriter(buffer);
-        writer.WriteUInt64(1);
-        writer.WriteUInt64(32);
-        writer.WriteUInt64(2);
+        writer.WriteUInt64(3);
+        writer.WriteVarInt(2ul);
         writer.WriteString("Int64");
         writer.WriteString("String");
 
-        writer.WriteUInt64(0);
-        // rows: Int64, String, NULL, Int64
+        // rows: Int64, String, NULL (index == numberOfTypes = 2), Int64
         writer.WriteByte(0);
         writer.WriteByte(1);
-        writer.WriteByte(255);
+        writer.WriteByte(2);
         writer.WriteByte(0);
 
         writer.WriteInt64(100);
         writer.WriteInt64(200);
         writer.WriteString("hi");
-        // shared arm zero rows
 
         var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        reader.ReadPrefix(ref pr);
         using var col = reader.ReadTypedColumn(ref pr, 4);
 
         Assert.Equal("Int64", Row(col, 0).DeclaredTypeName);
@@ -86,39 +84,23 @@ public class DynamicColumnReaderTests
     }
 
     [Fact]
-    public void ReadTypedColumn_SharedArm_ReadsTypeNameAndValuePerRow()
+    public void ReadPrefix_RejectsNonFlattenedStructureVersion()
     {
-        var reader = (DynamicColumnReader)ReaderFactory.CreateReader("Dynamic(max_types=1)");
+        var reader = (DynamicColumnReader)ReaderFactory.CreateReader("Dynamic");
 
         using var buffer = new PooledBufferWriter();
         var writer = new ProtocolWriter(buffer);
-        writer.WriteUInt64(1);
-        writer.WriteUInt64(1);      // max_types=1
-        writer.WriteUInt64(1);      // numberOfTypes=1 (only Int64 in declared arms)
-        writer.WriteString("Int64");
+        writer.WriteUInt64(1); // V1 — no longer supported
 
-        writer.WriteUInt64(0);
-        // rows: declared Int64, shared String, shared Int32
-        writer.WriteByte(0);
-        writer.WriteByte(1);
-        writer.WriteByte(1);
+        NotSupportedException? thrown = null;
+        try
+        {
+            var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+            reader.ReadPrefix(ref pr);
+        }
+        catch (NotSupportedException ex) { thrown = ex; }
 
-        writer.WriteInt64(7);       // declared arm 0 — 1 row
-        // shared arm — 2 rows of (String type_name, binary value)
-        writer.WriteString("String");
-        writer.WriteString("overflow");
-        writer.WriteString("Int32");
-        writer.WriteInt32(-42);
-
-        var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
-        using var col = reader.ReadTypedColumn(ref pr, 3);
-
-        Assert.Equal("Int64", Row(col, 0).DeclaredTypeName);
-        Assert.Equal(7L, Row(col, 0).Value);
-        Assert.Equal("String", Row(col, 1).DeclaredTypeName);
-        Assert.Equal("overflow", Row(col, 1).Value);
-        Assert.Equal("Int32", Row(col, 2).DeclaredTypeName);
-        Assert.Equal(-42, Row(col, 2).Value);
+        Assert.NotNull(thrown);
     }
 
     [Fact]
@@ -137,9 +119,11 @@ public class DynamicColumnReaderTests
 
         using var buffer = new PooledBufferWriter();
         var pw = new ProtocolWriter(buffer);
+        w.WritePrefix(ref pw);
         w.WriteColumn(ref pw, source);
 
         var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        r.ReadPrefix(ref pr);
         using var col = r.ReadTypedColumn(ref pr, source.Length);
 
         Assert.Equal("Int64", Row(col, 0).DeclaredTypeName);
@@ -152,31 +136,27 @@ public class DynamicColumnReaderTests
     }
 
     [Fact]
-    public void RoundTrip_MaxTypesOne_OverflowRoutesThroughSharedArm()
+    public void WriteColumn_ThrowsWhenTypesExceedMaxTypes()
     {
         var w = (DynamicColumnWriter)WriterFactory.CreateWriter("Dynamic(max_types=1)");
-        var r = (DynamicColumnReader)ReaderFactory.CreateReader("Dynamic(max_types=1)");
 
         var source = new[]
         {
             new ClickHouseDynamic(0, 1L, "Int64"),
             new ClickHouseDynamic(0, "x", "String"),
-            new ClickHouseDynamic(0, 2L, "Int64"),
         };
 
-        using var buffer = new PooledBufferWriter();
-        var pw = new ProtocolWriter(buffer);
-        w.WriteColumn(ref pw, source);
+        ArgumentException? thrown = null;
+        try
+        {
+            using var buffer = new PooledBufferWriter();
+            var pw = new ProtocolWriter(buffer);
+            w.WritePrefix(ref pw);
+            w.WriteColumn(ref pw, source);
+        }
+        catch (ArgumentException ex) { thrown = ex; }
 
-        var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
-        using var col = r.ReadTypedColumn(ref pr, source.Length);
-
-        Assert.Equal("Int64", Row(col, 0).DeclaredTypeName);
-        Assert.Equal(1L, Row(col, 0).Value);
-        Assert.Equal("String", Row(col, 1).DeclaredTypeName);
-        Assert.Equal("x", Row(col, 1).Value);
-        Assert.Equal("Int64", Row(col, 2).DeclaredTypeName);
-        Assert.Equal(2L, Row(col, 2).Value);
+        Assert.NotNull(thrown);
     }
 
     [Fact]
@@ -194,6 +174,7 @@ public class DynamicColumnReaderTests
 
         using var buffer = new PooledBufferWriter();
         var pw = new ProtocolWriter(buffer);
+        w.WritePrefix(ref pw);
         w.WriteColumn(ref pw, source);
 
         var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));

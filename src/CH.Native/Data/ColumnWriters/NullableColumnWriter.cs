@@ -50,6 +50,11 @@ public sealed class NullableColumnWriter<T> : IColumnWriter<T?>
     public Type ClrType => typeof(T?);
 
     /// <inheritdoc />
+    // Nullable itself has no state prefix (its null bitmap is per-row data), but an
+    // inner LC still needs its KeysSerializationVersion emitted.
+    public void WritePrefix(ref ProtocolWriter writer) => _innerWriter.WritePrefix(ref writer);
+
+    /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, T?[] values)
     {
         // Step 1: Write null bitmap (1 byte per row)
@@ -140,6 +145,9 @@ public sealed class NullableRefColumnWriter<T> : IColumnWriter<T?>
 
     /// <inheritdoc />
     public Type ClrType => typeof(T);
+
+    /// <inheritdoc />
+    public void WritePrefix(ref ProtocolWriter writer) => _innerWriter.WritePrefix(ref writer);
 
     /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, T?[] values)

@@ -63,30 +63,38 @@ public sealed class JsonStringColumnReader : IColumnReader<string>
     private const ulong JsonStringSerializationVersion = 1;
     private const ulong JsonObjectSerializationVersion = 3;
 
+    // Version is read at the column-level prefix phase; cache on the instance so
+    // ReadTypedColumn can dispatch on it. Fine because a column reader is used
+    // sequentially within one block.
+    private ulong _serializationVersion;
+
+    /// <inheritdoc />
+    public void ReadPrefix(ref ProtocolReader reader)
+    {
+        _serializationVersion = reader.ReadUInt64();
+    }
+
     /// <inheritdoc />
     public TypedColumn<string> ReadTypedColumn(ref ProtocolReader reader, int rowCount)
     {
-        // Read the serialization version (UInt64) that precedes the column data
-        var serializationVersion = reader.ReadUInt64();
-
-        if (serializationVersion == JsonStringSerializationVersion)
+        if (_serializationVersion == JsonStringSerializationVersion)
         {
             // Version 1: JSON is serialized as strings - simple and compatible
             return ReadStringSerializedColumn(ref reader, rowCount);
         }
-        else if (serializationVersion == JsonDeprecatedObjectSerializationVersion ||
-                 serializationVersion == JsonObjectSerializationVersion)
+        else if (_serializationVersion == JsonDeprecatedObjectSerializationVersion ||
+                 _serializationVersion == JsonObjectSerializationVersion)
         {
             // Version 0 or 3: Complex object serialization
             throw new NotSupportedException(
-                $"JSON serialization version {serializationVersion} (object format) is not supported. " +
+                $"JSON serialization version {_serializationVersion} (object format) is not supported. " +
                 "Set 'output_format_native_write_json_as_string=1' in your ClickHouse settings or append " +
                 "'SETTINGS output_format_native_write_json_as_string=1' to your query to use string serialization.");
         }
         else
         {
             throw new NotSupportedException(
-                $"Unknown JSON serialization version: {serializationVersion}. " +
+                $"Unknown JSON serialization version: {_serializationVersion}. " +
                 "This may indicate an incompatible ClickHouse server version.");
         }
     }

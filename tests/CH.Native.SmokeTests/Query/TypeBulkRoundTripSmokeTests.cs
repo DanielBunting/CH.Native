@@ -390,15 +390,9 @@ public class TypeBulkRoundTripSmokeTests
         selectExpr: "id, toString(val)",
         stringMat: mat);
 
-    // Time / Time64 were introduced in ClickHouse 25.6. The smoke fixture pins 25.3
-    // for reproducibility with the existing suite, so the `enable_time_time64_type`
-    // session flag doesn't exist on the server. Tests are present to document the
-    // intended coverage; they'll run once the fixture upgrades the container image.
-    private const string TimeTypeSkipReason =
-        "Requires ClickHouse 25.6+ for Time/Time64 types; smoke fixture pins 25.3. Bump the image to enable.";
     private static readonly string[] EnableTimeTime64 = new[] { "SET enable_time_time64_type=1" };
 
-    [Fact(Skip = TimeTypeSkipReason)]
+    [Fact]
     public Task Time_() => RunAsync("Time", new[]
     {
         new Row<TimeOnly> { Id = 0, Val = TimeOnly.MinValue },
@@ -406,7 +400,7 @@ public class TypeBulkRoundTripSmokeTests
         new Row<TimeOnly> { Id = 2, Val = new TimeOnly(23, 59, 59) },
     }, sessionSettings: EnableTimeTime64);
 
-    [Fact(Skip = TimeTypeSkipReason)]
+    [Fact]
     public Task Time64() => RunAsync("Time64(3)", new[]
     {
         new Row<TimeOnly> { Id = 0, Val = TimeOnly.MinValue },
@@ -414,7 +408,7 @@ public class TypeBulkRoundTripSmokeTests
         new Row<TimeOnly> { Id = 2, Val = new TimeOnly(23, 59, 59, 999) },
     }, sessionSettings: EnableTimeTime64);
 
-    [Fact(Skip = TimeTypeSkipReason)]
+    [Fact]
     public Task NullableTime() => RunAsync("Nullable(Time)", new[]
     {
         new Row<TimeOnly?> { Id = 0, Val = new TimeOnly(0, 0, 0) },
@@ -422,7 +416,7 @@ public class TypeBulkRoundTripSmokeTests
         new Row<TimeOnly?> { Id = 2, Val = new TimeOnly(23, 59, 59) },
     }, sessionSettings: EnableTimeTime64);
 
-    [Fact(Skip = TimeTypeSkipReason)]
+    [Fact]
     public Task NullableTime64() => RunAsync("Nullable(Time64(3))", new[]
     {
         new Row<TimeOnly?> { Id = 0, Val = new TimeOnly(0, 0, 0, 1) },
@@ -929,18 +923,11 @@ public class TypeBulkRoundTripSmokeTests
         selectExpr: "id, arrayMap(x -> toString(x), val)",
         stringMat: mat);
 
-    // --- LowCardinality-inside-composite footprint (all fail with the same root cause) ---
-    //
-    // Bulk-inserting ANY composite that wraps LowCardinality needs the inner LC state
-    // prefix (KeysSerializationVersion UInt64) emitted BEFORE the outer composite's
-    // data (Array offsets / Map offsets / etc.). The current writer interface has no
-    // prefix/data split, so LC headers come out inline after the outer offsets and the
-    // server rejects with "Invalid version for SerializationLowCardinality key column".
-    // Tracked in .tmp/surfaced-bugs.md. Fix requires a writer prefix/data API refactor.
-    private const string LcCompositeSkipReason =
-        "Writer lacks prefix/data split: LC state prefix emitted in wrong position inside composite. See .tmp/surfaced-bugs.md.";
-
-    [Theory(Skip = LcCompositeSkipReason)]
+    // LowCardinality inside a composite needs its KeysSerializationVersion prefix
+    // emitted before the outer composite's structural bytes — handled by the
+    // IColumnWriter.WritePrefix / IColumnReader.ReadPrefix split introduced after
+    // the initial smoke-test build-out.
+    [Theory]
     [InlineData(StringMaterialization.Eager)]
     [InlineData(StringMaterialization.Lazy)]
     public Task ArrayLowCardinalityString(StringMaterialization mat) => RunAsync(
@@ -952,7 +939,7 @@ public class TypeBulkRoundTripSmokeTests
         },
         stringMat: mat);
 
-    [Theory(Skip = LcCompositeSkipReason)]
+    [Theory]
     [InlineData(StringMaterialization.Eager)]
     [InlineData(StringMaterialization.Lazy)]
     public Task ArrayLowCardinalityFixedString(StringMaterialization mat) => RunAsync(
@@ -964,7 +951,7 @@ public class TypeBulkRoundTripSmokeTests
         },
         stringMat: mat);
 
-    [Theory(Skip = LcCompositeSkipReason)]
+    [Theory]
     [InlineData(StringMaterialization.Eager)]
     [InlineData(StringMaterialization.Lazy)]
     public Task ArrayLowCardinalityNullableString(StringMaterialization mat) => RunAsync(
@@ -976,7 +963,7 @@ public class TypeBulkRoundTripSmokeTests
         },
         stringMat: mat);
 
-    [Theory(Skip = LcCompositeSkipReason)]
+    [Theory]
     [InlineData(StringMaterialization.Eager)]
     [InlineData(StringMaterialization.Lazy)]
     public Task MapStringLowCardinalityString(StringMaterialization mat) => RunAsync(
@@ -988,7 +975,7 @@ public class TypeBulkRoundTripSmokeTests
         },
         stringMat: mat);
 
-    [Theory(Skip = LcCompositeSkipReason)]
+    [Theory]
     [InlineData(StringMaterialization.Eager)]
     [InlineData(StringMaterialization.Lazy)]
     public Task MapLowCardinalityStringString(StringMaterialization mat) => RunAsync(
@@ -1000,7 +987,7 @@ public class TypeBulkRoundTripSmokeTests
         },
         stringMat: mat);
 
-    [Theory(Skip = LcCompositeSkipReason)]
+    [Theory]
     [InlineData(StringMaterialization.Eager)]
     [InlineData(StringMaterialization.Lazy)]
     public Task TupleIntLowCardinalityString(StringMaterialization mat) => RunAsync(
@@ -1088,12 +1075,6 @@ public class TypeBulkRoundTripSmokeTests
 
     #region JSON / Dynamic / Variant
 
-    // JSON and Dynamic on ClickHouse 25.3 reject the binary wire format that
-    // CH.Native emits ("Invalid version for Object structure serialization"). The
-    // fixture pins 25.3; both types require 25.6+ with native-format flattening.
-    private const string JsonDynamicSkipReason =
-        "Requires ClickHouse 25.6+ and output_format_native_use_flattened_dynamic_and_json_serialization=1; smoke fixture pins 25.3.";
-
     private static readonly string[] EnableJson = new[] { "SET allow_experimental_json_type = 1" };
     private static readonly string[] EnableDynamic = new[] { "SET allow_experimental_dynamic_type = 1" };
     private static readonly string[] EnableVariant = new[]
@@ -1102,7 +1083,7 @@ public class TypeBulkRoundTripSmokeTests
         "SET allow_suspicious_variant_types = 1",
     };
 
-    [Fact(Skip = JsonDynamicSkipReason)]
+    [Fact]
     public Task Json_() => RunAsync(
         "JSON",
         new[]
@@ -1115,7 +1096,7 @@ public class TypeBulkRoundTripSmokeTests
         selectExpr: "id, toString(val)",
         sessionSettings: EnableJson);
 
-    [Fact(Skip = JsonDynamicSkipReason)]
+    [Fact]
     public Task Dynamic_() => RunAsync(
         "Dynamic",
         new[]
@@ -1141,9 +1122,47 @@ public class TypeBulkRoundTripSmokeTests
         selectExpr: "id, if(isNull(val), NULL, toString(val))",
         sessionSettings: EnableVariant);
 
-    private static string NormalizeJson(string raw) =>
-        System.Text.Json.JsonSerializer.Serialize(
-            System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(raw));
+    // ClickHouse normalizes JSON key order on storage (alphabetical). Parse both sides
+    // into key-sorted objects before comparing so pre-written and post-read match.
+    private static string NormalizeJson(string raw)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(raw);
+        return SerializeSorted(doc.RootElement);
+    }
+
+    private static string SerializeSorted(System.Text.Json.JsonElement el)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new System.Text.Json.Utf8JsonWriter(stream))
+        {
+            WriteSorted(writer, el);
+        }
+        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private static void WriteSorted(System.Text.Json.Utf8JsonWriter writer, System.Text.Json.JsonElement el)
+    {
+        switch (el.ValueKind)
+        {
+            case System.Text.Json.JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var prop in el.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(prop.Name);
+                    WriteSorted(writer, prop.Value);
+                }
+                writer.WriteEndObject();
+                break;
+            case System.Text.Json.JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in el.EnumerateArray()) WriteSorted(writer, item);
+                writer.WriteEndArray();
+                break;
+            default:
+                el.WriteTo(writer);
+                break;
+        }
+    }
 
     #endregion
 
@@ -1333,6 +1352,74 @@ public class TypeBulkRoundTripSmokeTests
         [ClickHouseColumn(Name = "map_col", Order = 6)] public Dictionary<string, int> Map { get; set; } = new();
         [ClickHouseColumn(Name = "tup", Order = 7)] public object[] Tup { get; set; } = Array.Empty<object>();
         [ClickHouseColumn(Name = "lc", Order = 8)] public string Lc { get; set; } = "";
+    }
+
+    // SELECT that skips over columns containing LowCardinality nested in composites
+    // exercises LowCardinalityColumnSkipper's symmetry with the writer prefix/data
+    // split — skipper must consume the LC state prefix before skipping the outer
+    // composite's bytes, matching the reader contract.
+    [Fact]
+    public async Task ColumnSkippers_PartialSelect_OverLowCardinalityComposites()
+    {
+        var table = $"smoke_skip_lc_{Guid.NewGuid():N}";
+        try
+        {
+            await using var conn = new ClickHouseConnection(_fixture.NativeConnectionString);
+            await conn.OpenAsync();
+            await conn.ExecuteNonQueryAsync($@"
+                CREATE TABLE {table} (
+                    id Int32,
+                    arr_lc Array(LowCardinality(String)),
+                    map_lc Map(String, LowCardinality(String)),
+                    tup_lc Tuple(Int32, LowCardinality(String)),
+                    lc LowCardinality(String),
+                    trailing Int64
+                ) ENGINE = Memory");
+
+            await using var inserter = conn.CreateBulkInserter<SkipLcRow>(table);
+            await inserter.InitAsync();
+            for (int i = 0; i < 5; i++)
+            {
+                await inserter.AddAsync(new SkipLcRow
+                {
+                    Id = i,
+                    ArrLc = new[] { "red", "green", "red" },
+                    MapLc = new Dictionary<string, string> { ["k"] = "red", ["k2"] = "green" },
+                    TupLc = new object[] { i, "blue" },
+                    Lc = "yellow",
+                    Trailing = i * 1000,
+                });
+            }
+            await inserter.CompleteAsync();
+
+            // SELECT only id + trailing — skippers must walk every LC-containing column.
+            var postRead = await NativeQueryHelper.QueryAsync(
+                _fixture.NativeConnectionString,
+                $"SELECT id, trailing FROM {table} ORDER BY id");
+
+            Assert.Equal(5, postRead.Count);
+            for (int i = 0; i < 5; i++)
+            {
+                Assert.Equal(i, Convert.ToInt32(postRead[i][0]));
+                Assert.Equal(i * 1000L, Convert.ToInt64(postRead[i][1]));
+            }
+        }
+        finally
+        {
+            await NativeQueryHelper.ExecuteNonQueryAsync(
+                _fixture.NativeConnectionString,
+                $"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    private class SkipLcRow
+    {
+        [ClickHouseColumn(Name = "id", Order = 0)] public int Id { get; set; }
+        [ClickHouseColumn(Name = "arr_lc", Order = 1)] public string[] ArrLc { get; set; } = Array.Empty<string>();
+        [ClickHouseColumn(Name = "map_lc", Order = 2)] public Dictionary<string, string> MapLc { get; set; } = new();
+        [ClickHouseColumn(Name = "tup_lc", Order = 3)] public object[] TupLc { get; set; } = Array.Empty<object>();
+        [ClickHouseColumn(Name = "lc", Order = 4)] public string Lc { get; set; } = "";
+        [ClickHouseColumn(Name = "trailing", Order = 5)] public long Trailing { get; set; }
     }
 
     #endregion

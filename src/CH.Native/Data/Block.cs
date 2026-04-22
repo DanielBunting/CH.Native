@@ -276,6 +276,7 @@ public sealed class Block
                 if (rowCount > 0)
                 {
                     var columnReader = registry.GetReader(columnTypes[i]);
+                    columnReader.ReadPrefix(ref reader);
                     columns[i] = columnReader.ReadTypedColumn(ref reader, rowCount);
                 }
                 else
@@ -357,6 +358,7 @@ public sealed class Block
                 if (rowCount > 0)
                 {
                     var columnReader = registry.GetReader(columnTypes[i]);
+                    columnReader.ReadPrefix(ref reader);
                     columns[i] = columnReader.ReadTypedColumn(ref reader, rowCount);
                 }
                 else
@@ -504,6 +506,7 @@ public sealed class Block
             if (rowCount > 0)
             {
                 var columnWriter = writerRegistry.GetWriter(columnTypes[i]);
+                columnWriter.WritePrefix(ref writer);
                 var data = columnData[i].Length == rowCount
                     ? columnData[i]
                     : columnData[i][..rowCount];
@@ -565,6 +568,7 @@ public sealed class Block
             if (rowCount > 0)
             {
                 var columnWriter = writerRegistry.GetWriter(columnTypes[i]);
+                columnWriter.WritePrefix(ref tempWriter);
                 var data = columnData[i].Length == rowCount
                     ? columnData[i]
                     : columnData[i][..rowCount];

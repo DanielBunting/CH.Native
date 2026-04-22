@@ -25,11 +25,19 @@ namespace CH.Native.Data.ColumnWriters;
 /// </remarks>
 public sealed class JsonColumnWriter : IColumnWriter<JsonDocument>
 {
+    // JsonStringSerializationVersion (1) — tells the server the column data that
+    // follows is per-row length-prefixed UTF-8 JSON strings, not the flattened
+    // typed-path object format. Required column-level state prefix since CH 25.6.
+    private const ulong JsonStringSerializationVersion = 1;
+
     /// <inheritdoc />
     public string TypeName => "JSON";
 
     /// <inheritdoc />
     public Type ClrType => typeof(JsonDocument);
+
+    /// <inheritdoc />
+    public void WritePrefix(ref ProtocolWriter writer) => writer.WriteUInt64(JsonStringSerializationVersion);
 
     /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, JsonDocument[] values)

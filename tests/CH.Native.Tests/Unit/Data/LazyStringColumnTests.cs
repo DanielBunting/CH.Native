@@ -480,6 +480,9 @@ public class LazyStringColumnTests
         var lowCard = new LowCardinalityColumnReader<string>(stringReader, isNullable: true);
 
         var protocolReader = new ProtocolReader(new ReadOnlySequence<byte>(wireBytes));
+        // KeysSerializationVersion is a column-level state prefix; Block dispatch
+        // calls ReadPrefix before ReadTypedColumn. Match that contract here.
+        lowCard.ReadPrefix(ref protocolReader);
         using var column = lowCard.ReadTypedColumn(ref protocolReader, indices.Length);
 
         Assert.Equal(6, column.Count);
