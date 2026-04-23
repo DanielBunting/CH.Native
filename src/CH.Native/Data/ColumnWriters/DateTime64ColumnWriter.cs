@@ -27,9 +27,10 @@ public sealed class DateTime64ColumnWriter : IColumnWriter<DateTime>
         _precision = precision;
         _timezone = timezone;
 
-        // Calculate ticks per unit based on precision
+        // For precision > 7, one wire unit is smaller than a tick, so no integer
+        // ticks-per-unit exists — leave it zero and let WriteValue take the multiply branch.
         var divisor = (long)Math.Pow(10, precision);
-        _ticksPerUnit = TimeSpan.TicksPerSecond / divisor;
+        _ticksPerUnit = precision <= 7 ? TimeSpan.TicksPerSecond / divisor : 0;
     }
 
     /// <inheritdoc />
