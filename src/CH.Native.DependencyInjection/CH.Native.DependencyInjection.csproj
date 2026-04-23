@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Microsoft.Extensions.DependencyInjection integration for CH.Native. Registers ClickHouseDataSource as a singleton, supports keyed multi-database setups, IConfiguration binding, rotating-credential providers (JWT, SSH key, mTLS cert), and ASP.NET health checks.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CH.Native\CH.Native.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.*" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="8.*" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="8.*" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="8.*" />
+  </ItemGroup>
+
+</Project>

@@ -71,6 +71,11 @@ if (args.Length > 0)
             BenchmarkRunner.Run<OptimizationBenchmarks>();
             break;
 
+        // Pool / DataSource throughput (requires Docker)
+        case "pool":
+            BenchmarkRunner.Run<DataSourcePoolBenchmarks>();
+            break;
+
         // JSON benchmarks (requires Docker with ClickHouse 25.6+)
         case "jsoncolumn":
             BenchmarkRunner.Run<JsonColumnBenchmarks>();
@@ -153,6 +158,7 @@ static void PrintUsage()
           connection  - Connection establishment overhead
           compression - Compression comparison (LZ4, Zstd, native vs HTTP)
           types       - Per-type read suite: Native vs Driver × Bulk/Single for every primitive
+          pool        - DataSource pool throughput across MaxPoolSize × Parallelism matrix
           compare     - Run all protocol comparison benchmarks
           quick       - Quick dev test (SimpleQueryBenchmarks, few iterations)
 

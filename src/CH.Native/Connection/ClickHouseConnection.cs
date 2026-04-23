@@ -61,6 +61,38 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private IReadOnlyList<string>? _pinnedRoles;
     private bool _pinnedRolesSet;
 
+    // Pool integration: when set, DisposeAsync hands the connection back to this
+    // callback instead of tearing down the socket. The hook is one-shot — it is
+    // atomically cleared on invocation, so a second Dispose (e.g. if the pool
+    // decides to discard and calls DisposeAsync itself) falls through to the
+    // normal teardown path. Only ClickHouseDataSource sets this.
+    private Func<ClickHouseConnection, ValueTask>? _poolReturnHook;
+
+    internal Func<ClickHouseConnection, ValueTask>? PoolReturnHook
+    {
+        get => _poolReturnHook;
+        set => _poolReturnHook = value;
+    }
+
+    /// <summary>
+    /// Pool-safety check: returns true when this connection has no session-state
+    /// drift that would leak between tenants (no in-flight query, no sticky role
+    /// override). A pool should discard any connection where this returns false.
+    /// </summary>
+    internal bool CanBePooled
+    {
+        get
+        {
+            if (_disposed || !_isOpen) return false;
+            lock (_queryLock)
+            {
+                if (_currentQueryId is not null) return false;
+                if (_pinnedRolesSet || _rolesExplicitlySet) return false;
+                return true;
+            }
+        }
+    }
+
     /// <summary>
     /// Gets the server information received during handshake.
     /// </summary>
@@ -2161,6 +2193,36 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     {
         if (_disposed)
             return;
+
+        // Pool-return path: if the DataSource has attached a return-to-pool hook,
+        // route disposal through it instead of tearing down the socket. The hook
+        // is one-shot (atomic swap) so a subsequent DisposeAsync — e.g. the pool
+        // itself discarding the connection — falls through to the teardown path.
+        var hook = Interlocked.Exchange(ref _poolReturnHook, null);
+        if (hook is not null)
+        {
+            try
+            {
+                await hook(this).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Hooks must be robust; if the pool-return path throws we fall back
+                // to a real teardown so the caller's `await using` doesn't leak
+                // a half-returned connection.
+                if (!_disposed)
+                {
+                    if (_isOpen)
+                    {
+                        ClickHouseMeter.DecrementConnections();
+                        _logger.ConnectionClosed(_settings.Host);
+                    }
+                    _disposed = true;
+                    await CloseInternalAsync().ConfigureAwait(false);
+                }
+            }
+            return;
+        }
 
         if (_isOpen)
         {
