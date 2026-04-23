@@ -294,7 +294,7 @@ public sealed class CircuitBreaker
                 newState = _state;
                 _lastStateChange = now;
             }
-            else
+            else if (_state == CircuitBreakerState.Closed)
             {
                 // Check if we need to reset the window
                 if (now - _windowStart > _options.FailureWindow)
@@ -313,6 +313,8 @@ public sealed class CircuitBreaker
                     _lastStateChange = now;
                 }
             }
+            // _state == Open: losers of a HalfOpen→Open race land here. Do nothing;
+            // the winning thread already raised the single logical transition event.
         }
 
         if (oldState.HasValue && newState.HasValue)

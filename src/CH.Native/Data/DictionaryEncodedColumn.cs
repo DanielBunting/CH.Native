@@ -58,6 +58,17 @@ public sealed class DictionaryEncodedColumn<T> : ITypedColumn
             if (_isNullable && dictIndex == 0)
                 return default!;
 
+            // Bound-check before indexing. Malformed blocks (index outside the
+            // dictionary) would otherwise throw a bare IndexOutOfRangeException with
+            // no context — surface the row / dict-size / wire-index instead so the
+            // error is actionable.
+            if ((uint)dictIndex >= (uint)_dictionary.Length)
+            {
+                throw new InvalidDataException(
+                    $"LowCardinality row {index} references dictionary index {dictIndex}, " +
+                    $"but the dictionary has only {_dictionary.Length} entries. The block is malformed.");
+            }
+
             return _dictionary[dictIndex];
         }
     }

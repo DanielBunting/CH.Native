@@ -412,19 +412,26 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         if (_disposed)
             return;
 
-        _disposed = true;
-
+        // Run the implicit complete BEFORE flipping _disposed — CompleteAsync guards on
+        // ObjectDisposedException.ThrowIf(_disposed, ...), so setting it first would
+        // short-circuit the flush, silently drop the buffered batch, and leave the
+        // INSERT half-sent on the wire (breaking the connection for later queries).
         if (_initialized && !_completed)
         {
             try
             {
                 await CompleteAsync();
             }
-            catch
+            catch (Exception ex)
             {
-                // Ignore errors during dispose cleanup
+                // Swallow so dispose always completes, but record so silent data loss is
+                // auditable. Callers who need guaranteed persistence should call
+                // CompleteAsync explicitly and handle its exception.
+                _connection.Logger.BulkInsertDisposeCompleteFailed(_tableName, ex);
             }
         }
+
+        _disposed = true;
 
         // Return pooled arrays
         ReturnPooledArrays();

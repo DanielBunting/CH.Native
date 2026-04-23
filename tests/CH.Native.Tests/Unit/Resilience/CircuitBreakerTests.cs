@@ -230,10 +230,13 @@ public class CircuitBreakerTests
     [Fact]
     public async Task ExecuteAsync_FailureWindowExpires_ResetsCount()
     {
+        // Use a generous window (2s) so the three setup failures comfortably land
+        // inside it even under loaded CI where xUnit discovery/scheduling can
+        // interleave with Task.Yield — a tight 500ms window made this test a flake.
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 5,
-            FailureWindow = TimeSpan.FromMilliseconds(500)
+            FailureWindow = TimeSpan.FromSeconds(2)
         };
         var breaker = new CircuitBreaker(options);
 
@@ -252,8 +255,8 @@ public class CircuitBreakerTests
 
         Assert.Equal(3, breaker.FailureCount);
 
-        // Wait for failure window to expire (window is 500ms, wait 700ms for headroom on slow CI)
-        await Task.Delay(700);
+        // Wait for the window to expire with comfortable headroom.
+        await Task.Delay(TimeSpan.FromSeconds(2.5));
 
         // Next failure should start fresh
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>

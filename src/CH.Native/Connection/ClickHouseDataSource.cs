@@ -17,6 +17,7 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
     private readonly ClickHouseDataSourceOptions _options;
     private readonly ConcurrentStack<PoolEntry> _idle = new();
     private readonly SemaphoreSlim _gate;
+    private readonly CancellationTokenSource _disposeCts = new();
     private readonly Func<CancellationToken, ValueTask<ClickHouseConnectionSettings>> _settingsFactory;
     private int _total;
     private int _pendingWaits;
@@ -82,15 +83,39 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
         // released in ReturnAsync (normal return) or DiscardAsync (dispose /
         // expiry). Idle connections sitting in _idle do NOT hold a permit,
         // which is what lets a returned connection wake a parked waiter.
+        //
+        // Link the caller's token with _disposeCts so a concurrent DisposeAsync
+        // wakes parked waiters immediately instead of leaving them stuck on a
+        // soon-to-be-disposed semaphore.
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken, _disposeCts.Token);
+
         Interlocked.Increment(ref _pendingWaits);
         bool acquired;
         try
         {
-            acquired = await _gate.WaitAsync(_options.ConnectionWaitTimeout, cancellationToken).ConfigureAwait(false);
+            acquired = await _gate.WaitAsync(_options.ConnectionWaitTimeout, linkedCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_disposeCts.IsCancellationRequested)
+        {
+            // Disposal tripped the linked token. Surface the conventional error for a
+            // post-dispose rent attempt rather than leaking OperationCanceledException.
+            throw new ObjectDisposedException(nameof(ClickHouseDataSource));
         }
         finally
         {
             Interlocked.Decrement(ref _pendingWaits);
+        }
+
+        // Re-check after wake-up: a dispose that raced with us flips _disposed *before*
+        // cancelling the token, so the waiter can see inconsistent state if it skips this.
+        if (_disposed)
+        {
+            if (acquired)
+            {
+                try { _gate.Release(); } catch (ObjectDisposedException) { /* gate already gone */ }
+            }
+            throw new ObjectDisposedException(nameof(ClickHouseDataSource));
         }
 
         if (!acquired)
@@ -207,6 +232,12 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
         if (_disposed) return;
         _disposed = true;
 
+        // Wake any parked waiters on the gate first so they observe _disposed=true on
+        // the rebound and throw a clean ObjectDisposedException instead of either
+        // blocking until _options.ConnectionWaitTimeout or hitting an already-disposed
+        // semaphore.
+        try { _disposeCts.Cancel(); } catch (ObjectDisposedException) { /* best-effort */ }
+
         while (_idle.TryPop(out var entry))
         {
             // Idle connections don't hold a gate permit (they were released on
@@ -215,7 +246,13 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
             try { await DiscardInternalAsync(entry.Connection).ConfigureAwait(false); }
             catch { /* best-effort teardown */ }
         }
-        _gate.Dispose();
+
+        // Intentionally do NOT call _gate.Dispose() or _disposeCts.Dispose(). Return
+        // paths from in-flight rents may still touch _gate.Release() briefly after
+        // we return, and the cancel-callback chain for waiters can post continuations
+        // that read _disposeCts.IsCancellationRequested. SemaphoreSlim.Dispose only
+        // frees an on-demand AvailableWaitHandle we never use, so skipping it is
+        // cheap and removes an entire class of teardown races.
     }
 
     private void AttachReturnHook(ClickHouseConnection conn, DateTime createdAt)
@@ -227,7 +264,10 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
     {
         if (_disposed)
         {
-            await DiscardAsync(conn).ConfigureAwait(false);
+            // Pool is torn down. The gate may already be disposed, so skip Release() —
+            // there are no waiters on a disposed gate that need waking (they were
+            // cancelled via _disposeCts) and calling Release would throw.
+            await DiscardInternalAsync(conn).ConfigureAwait(false);
             return;
         }
 
@@ -242,7 +282,8 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
         // Release the permit the renter was holding — this is what wakes
         // any waiter parked in OpenConnectionAsync, who will then pop the
         // idle entry we just pushed.
-        _gate.Release();
+        try { _gate.Release(); }
+        catch (ObjectDisposedException) { /* raced with DisposeAsync */ }
     }
 
     // Full discard: dispose, decrement _total, release the renter's gate permit.
@@ -250,7 +291,8 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
     private async ValueTask DiscardAsync(ClickHouseConnection conn)
     {
         await DiscardInternalAsync(conn).ConfigureAwait(false);
-        _gate.Release();
+        try { _gate.Release(); }
+        catch (ObjectDisposedException) { /* raced with DisposeAsync */ }
     }
 
     // Discard without touching the gate. Used (a) while the rent path is culling
