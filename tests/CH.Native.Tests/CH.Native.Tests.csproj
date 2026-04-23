@@ -14,10 +14,14 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="Testcontainers.ClickHouse" Version="4.0.0" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.*" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.*" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="8.*" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CH.Native\CH.Native.csproj" />
+    <ProjectReference Include="..\..\src\CH.Native.DependencyInjection\CH.Native.DependencyInjection.csproj" />
   </ItemGroup>
 
 </Project>
