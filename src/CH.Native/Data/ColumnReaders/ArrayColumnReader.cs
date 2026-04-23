@@ -56,13 +56,13 @@ public sealed class ArrayColumnReader<T> : IColumnReader<T[]>
     public T[] ReadValue(ref ProtocolReader reader)
     {
         // Single value reading uses UInt64 offset format too
-        var offset = reader.ReadUInt64();
+        var offset = checked((int)reader.ReadUInt64());
         if (offset == 0)
             return Array.Empty<T>();
 
-        using var elements = _elementReader.ReadTypedColumn(ref reader, (int)offset);
-        var result = new T[(int)offset];
-        for (int i = 0; i < (int)offset; i++)
+        using var elements = _elementReader.ReadTypedColumn(ref reader, offset);
+        var result = new T[offset];
+        for (int i = 0; i < offset; i++)
         {
             result[i] = elements[i];
         }
@@ -83,7 +83,7 @@ public sealed class ArrayColumnReader<T> : IColumnReader<T[]>
         {
             for (int i = 0; i < rowCount; i++)
             {
-                offsets[i] = (int)reader.ReadUInt64();
+                offsets[i] = checked((int)reader.ReadUInt64());
             }
 
             // Step 2: Calculate total elements and read them all
@@ -159,7 +159,7 @@ public sealed class ArrayColumnReader<T> : IColumnReader<T[]>
 
         for (int i = 0; i < rowCount; i++)
         {
-            offsets[i] = (int)reader.ReadUInt64();
+            offsets[i] = checked((int)reader.ReadUInt64());
         }
 
         var totalElements = rowCount > 0 ? offsets[rowCount - 1] : 0;

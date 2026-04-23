@@ -152,7 +152,7 @@ public sealed class GeometryColumnReader : IColumnReader<Geometry>
         int filled = 0;
         while (filled < rowCount)
         {
-            var granuleLimit = (int)reader.ReadVarInt();
+            var granuleLimit = checked((int)reader.ReadVarInt());
             var granuleFormat = reader.ReadByte();
 
             if (granuleFormat == GranuleFormatCompact)

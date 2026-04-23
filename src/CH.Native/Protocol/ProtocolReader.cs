@@ -241,7 +241,7 @@ public ref struct ProtocolReader
     /// </summary>
     public string ReadString()
     {
-        var length = (int)ReadVarInt();
+        var length = checked((int)ReadVarInt());
         if (length == 0)
             return string.Empty;
 

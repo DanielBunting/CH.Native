@@ -371,7 +371,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     throw new ClickHouseConnectionException(
                         $"Unexpected packet type {packetType} during SSH challenge; expected SSHChallenge ({(int)ServerMessageType.SSHChallenge}) or Exception.");
 
-                var challengeLength = (int)reader.ReadVarInt();
+                var challengeLength = checked((int)reader.ReadVarInt());
                 var challenge = reader.ReadBytes(challengeLength).ToArray();
                 _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
                 return challenge;

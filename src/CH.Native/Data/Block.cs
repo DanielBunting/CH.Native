@@ -128,8 +128,8 @@ public sealed class Block
 
         return new BlockHeader
         {
-            ColumnCount = (int)columnCount,
-            RowCount = (int)rowCount
+            ColumnCount = checked((int)columnCount),
+            RowCount = checked((int)rowCount)
         };
     }
 
@@ -318,8 +318,8 @@ public sealed class Block
     public static TypedBlock ReadTypedBlockWithTableName(ref ProtocolReader reader, ColumnReaderRegistry registry, string tableName, int protocolVersion = 0)
     {
         var info = BlockInfo.Read(ref reader);
-        var columnCount = (int)reader.ReadVarInt();
-        var rowCount = (int)reader.ReadVarInt();
+        var columnCount = checked((int)reader.ReadVarInt());
+        var rowCount = checked((int)reader.ReadVarInt());
 
         if (columnCount == 0)
         {

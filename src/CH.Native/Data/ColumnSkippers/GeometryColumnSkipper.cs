@@ -62,7 +62,7 @@ public sealed class GeometryColumnSkipper : IColumnSkipper
                 {
                     if (!reader.TryReadVarInt(out var granuleLimitLong))
                         return false;
-                    var granuleLimit = (int)granuleLimitLong;
+                    var granuleLimit = checked((int)granuleLimitLong);
                     if (!reader.TryReadByte(out var granuleFormat))
                         return false;
 

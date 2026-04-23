@@ -130,7 +130,7 @@ public sealed class StringColumnReader : IColumnReader<string>
 
         for (int i = 0; i < rowCount; i++)
         {
-            var length = (int)reader.ReadVarInt();
+            var length = checked((int)reader.ReadVarInt());
             offsets[i] = position;
             lengths[i] = length;
 
