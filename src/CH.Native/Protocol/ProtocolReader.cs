@@ -45,13 +45,16 @@ public readonly struct PooledBytes : IDisposable
     public int Length => Memory.Length;
 
     /// <summary>
-    /// Returns the pooled array if one was used.
+    /// Returns the pooled array to the pool after clearing its contents.
+    /// Wire data (column payloads, strings, potentially auth text during the hello
+    /// handshake) must not linger in a buffer that returns to <see cref="ArrayPool{T}.Shared"/>,
+    /// which is shared process-wide.
     /// </summary>
     public void Dispose()
     {
         if (_pool != null && _array != null)
         {
-            _pool.Return(_array);
+            _pool.Return(_array, clearArray: true);
         }
     }
 }
