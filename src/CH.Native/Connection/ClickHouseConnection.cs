@@ -31,6 +31,13 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     internal ClickHouseLogger Logger => _logger;
     private readonly SchemaCache _schemaCache = new();
     private readonly object _queryLock = new();
+    // Serializes every _pipeWriter.WriteAsync+FlushAsync pair. PipeWriter is not
+    // thread-safe, and SendCancelAsync fires from CancellationToken.Register on
+    // a detached task that can race with the in-flight query write. Without
+    // this gate, concurrent writes can interleave bytes on the wire and
+    // poison the connection — a pooled connection would then hand the
+    // corruption to the next caller.
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
     private TcpClient? _tcpClient;
     private Stream? _networkStream;
     private SslStream? _sslStream;
@@ -83,9 +90,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     {
         get
         {
-            if (_disposed || !_isOpen) return false;
+            // All four fields must be read under _queryLock to get a
+            // consistent snapshot. Reading _isOpen/_disposed outside the lock
+            // could latch a stale "true" after a concurrent close has already
+            // committed its flip under the lock, leading the pool to accept a
+            // dead connection.
             lock (_queryLock)
             {
+                if (_disposed || !_isOpen) return false;
                 if (_currentQueryId is not null) return false;
                 if (_pinnedRolesSet || _rolesExplicitlySet) return false;
                 return true;
@@ -136,6 +148,27 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     }
 
     /// <summary>
+    /// Single funnel for all pipe writes. PipeWriter is not thread-safe, so
+    /// every WriteAsync+FlushAsync pair routes through here under
+    /// <see cref="_writeLock"/>. Prevents SendCancelAsync — which fires from a
+    /// detached cancellation callback — from racing with an in-flight query or
+    /// bulk-insert write and corrupting the wire.
+    /// </summary>
+    private async Task WriteAndFlushAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
+    {
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _pipeWriter!.WriteAsync(data, cancellationToken).ConfigureAwait(false);
+            await _pipeWriter.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <summary>
     /// Opens the connection and performs the handshake.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -154,7 +187,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         {
             await ConnectTcpAsync(cancellationToken);
             await PerformHandshakeAsync(cancellationToken);
-            _isOpen = true;
+            lock (_queryLock) { _isOpen = true; }
 
             // Record telemetry on success
             stopwatch.Stop();
@@ -315,8 +348,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         var requestBuffer = new ArrayBufferWriter<byte>();
         var requestWriter = new ProtocolWriter(requestBuffer);
         requestWriter.WriteVarInt((ulong)ClientMessageType.SSHChallengeRequest);
-        await _pipeWriter!.WriteAsync(requestBuffer.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(requestBuffer.WrittenMemory, cancellationToken);
 
         // 2. Read server reply — must be SSHChallenge (18). An Exception (2) typically
         //    means the server is older than 23.9 or the user's SSH key isn't configured.
@@ -337,8 +369,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         responseWriter.WriteVarInt((ulong)ClientMessageType.SSHChallengeResponse);
         responseWriter.WriteVarInt((ulong)signature.Length);
         responseWriter.WriteBytes(signature);
-        await _pipeWriter.WriteAsync(responseBuffer.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(responseBuffer.WrittenMemory, cancellationToken);
     }
 
     private async Task<byte[]> ReceiveSshChallengeAsync(CancellationToken cancellationToken)
@@ -409,8 +440,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         var writer = new ProtocolWriter(bufferWriter);
         clientHello.Write(ref writer);
 
-        await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
 
     // ClickHouse wire markers for non-password auth, from src/Core/Protocol.h.
@@ -480,8 +510,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             writer.WriteVarInt(0); // we do not initiate parallel-replicas reads
         }
 
-        await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
 
     /// <summary>
@@ -1631,8 +1660,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             Block.WriteEmpty(ref writer);
         }
 
-        await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
 
     /// <summary>
@@ -1740,8 +1768,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             var writer = new ProtocolWriter(bufferWriter);
             CancelMessage.Write(ref writer);
 
-            await _pipeWriter.WriteAsync(bufferWriter.WrittenMemory);
-            await _pipeWriter.FlushAsync();
+            await WriteAndFlushAsync(bufferWriter.WrittenMemory, CancellationToken.None);
 
             _cancellationRequested = true;
         }
@@ -1755,10 +1782,22 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// Drains remaining server messages after a cancellation to reset connection state.
     /// After Cancel is sent, the server responds with either Exception or EndOfStream.
     /// </summary>
+    /// <remarks>
+    /// Captures the owned queryId at entry and only clears <c>_currentQueryId</c>
+    /// in the finally if it still matches — otherwise a drain running on a
+    /// detached continuation could null out the slot belonging to a subsequent
+    /// query started on the same connection.
+    /// </remarks>
     private async Task DrainAfterCancellationAsync()
     {
         if (_pipeReader == null || !_isOpen)
             return;
+
+        string? ownedQueryId;
+        lock (_queryLock)
+        {
+            ownedQueryId = _currentQueryId;
+        }
 
         var registry = _columnReaderRegistry;
 
@@ -1804,7 +1843,11 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         {
             lock (_queryLock)
             {
-                _currentQueryId = null;
+                // Only clear the slot we were draining for. A subsequent query
+                // may have installed its own id while we were mid-drain; we
+                // must not clobber it.
+                if (_currentQueryId == ownedQueryId)
+                    _currentQueryId = null;
             }
         }
     }
@@ -2143,7 +2186,13 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
     private async Task CloseInternalAsync()
     {
-        _isOpen = false;
+        // Flip _isOpen under the lock so readers in CanBePooled / query
+        // entrypoints see the transition atomically with _currentQueryId /
+        // role-tracking clearing.
+        lock (_queryLock)
+        {
+            _isOpen = false;
+        }
         _compressionEnabled = false;
         _schemaCache.Clear();
         // A fresh TCP session starts with the user's default roles; drop our tracking
@@ -2232,6 +2281,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
         _disposed = true;
         await CloseInternalAsync();
+        _writeLock.Dispose();
     }
 
     /// <summary>
@@ -2313,8 +2363,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             File.AppendAllText(logPath, $"[CH] INSERT QUERY + INITIAL EMPTY: {bufferWriter.WrittenCount} bytes\n");
         }
 
-        await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
 
     /// <summary>
@@ -2478,8 +2527,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             File.AppendAllText(logPath, $"[CH] HEX: {BitConverter.ToString(bufferWriter.WrittenSpan.ToArray())}\n");
         }
 
-        await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
 
     /// <summary>
@@ -2514,8 +2562,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             File.AppendAllText(logPath, $"[CH] HEX: {BitConverter.ToString(bufferWriter.WrittenSpan.ToArray())}\n");
         }
 
-        await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
 
     /// <summary>
@@ -2579,8 +2626,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 File.AppendAllText(logPath, $"[CH] HEX: {BitConverter.ToString(bufferWriter.WrittenSpan.ToArray())}\n");
             }
 
-            await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
-            await _pipeWriter.FlushAsync(cancellationToken);
+            await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
         }
         finally
         {
