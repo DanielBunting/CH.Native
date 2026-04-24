@@ -26,6 +26,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     private Func<T, object?>[]? _getters;
     private bool _initialized;
     private bool _completed;
+    private bool _completeStarted;
     private bool _disposed;
     private int _totalRowsInserted;
     private bool _usedCachedSchema;
@@ -371,6 +372,11 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         if (_completed)
             return;
 
+        // Mark the attempt so Dispose knows not to retry after a failed complete
+        // (retry would re-invoke ReceiveEndOfStreamAsync on a broken wire and mask
+        // the original server/protocol exception).
+        _completeStarted = true;
+
         using var activity = ClickHouseActivitySource.StartBulkInsert(_tableName, _connection.Settings.Database, _connection.Settings.Telemetry);
 
         try
@@ -405,37 +411,74 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     }
 
     /// <summary>
-    /// Disposes the bulk inserter. If not completed, sends the end signal to the server.
+    /// Disposes the bulk inserter. Callers are required to call <see cref="CompleteAsync"/>
+    /// explicitly for rows to persist — Dispose is teardown, not commit. If buffered rows
+    /// exist at dispose time without an explicit complete, an
+    /// <see cref="InvalidOperationException"/> is thrown so the data-loss path is loud
+    /// rather than silent. A clean inserter (no rows buffered, or already completed)
+    /// disposes without error.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// If the caller did not call <see cref="CompleteAsync"/> but also never added
+    /// rows (e.g. <see cref="InitAsync"/> threw, or the inserter was abandoned before
+    /// any <see cref="AddAsync"/>), Dispose still needs to finalize the server-side
+    /// protocol state so the underlying connection is reusable. It does so by sending
+    /// the empty end-of-stream block via <see cref="CompleteAsync"/>. A failure there
+    /// still surfaces to the caller — a broken wire is not something to swallow.
+    /// </para>
+    /// <para>
+    /// This is a deliberate contract change from a previous implementation that
+    /// swallowed implicit-complete failures. Prioritising data stability means never
+    /// dropping rows silently, even if it makes <c>await using</c> throw. Callers who
+    /// want fire-and-forget semantics should call <see cref="CompleteAsync"/> inside
+    /// their own try/catch.
+    /// </para>
+    /// </remarks>
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
             return;
 
-        // Run the implicit complete BEFORE flipping _disposed — CompleteAsync guards on
-        // ObjectDisposedException.ThrowIf(_disposed, ...), so setting it first would
-        // short-circuit the flush, silently drop the buffered batch, and leave the
-        // INSERT half-sent on the wire (breaking the connection for later queries).
-        if (_initialized && !_completed)
+        // CompleteAsync guards on ObjectDisposedException.ThrowIf(_disposed, ...), so
+        // the dispose flag MUST be flipped after the complete call runs; otherwise the
+        // implicit complete is a silent no-op and the INSERT is left half-sent.
+        try
         {
-            try
+            if (_initialized && !_completed && !_completeStarted)
             {
-                await CompleteAsync();
+                if (_buffer.Count > 0)
+                {
+                    // Buffered rows + no explicit complete = loud failure. Finalize the
+                    // wire by sending the empty end-of-stream block so the server doesn't
+                    // receive the already-sent rows as a real insert, then throw.
+                    var bufferedCount = _buffer.Count;
+                    _buffer.Clear();
+                    try { await _connection.SendEmptyBlockAsync(CancellationToken.None).ConfigureAwait(false); } catch { /* best-effort teardown */ }
+                    try { await _connection.ReceiveEndOfStreamAsync(CancellationToken.None).ConfigureAwait(false); } catch { /* best-effort teardown */ }
+
+                    throw new InvalidOperationException(
+                        $"BulkInserter for table '{_tableName}' was disposed with {bufferedCount} " +
+                        $"unflushed row(s) and no call to CompleteAsync(). Rows added via AddAsync " +
+                        $"are NOT persisted until CompleteAsync returns successfully — call it " +
+                        $"explicitly before disposing.");
+                }
+
+                // No buffered rows but still mid-stream: finalize protocol state so the
+                // underlying connection remains reusable. Failures here propagate — a
+                // broken wire is a data-stability concern worth surfacing.
+                await CompleteAsync().ConfigureAwait(false);
             }
-            catch (Exception ex)
-            {
-                // Swallow so dispose always completes, but record so silent data loss is
-                // auditable. Callers who need guaranteed persistence should call
-                // CompleteAsync explicitly and handle its exception.
-                _connection.Logger.BulkInsertDisposeCompleteFailed(_tableName, ex);
-            }
+            // If _completeStarted is true the caller already attempted CompleteAsync
+            // (success or failure). Don't retry — a retry would re-read the wire and
+            // mask the original exception the caller already observed.
         }
-
-        _disposed = true;
-
-        // Return pooled arrays
-        ReturnPooledArrays();
-        _buffer.Clear();
+        finally
+        {
+            _disposed = true;
+            ReturnPooledArrays();
+            _buffer.Clear();
+        }
     }
 
     private List<PropertyMapping> GetPropertyMappings()

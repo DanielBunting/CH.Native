@@ -38,6 +38,16 @@ public sealed class CircuitBreaker
     public event EventHandler<CircuitBreakerStateChangedEventArgs>? OnStateChanged;
 
     /// <summary>
+    /// Occurs every time <see cref="Reset"/> is called, regardless of the prior state.
+    /// Unlike <see cref="OnStateChanged"/>, this fires even when the breaker was already
+    /// Closed — useful for listeners that treat Reset as a deliberate recovery signal
+    /// (manual intervention, deploy hook, config reload) and want an observable hook for
+    /// every such call. Listeners that only care about real state transitions should use
+    /// <see cref="OnStateChanged"/>; that event is unchanged.
+    /// </summary>
+    public event EventHandler<CircuitBreakerResetEventArgs>? OnReset;
+
+    /// <summary>
     /// Gets the current state of the circuit breaker.
     /// </summary>
     /// <remarks>
@@ -140,17 +150,26 @@ public sealed class CircuitBreaker
     }
 
     /// <summary>
-    /// Manually resets the circuit breaker to the closed state.
+    /// Manually resets the circuit breaker to the closed state. Always raises
+    /// <see cref="OnReset"/> so callers have an observable hook for every reset
+    /// call, including no-op resets on an already-Closed breaker.
+    /// <see cref="OnStateChanged"/> continues to fire only on actual state
+    /// transitions (Open or HalfOpen → Closed).
     /// </summary>
     public void Reset()
     {
-        CircuitBreakerState? oldState = null;
+        CircuitBreakerState previousState;
+        int previousFailureCount;
+        CircuitBreakerState? transitionFrom = null;
 
         lock (_lock)
         {
+            previousState = _state;
+            previousFailureCount = _failureCount;
+
             if (_state != CircuitBreakerState.Closed)
             {
-                oldState = _state;
+                transitionFrom = _state;
             }
             _state = CircuitBreakerState.Closed;
             _failureCount = 0;
@@ -158,10 +177,14 @@ public sealed class CircuitBreaker
             _lastStateChange = DateTime.UtcNow;
         }
 
-        if (oldState.HasValue)
+        // Real state transition — keep OnStateChanged semantics unchanged.
+        if (transitionFrom.HasValue)
         {
-            RaiseStateChanged(oldState.Value, CircuitBreakerState.Closed);
+            RaiseStateChanged(transitionFrom.Value, CircuitBreakerState.Closed);
         }
+
+        // Always raise the reset event, even for Closed → Closed no-ops.
+        RaiseReset(previousState, previousFailureCount);
     }
 
     /// <summary>
@@ -243,6 +266,15 @@ public sealed class CircuitBreaker
         if (handler != null)
         {
             Task.Run(() => handler.Invoke(this, new CircuitBreakerStateChangedEventArgs(oldState, newState, _failureCount)));
+        }
+    }
+
+    private void RaiseReset(CircuitBreakerState previousState, int previousFailureCount)
+    {
+        var handler = OnReset;
+        if (handler != null)
+        {
+            Task.Run(() => handler.Invoke(this, new CircuitBreakerResetEventArgs(previousState, previousFailureCount)));
         }
     }
 

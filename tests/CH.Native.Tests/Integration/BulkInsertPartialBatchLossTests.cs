@@ -6,13 +6,11 @@ using Xunit;
 namespace CH.Native.Tests.Integration;
 
 /// <summary>
-/// Finding #15: <see cref="BulkInserter{T}.DisposeAsync"/> calls CompleteAsync but
-/// swallows any exception. Worse, <c>DisposeAsync</c> sets <c>_disposed = true</c>
-/// BEFORE calling <c>CompleteAsync</c>, and <c>CompleteAsync</c> guards with
-/// <c>ObjectDisposedException.ThrowIf(_disposed, this)</c> — so the implicit complete
-/// ALWAYS throws, the exception is always swallowed, and the partial batch is always
-/// lost. On top of that, the INSERT query is left half-sent so the connection is left
-/// in a desynchronized state that breaks subsequent queries on that connection.
+/// Covers the contract around <see cref="BulkInserter{T}.DisposeAsync"/> and unflushed
+/// rows. The library prioritises data stability: silently dropping buffered rows is
+/// not acceptable, so Dispose is a loud error when called with buffered rows and no
+/// explicit <see cref="BulkInserter{T}.CompleteAsync"/>. Callers must call
+/// <c>CompleteAsync</c> for persistence — Dispose is teardown, not commit.
 /// </summary>
 [Collection("ClickHouse")]
 public class BulkInsertPartialBatchLossTests
@@ -55,11 +53,13 @@ public class BulkInsertPartialBatchLossTests
     }
 
     [Fact]
-    public async Task Dispose_WithBrokenConnection_SilentlyDropsPartialBatch()
+    public async Task Dispose_WithBufferedRowsAndNoComplete_ThrowsLoudly()
     {
-        // Failure path: if the connection is forcibly closed between AddAsync and
-        // DisposeAsync, the implicit CompleteAsync throws — and DisposeAsync swallows.
-        // The caller has no way to know their last batch was lost.
+        // Contract: buffered rows at Dispose time without a preceding CompleteAsync
+        // is a programming error — rows are not persisted, and the caller deserves
+        // a loud signal rather than silent data loss. The underlying connection
+        // (or its broken state) is irrelevant: the source-of-truth bug is that
+        // CompleteAsync was never called, and that's what the message surfaces.
         var tableName = $"test_pbl_broken_{Guid.NewGuid():N}";
         await using (var setup = new ClickHouseConnection(_fixture.ConnectionString))
         {
@@ -78,25 +78,22 @@ public class BulkInsertPartialBatchLossTests
             await inserter.AddAsync(new Row { Id = 100 });
             await inserter.AddAsync(new Row { Id = 101 });
 
-            // Tear the connection down under the inserter. The next wire operation
-            // (CompleteAsync -> FlushAsync) will fail.
+            // Tear the connection down under the inserter — the dispose path will
+            // still throw an InvalidOperationException describing the missed complete
+            // even though the wire is now broken. Best-effort teardown swallows the
+            // wire errors so the caller sees the actionable message.
             await connection.DisposeAsync();
 
-            // Dispose must not throw — current behavior swallows the CompleteAsync error.
-            var disposeTask = inserter.DisposeAsync().AsTask();
-            var completed = await Task.WhenAny(disposeTask, Task.Delay(TimeSpan.FromSeconds(15)));
-            Assert.Same(disposeTask, completed);
-            Assert.Null(disposeTask.Exception);
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await inserter.DisposeAsync());
+            Assert.Contains("CompleteAsync", ex.Message);
+            Assert.Contains("unflushed", ex.Message);
 
-            // Confirm data was lost — the swallow is what makes the loss silent.
+            // Data did not persist (as expected — CompleteAsync was never called).
             await using var verify = new ClickHouseConnection(_fixture.ConnectionString);
             await verify.OpenAsync();
             var count = await verify.ExecuteScalarAsync<long>(
                 $"SELECT count() FROM {tableName}");
-
-            // The inserted rows did NOT make it. This documents the "silent data loss"
-            // symptom. If the library is changed to surface or log the error, the
-            // assertion on 0 remains correct — only the *silence* changes.
             Assert.Equal(0, count);
         }
         finally
@@ -108,18 +105,78 @@ public class BulkInsertPartialBatchLossTests
     }
 
     [Fact]
-    public async Task Dispose_WithoutComplete_UnexpectedlyBreaksConnection()
+    public async Task Dispose_WithoutComplete_ThrowsAndLeavesConnectionReusable()
     {
-        // Regression discovered while exploring #15: calling Dispose without first
-        // calling CompleteAsync leaves the underlying connection in a broken state —
-        // subsequent queries on the SAME connection hang or fail with "Server closed
-        // connection unexpectedly". Expectation: Dispose should either (a) cleanly
-        // finish the insert and leave the connection reusable, or (b) reset the
-        // connection into a known-unusable state with a fast-failing error.
+        // Dispose without CompleteAsync + with buffered rows must throw. The best-
+        // effort end-of-stream finalisation inside Dispose should leave the
+        // underlying connection reusable for subsequent queries on the same
+        // connection — data stability doesn't mean the whole connection tears down.
         var tableName = $"test_pbl_noComplete_{Guid.NewGuid():N}";
-        var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
+        await connection.ExecuteNonQueryAsync(
+            $"CREATE TABLE {tableName} (Id Int32) ENGINE = Memory");
+
+        try
+        {
+            var inserter = connection.CreateBulkInserter<Row>(tableName);
+            await inserter.InitAsync();
+            await inserter.AddAsync(new Row { Id = 1 });
+            // Intentionally skip CompleteAsync.
+
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await inserter.DisposeAsync());
+            Assert.Contains("CompleteAsync", ex.Message);
+
+            // Connection should still be usable — Dispose finalised protocol state
+            // on a best-effort basis before throwing.
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var count = await connection.ExecuteScalarAsync<long>(
+                $"SELECT count() FROM {tableName}", cancellationToken: cts.Token);
+            Assert.Equal(0, count);
+        }
+        finally
+        {
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task Dispose_AfterComplete_DoesNotThrow()
+    {
+        // Happy path: explicit CompleteAsync means Dispose is a no-op and must not
+        // throw. This guards against over-zealous changes that would make the
+        // `await using` pattern fire-unsafe in the intended-use case.
+        var tableName = $"test_pbl_happy_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        await connection.ExecuteNonQueryAsync(
+            $"CREATE TABLE {tableName} (Id Int32) ENGINE = Memory");
+
+        try
+        {
+            await using var inserter = connection.CreateBulkInserter<Row>(tableName);
+            await inserter.InitAsync();
+            await inserter.AddAsync(new Row { Id = 1 });
+            await inserter.CompleteAsync();
+            // implicit DisposeAsync on scope exit — should not throw.
+        }
+        finally
+        {
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task Dispose_EmptyInserter_DoesNotThrow()
+    {
+        // Zero buffered rows at dispose time is a clean teardown and must not throw —
+        // Dispose still sends the empty end-of-stream block so the connection is
+        // reusable, and any failure there propagates (broken-wire is a real concern).
+        var tableName = $"test_pbl_empty_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
         await connection.ExecuteNonQueryAsync(
             $"CREATE TABLE {tableName} (Id Int32) ENGINE = Memory");
 
@@ -128,29 +185,16 @@ public class BulkInsertPartialBatchLossTests
             await using (var inserter = connection.CreateBulkInserter<Row>(tableName))
             {
                 await inserter.InitAsync();
-                await inserter.AddAsync(new Row { Id = 1 });
-                // Skip CompleteAsync — rely on DisposeAsync to finish.
+                // No AddAsync calls. Dispose should finalise wire state cleanly.
             }
 
-            // The connection should remain usable. Cap the check with a short timeout
-            // so we do not hang the suite: if the bug is present, this query times out.
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var queryTask = Record.ExceptionAsync(async () =>
-                await connection.ExecuteScalarAsync<long>(
-                    $"SELECT count() FROM {tableName}", cancellationToken: cts.Token));
-
-            var completed = await Task.WhenAny(queryTask, Task.Delay(TimeSpan.FromSeconds(12)));
-            Assert.Same(queryTask, completed);
-
-            var ex = await queryTask;
-            Assert.Null(ex);
+            var count = await connection.ExecuteScalarAsync<long>(
+                $"SELECT count() FROM {tableName}");
+            Assert.Equal(0, count);
         }
         finally
         {
-            try { await connection.DisposeAsync(); } catch { /* broken */ }
-            await using var cleanup = new ClickHouseConnection(_fixture.ConnectionString);
-            await cleanup.OpenAsync();
-            await cleanup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
         }
     }
 

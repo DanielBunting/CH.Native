@@ -63,6 +63,11 @@ public class ConnectionLifecycleTests
     [Fact]
     public async Task BulkInserter_DisposeWithoutComplete()
     {
+        // Contract: buffered rows + no CompleteAsync at Dispose time is a loud
+        // failure. Data stability > ergonomics: silently dropping rows is never
+        // acceptable. Callers who want the rows persisted must call CompleteAsync
+        // explicitly; those who want to abandon the insert still get a clear
+        // diagnostic pointing at the missing call.
         var tableName = $"test_lifecycle_{Guid.NewGuid():N}";
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
@@ -81,8 +86,10 @@ public class ConnectionLifecycleTests
             await inserter.AddAsync(new SimpleRow { Id = 1, Name = "Alice" });
             await inserter.AddAsync(new SimpleRow { Id = 2, Name = "Bob" });
 
-            // Dispose without calling CompleteAsync — should not throw
-            await inserter.DisposeAsync();
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await inserter.DisposeAsync());
+            Assert.Contains("CompleteAsync", ex.Message);
+            Assert.Contains("2 unflushed row", ex.Message);
         }
         finally
         {
@@ -258,7 +265,19 @@ public class ConnectionLifecycleTests
             }
             finally
             {
-                await inserter.DisposeAsync();
+                // Dispose may throw if buffered rows remain and CompleteAsync was
+                // not called (new contract). Cancellation paths in particular leave
+                // rows in the buffer. Surface the exception only if it's the
+                // expected "missed-Complete" diagnostic; anything else re-throws so
+                // a real regression isn't hidden.
+                try
+                {
+                    await inserter.DisposeAsync();
+                }
+                catch (InvalidOperationException ex) when (ex.Message.Contains("CompleteAsync"))
+                {
+                    // Expected under the loud-dispose contract.
+                }
             }
 
             // Verify the connection infrastructure is still functional by opening a new connection

@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
+using System.Text.Json;
 using CH.Native.Connection;
 using CH.Native.Data;
 using CH.Native.Data.Variant;
@@ -166,6 +167,13 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
         // Handle DateTimeOffset → DateTime conversion for timezone-aware columns
         if (typeof(T) == typeof(DateTime) && value is DateTimeOffset dto)
             return (T)(object)dto.UtcDateTime;
+
+        // JSON columns surface as JsonDocument. Caller asked for string → hand back
+        // the raw text so GetFieldValue<string>("json_col") works as users expect
+        // rather than falling through to Convert.ChangeType (JsonDocument doesn't
+        // implement IConvertible and throws InvalidCastException).
+        if (typeof(T) == typeof(string) && value is JsonDocument jsonDoc)
+            return (T)(object)jsonDoc.RootElement.GetRawText();
 
         // Handle numeric and other conversions
         return (T)Convert.ChangeType(value, typeof(T));

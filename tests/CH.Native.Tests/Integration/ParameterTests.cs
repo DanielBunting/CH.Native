@@ -258,7 +258,7 @@ public class ParameterTests
         Assert.Equal(pathString, result);
     }
 
-    [Fact(Skip = "Known limitation: Control characters in Field dump format are not supported by ClickHouse native protocol")]
+    [Fact]
     public async Task StringParameter_WithSpecialCharacters_IsProperlyEscaped()
     {
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
