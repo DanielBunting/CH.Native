@@ -371,4 +371,69 @@ public class RetryPolicyTests
 
         Assert.Equal(0, retryCount);
     }
+
+    // Audit finding #23: A custom ShouldRetry that misclassifies a permanent
+    // failure as transient must NOT loop forever — MaxRetries is the hard cap.
+    // These tests prove the cap holds against an aggressive "always retry"
+    // delegate.
+    [Fact]
+    public async Task ExecuteAsync_AlwaysRetryDelegate_StillBoundedByMaxRetries()
+    {
+        var options = new RetryOptions
+        {
+            MaxRetries = 3,
+            BaseDelay = TimeSpan.FromMilliseconds(1),
+            ShouldRetry = _ => true, // claim every exception is transient
+        };
+        var policy = new RetryPolicy(options);
+        var callCount = 0;
+
+        await Assert.ThrowsAsync<AggregateException>(async () =>
+        {
+            await policy.ExecuteAsync(async _ =>
+            {
+                callCount++;
+                await Task.Yield();
+                throw new InvalidOperationException("permanent failure");
+#pragma warning disable CS0162
+                return 0;
+#pragma warning restore CS0162
+            });
+        });
+
+        // 1 initial attempt + MaxRetries(3) retries = 4 total
+        Assert.Equal(4, callCount);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(5)]
+    [InlineData(10)]
+    public async Task ExecuteAsync_AlwaysRetryDelegate_AttemptsEqualsMaxRetriesPlusOne(int maxRetries)
+    {
+        var options = new RetryOptions
+        {
+            MaxRetries = maxRetries,
+            BaseDelay = TimeSpan.FromMilliseconds(1),
+            ShouldRetry = _ => true,
+        };
+        var policy = new RetryPolicy(options);
+        var callCount = 0;
+
+        await Assert.ThrowsAsync(maxRetries == 0 ? typeof(InvalidOperationException) : typeof(AggregateException), async () =>
+        {
+            await policy.ExecuteAsync(async _ =>
+            {
+                callCount++;
+                await Task.Yield();
+                throw new InvalidOperationException();
+#pragma warning disable CS0162
+                return 0;
+#pragma warning restore CS0162
+            });
+        });
+
+        Assert.Equal(maxRetries + 1, callCount);
+    }
 }

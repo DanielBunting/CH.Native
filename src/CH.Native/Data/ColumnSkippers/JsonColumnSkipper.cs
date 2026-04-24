@@ -64,7 +64,7 @@ public sealed class JsonColumnSkipper : IColumnSkipper
     private bool TrySkipVersion0(ref ProtocolReader reader, int rowCount)
     {
         if (!reader.TryReadUInt64(out var pathCountU)) return false;
-        var pathCount = checked((int)pathCountU);
+        var pathCount = ProtocolGuards.ToInt32(pathCountU, "JSON path count");
 
         var typeNames = new string[pathCount];
         for (int i = 0; i < pathCount; i++)

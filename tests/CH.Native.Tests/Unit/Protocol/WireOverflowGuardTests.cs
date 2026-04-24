@@ -2,6 +2,7 @@ using System.Buffers;
 using CH.Native.Data;
 using CH.Native.Data.ColumnReaders;
 using CH.Native.Data.ColumnSkippers;
+using CH.Native.Exceptions;
 using CH.Native.Protocol;
 using Xunit;
 
@@ -9,8 +10,11 @@ namespace CH.Native.Tests.Unit.Protocol;
 
 /// <summary>
 /// Regression tests for the silent (int)ulong truncation bug on wire-supplied
-/// lengths/offsets. Every cast that was unchecked should now throw OverflowException
-/// when a value exceeds int.MaxValue rather than silently wrapping to a negative int.
+/// lengths/offsets. Every cast that was unchecked should now throw a typed
+/// ClickHouseProtocolException when a value exceeds int.MaxValue rather than
+/// silently wrapping to a negative int (or throwing raw OverflowException —
+/// the typed wrapper lets the connection layer recognise it as fatal and
+/// tear the protocol stream down cleanly).
 /// </summary>
 public class WireOverflowGuardTests
 {
@@ -30,7 +34,7 @@ public class WireOverflowGuardTests
         writer.WriteVarInt(OverflowUInt);
         var seq = Seq(buf);
 
-        Assert.Throws<OverflowException>(() =>
+        Assert.Throws<ClickHouseProtocolException>(() =>
         {
             var reader = new ProtocolReader(seq);
             reader.ReadString();
@@ -43,7 +47,7 @@ public class WireOverflowGuardTests
     public void ReadTypedBlockWithTableName_ColumnCountOverflows_Throws()
     {
         var seq = Seq(BlockHeaderBuffer(columnCount: OverflowUInt, rowCount: 0));
-        Assert.Throws<OverflowException>(() =>
+        Assert.Throws<ClickHouseProtocolException>(() =>
         {
             var pr = new ProtocolReader(seq);
             Block.ReadTypedBlockWithTableName(ref pr, ColumnReaderRegistry.Default, "t");
@@ -54,7 +58,7 @@ public class WireOverflowGuardTests
     public void ReadTypedBlockWithTableName_RowCountOverflows_Throws()
     {
         var seq = Seq(BlockHeaderBuffer(columnCount: 0, rowCount: OverflowUInt));
-        Assert.Throws<OverflowException>(() =>
+        Assert.Throws<ClickHouseProtocolException>(() =>
         {
             var pr = new ProtocolReader(seq);
             Block.ReadTypedBlockWithTableName(ref pr, ColumnReaderRegistry.Default, "t");
@@ -65,7 +69,7 @@ public class WireOverflowGuardTests
     public void TryReadBlockHeader_ColumnCountOverflows_Throws()
     {
         var seq = Seq(BlockHeaderBuffer(columnCount: OverflowUInt, rowCount: 0));
-        Assert.Throws<OverflowException>(() =>
+        Assert.Throws<ClickHouseProtocolException>(() =>
         {
             var pr = new ProtocolReader(seq);
             Block.TryReadBlockHeader(ref pr);
@@ -98,7 +102,7 @@ public class WireOverflowGuardTests
         var seq = Seq(buf);
 
         var reader = (StringColumnReader)ColumnReaderRegistry.LazyStrings.GetReader("String");
-        Assert.Throws<OverflowException>(() =>
+        Assert.Throws<ClickHouseProtocolException>(() =>
         {
             var pr = new ProtocolReader(seq);
             reader.ReadRawColumn(ref pr, rowCount: 1);
@@ -116,7 +120,7 @@ public class WireOverflowGuardTests
         var seq = Seq(buf);
 
         var reader = ColumnReaderRegistry.Default.GetReader("Array(Int32)");
-        Assert.Throws<OverflowException>(() =>
+        Assert.Throws<ClickHouseProtocolException>(() =>
         {
             var pr = new ProtocolReader(seq);
             reader.ReadTypedColumn(ref pr, 1);
@@ -132,7 +136,7 @@ public class WireOverflowGuardTests
         var seq = Seq(buf);
 
         var reader = (ArrayColumnReader<int>)ColumnReaderRegistry.Default.GetReader("Array(Int32)");
-        Assert.Throws<OverflowException>(() =>
+        Assert.Throws<ClickHouseProtocolException>(() =>
         {
             var pr = new ProtocolReader(seq);
             reader.ReadValue(ref pr);
@@ -150,7 +154,7 @@ public class WireOverflowGuardTests
         var seq = Seq(buf);
 
         var reader = ColumnReaderRegistry.Default.GetReader("Map(String, Int32)");
-        Assert.Throws<OverflowException>(() =>
+        Assert.Throws<ClickHouseProtocolException>(() =>
         {
             var pr = new ProtocolReader(seq);
             reader.ReadTypedColumn(ref pr, 1);
@@ -167,7 +171,7 @@ public class WireOverflowGuardTests
 
         var reader = (MapColumnReader<string, int>)
             ColumnReaderRegistry.Default.GetReader("Map(String, Int32)");
-        Assert.Throws<OverflowException>(() =>
+        Assert.Throws<ClickHouseProtocolException>(() =>
         {
             var pr = new ProtocolReader(seq);
             reader.ReadValue(ref pr);
@@ -187,7 +191,7 @@ public class WireOverflowGuardTests
         var seq = Seq(buf);
 
         var reader = ColumnReaderRegistry.Default.GetReader("LowCardinality(String)");
-        Assert.Throws<OverflowException>(() =>
+        Assert.Throws<ClickHouseProtocolException>(() =>
         {
             var pr = new ProtocolReader(seq);
             reader.ReadPrefix(ref pr);
@@ -210,7 +214,7 @@ public class WireOverflowGuardTests
 
         var reader = (LowCardinalityColumnReader<string>)
             ColumnReaderRegistry.Default.GetReader("LowCardinality(String)");
-        Assert.Throws<OverflowException>(() =>
+        Assert.Throws<ClickHouseProtocolException>(() =>
         {
             var pr = new ProtocolReader(seq);
             reader.ReadPrefix(ref pr);
@@ -229,7 +233,7 @@ public class WireOverflowGuardTests
         var seq = Seq(buf);
 
         var skipper = ColumnSkipperRegistry.Default.GetSkipper("Array(Int32)");
-        Assert.Throws<OverflowException>(() =>
+        Assert.Throws<ClickHouseProtocolException>(() =>
         {
             var pr = new ProtocolReader(seq);
             skipper.TrySkipColumn(ref pr, 1);
@@ -245,7 +249,7 @@ public class WireOverflowGuardTests
         var seq = Seq(buf);
 
         var skipper = ColumnSkipperRegistry.Default.GetSkipper("Map(String, Int32)");
-        Assert.Throws<OverflowException>(() =>
+        Assert.Throws<ClickHouseProtocolException>(() =>
         {
             var pr = new ProtocolReader(seq);
             skipper.TrySkipColumn(ref pr, 1);
@@ -263,7 +267,7 @@ public class WireOverflowGuardTests
         var seq = Seq(buf);
 
         var skipper = ColumnSkipperRegistry.Default.GetSkipper("LowCardinality(String)");
-        Assert.Throws<OverflowException>(() =>
+        Assert.Throws<ClickHouseProtocolException>(() =>
         {
             var pr = new ProtocolReader(seq);
             skipper.TrySkipColumn(ref pr, 1);

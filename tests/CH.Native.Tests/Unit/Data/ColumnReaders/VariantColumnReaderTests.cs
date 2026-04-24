@@ -310,4 +310,83 @@ public class VariantColumnReaderTests
         Assert.True(s.TrySkipColumn(ref pr, source.Length));
         Assert.Equal(0, pr.Remaining);
     }
+
+    // Audit finding #19: ClickHouse uses discriminator 255 to mean NULL. Verify
+    // that the reader (a) treats 255 as NULL even when armCount allows higher
+    // values, (b) rejects non-255 discriminators >= armCount as protocol
+    // errors, and (c) the constructor refuses configurations that would let
+    // 255 collide with a real arm.
+    [Fact]
+    public void NullDiscriminator_ConstantIs255()
+    {
+        Assert.Equal((byte)255, ClickHouseVariant.NullDiscriminator);
+    }
+
+    [Fact]
+    public void ReadTypedColumn_Discriminator255_IsAlwaysTreatedAsNull()
+    {
+        // Single-arm variant: 255 must NOT be parsed as armCount-out-of-range,
+        // it must short-circuit to NULL before the bounds check.
+        var reader = (VariantColumnReader)ReaderFactory.CreateReader("Variant(Int64)");
+
+        using var buffer = new PooledBufferWriter();
+        var writer = new ProtocolWriter(buffer);
+        writer.WriteUInt64(0); // discriminator version
+        writer.WriteByte(0);
+        writer.WriteByte(255); // NULL
+        writer.WriteByte(0);
+        writer.WriteInt64(11);
+        writer.WriteInt64(22);
+
+        var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        reader.ReadPrefix(ref pr);
+        using var col = reader.ReadTypedColumn(ref pr, 3);
+
+        Assert.Equal(11L, ((ClickHouseVariant)col.GetValue(0)!).Value);
+        Assert.True(((ClickHouseVariant)col.GetValue(1)!).IsNull);
+        Assert.Equal(22L, ((ClickHouseVariant)col.GetValue(2)!).Value);
+    }
+
+    [Fact]
+    public void ReadTypedColumn_OutOfRangeDiscriminator_Throws()
+    {
+        var reader = (VariantColumnReader)ReaderFactory.CreateReader("Variant(Int64, String)");
+
+        using var buffer = new PooledBufferWriter();
+        var writer = new ProtocolWriter(buffer);
+        writer.WriteUInt64(0);
+        writer.WriteByte(2); // not 255 (NULL) and not in [0, 2): protocol error
+        // No payload — exception expected before we read it.
+
+        var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        reader.ReadPrefix(ref pr);
+
+        Exception? thrown = null;
+        try { _ = reader.ReadTypedColumn(ref pr, 1); }
+        catch (InvalidOperationException ex) { thrown = ex; }
+        Assert.NotNull(thrown);
+    }
+
+    [Fact]
+    public void Constructor_RejectsMoreThan254Arms()
+    {
+        // 255 arms would let discriminator 254 alias with what should be NULL.
+        var arms = new IColumnReader[255];
+        var int64Reader = ReaderFactory.CreateReader("Int64");
+        for (int i = 0; i < arms.Length; i++) arms[i] = int64Reader;
+
+        Assert.Throws<ArgumentException>(() => new VariantColumnReader(arms));
+    }
+
+    [Fact]
+    public void Constructor_Accepts254ArmsExactly()
+    {
+        var arms = new IColumnReader[254];
+        var int64Reader = ReaderFactory.CreateReader("Int64");
+        for (int i = 0; i < arms.Length; i++) arms[i] = int64Reader;
+
+        // Should construct successfully — 254 is the documented maximum.
+        var reader = new VariantColumnReader(arms);
+        Assert.NotNull(reader);
+    }
 }

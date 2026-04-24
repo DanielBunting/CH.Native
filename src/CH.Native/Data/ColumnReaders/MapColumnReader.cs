@@ -77,7 +77,7 @@ public sealed class MapColumnReader<TKey, TValue> : IColumnReader<Dictionary<TKe
     public Dictionary<TKey, TValue> ReadValue(ref ProtocolReader reader)
     {
         // Single value uses UInt64 offset
-        var count = checked((int)reader.ReadUInt64());
+        var count = reader.ReadUInt64AsInt32("Map entry count");
         var dict = new Dictionary<TKey, TValue>(count);
 
         if (count > 0)
@@ -108,7 +108,7 @@ public sealed class MapColumnReader<TKey, TValue> : IColumnReader<Dictionary<TKe
         }
 
         // Step 2: Calculate total entries
-        var totalEntries = rowCount > 0 ? checked((int)offsets[rowCount - 1]) : 0;
+        var totalEntries = rowCount > 0 ? ProtocolGuards.ToInt32(offsets[rowCount - 1], "Map total entries") : 0;
 
         // Step 3: Read all keys then all values (columnar layout within the map)
         var result = new Dictionary<TKey, TValue>[rowCount];
@@ -122,7 +122,7 @@ public sealed class MapColumnReader<TKey, TValue> : IColumnReader<Dictionary<TKe
             var start = 0;
             for (int i = 0; i < rowCount; i++)
             {
-                var end = checked((int)offsets[i]);
+                var end = ProtocolGuards.ToInt32(offsets[i], "Map row offset");
                 var count = end - start;
                 result[i] = new Dictionary<TKey, TValue>(count);
 

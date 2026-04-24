@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Text;
+using CH.Native.Exceptions;
 
 namespace CH.Native.Protocol;
 
@@ -246,11 +247,37 @@ public ref struct ProtocolReader
     }
 
     /// <summary>
+    /// Reads a VarInt length/count and converts it to <see cref="int"/>, raising
+    /// a typed <see cref="ClickHouseProtocolException"/> if the value exceeds
+    /// <see cref="int.MaxValue"/>. Use this in preference to
+    /// <c>checked((int)ReadVarInt())</c> so that wire-supplied overflows are
+    /// caught as protocol errors rather than as raw <see cref="OverflowException"/>s,
+    /// letting the connection layer tear down a corrupt stream cleanly.
+    /// </summary>
+    /// <param name="fieldName">A short label naming the field being read (for diagnostics).</param>
+    public int ReadVarIntAsInt32(string fieldName)
+        => ProtocolGuards.ToInt32(ReadVarInt(), fieldName);
+
+    /// <summary>
+    /// Reads a little-endian UInt32 and converts it to <see cref="int"/>, throwing
+    /// <see cref="ClickHouseProtocolException"/> if the value exceeds Int32.MaxValue.
+    /// </summary>
+    public int ReadUInt32AsInt32(string fieldName)
+        => ProtocolGuards.ToInt32(ReadUInt32(), fieldName);
+
+    /// <summary>
+    /// Reads a little-endian UInt64 and converts it to <see cref="int"/>, throwing
+    /// <see cref="ClickHouseProtocolException"/> if the value exceeds Int32.MaxValue.
+    /// </summary>
+    public int ReadUInt64AsInt32(string fieldName)
+        => ProtocolGuards.ToInt32(ReadUInt64(), fieldName);
+
+    /// <summary>
     /// Reads a string with VarInt length prefix and UTF-8 encoding.
     /// </summary>
     public string ReadString()
     {
-        var length = checked((int)ReadVarInt());
+        var length = ReadVarIntAsInt32("string length");
         if (length == 0)
             return string.Empty;
 

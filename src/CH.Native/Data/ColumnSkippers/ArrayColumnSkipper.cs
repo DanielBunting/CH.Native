@@ -42,7 +42,7 @@ public sealed class ArrayColumnSkipper : IColumnSkipper
         // Skip element data
         if (totalElements > 0)
         {
-            if (!_elementSkipper.TrySkipColumn(ref reader, checked((int)totalElements)))
+            if (!_elementSkipper.TrySkipColumn(ref reader, ProtocolGuards.ToInt32(totalElements, "Array total elements")))
                 return false;
         }
 

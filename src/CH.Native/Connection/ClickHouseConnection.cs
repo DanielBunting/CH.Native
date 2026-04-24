@@ -49,6 +49,10 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private string? _currentQueryId;
     private string? _lastQueryId;
     private volatile bool _cancellationRequested;
+    // Set when a ClickHouseProtocolException escapes the read path. The protocol
+    // stream is at an unknown offset, so the connection must be discarded — not
+    // returned to the pool, not reused for the next query. Read by CanBePooled.
+    private volatile bool _protocolFatal;
     private X509Certificate2? _customCaCertificate;
 
     // Role-sync state: tracks what we last sent via SET ROLE on this session.
@@ -98,6 +102,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             lock (_queryLock)
             {
                 if (_disposed || !_isOpen) return false;
+                if (_protocolFatal) return false;
                 if (_currentQueryId is not null) return false;
                 if (_pinnedRolesSet || _rolesExplicitlySet) return false;
                 return true;
@@ -402,7 +407,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     throw new ClickHouseConnectionException(
                         $"Unexpected packet type {packetType} during SSH challenge; expected SSHChallenge ({(int)ServerMessageType.SSHChallenge}) or Exception.");
 
-                var challengeLength = checked((int)reader.ReadVarInt());
+                var challengeLength = reader.ReadVarIntAsInt32("SSH challenge length");
                 var challenge = reader.ReadBytes(challengeLength).ToArray();
                 _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
                 return challenge;
@@ -850,6 +855,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             ClickHouseActivitySource.SetError(activity, ex);
             ClickHouseMeter.ErrorsTotal.Add(1);
             _logger.QueryFailed(effectiveQueryId, ex.Message);
+            if (ex is ClickHouseProtocolException) await CloseInternalAsync();
             throw;
         }
         finally
@@ -928,6 +934,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             ClickHouseActivitySource.SetError(activity, ex);
             ClickHouseMeter.ErrorsTotal.Add(1);
             _logger.QueryFailed(effectiveQueryId, ex.Message);
+            if (ex is ClickHouseProtocolException) await CloseInternalAsync();
             throw;
         }
         finally
@@ -976,6 +983,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             ClickHouseActivitySource.SetError(activity, ex);
             ClickHouseMeter.ErrorsTotal.Add(1);
             _logger.QueryFailed(effectiveQueryId, ex.Message);
+            if (ex is ClickHouseProtocolException) await CloseInternalAsync();
             throw;
         }
     }
@@ -1318,6 +1326,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 default:
                     throw new ClickHouseException($"Unexpected server message type: {messageType}");
             }
+        }
+        catch (ClickHouseProtocolException)
+        {
+            // Wire bytes were malformed; the protocol stream is now at an
+            // unknown offset. Mark the connection as poison so the pool
+            // discards it on return — see CanBePooled.
+            _protocolFatal = true;
+            throw;
         }
         catch (InvalidOperationException)
         {
@@ -2065,6 +2081,13 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 default:
                     throw new ClickHouseException($"Unexpected server message type: {messageType}");
             }
+        }
+        catch (ClickHouseProtocolException)
+        {
+            // See TryReadTypedMessage — wire bytes were malformed, the stream is
+            // out of sync, mark the connection as poison so the pool discards it.
+            _protocolFatal = true;
+            throw;
         }
         catch (InvalidOperationException ex)
         {

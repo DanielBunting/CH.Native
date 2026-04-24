@@ -47,7 +47,7 @@ public sealed class LowCardinalityColumnSkipper : IColumnSkipper
         // Skip dictionary values
         if (dictSize > 0)
         {
-            if (!_innerSkipper.TrySkipColumn(ref reader, checked((int)dictSize)))
+            if (!_innerSkipper.TrySkipColumn(ref reader, ProtocolGuards.ToInt32(dictSize, "LowCardinality dictionary size")))
                 return false;
         }
 

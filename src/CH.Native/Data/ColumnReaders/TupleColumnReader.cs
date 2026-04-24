@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using CH.Native.Exceptions;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnReaders;
@@ -124,7 +125,25 @@ public sealed class TupleColumnReader : IColumnReader<object>
         {
             for (int e = 0; e < _elementReaders.Length; e++)
             {
-                elementColumns[e] = _elementReaders[e].ReadTypedColumn(ref reader, rowCount);
+                try
+                {
+                    elementColumns[e] = _elementReaders[e].ReadTypedColumn(ref reader, rowCount);
+                }
+                catch (Exception ex) when (ex is not ClickHouseProtocolException)
+                {
+                    // Wrap underlying parse errors with tuple-element context so
+                    // diagnostics name the offending element instead of leaving
+                    // operators to puzzle out which column desynced the stream.
+                    throw new ClickHouseProtocolException(
+                        $"Failed to read Tuple element {e} ({_elementReaders[e].TypeName}) at rowCount={rowCount}: {ex.Message}",
+                        ex);
+                }
+
+                if (elementColumns[e].Count != rowCount)
+                {
+                    throw new ClickHouseProtocolException(
+                        $"Tuple element {e} ({_elementReaders[e].TypeName}) returned {elementColumns[e].Count} rows, expected {rowCount}.");
+                }
             }
 
             // Transpose to row-major tuples
