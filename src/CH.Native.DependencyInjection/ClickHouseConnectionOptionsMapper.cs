@@ -141,7 +141,7 @@ internal static class ClickHouseConnectionOptionsMapper
                 throw new InvalidOperationException(
                     $"TLS client certificate with thumbprint '{tls.Thumbprint}' not found in " +
                     $"{location}\\{tls.StoreName}.");
-            builder.WithTlsClientCertificate(new X509Certificate2(matches[0]));
+            builder.WithTlsClientCertificate(matches[0]);
         }
     }
 

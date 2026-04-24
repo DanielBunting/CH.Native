@@ -260,7 +260,11 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         // Load custom CA certificate if specified
         if (!string.IsNullOrEmpty(_settings.TlsCaCertificatePath))
         {
+#if NET9_0_OR_GREATER
+            _customCaCertificate = X509CertificateLoader.LoadCertificateFromFile(_settings.TlsCaCertificatePath);
+#else
             _customCaCertificate = new X509Certificate2(_settings.TlsCaCertificatePath);
+#endif
         }
 
         _sslStream = new SslStream(
@@ -315,7 +319,11 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             customChain.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
             customChain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
 
+#if NET9_0_OR_GREATER
+            var cert2 = certificate as X509Certificate2 ?? X509CertificateLoader.LoadCertificate(certificate.Export(X509ContentType.Cert));
+#else
             var cert2 = certificate as X509Certificate2 ?? new X509Certificate2(certificate);
+#endif
             if (customChain.Build(cert2))
             {
                 // Verify the chain ends with our custom CA

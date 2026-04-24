@@ -357,7 +357,13 @@ public sealed class ClickHouseConnectionSettingsBuilder
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("Certificate path must be non-empty.", nameof(path));
+#if NET9_0_OR_GREATER
+        _tlsClientCertificate = string.IsNullOrEmpty(password)
+            ? X509CertificateLoader.LoadPkcs12FromFile(path, password: null)
+            : X509CertificateLoader.LoadPkcs12FromFile(path, password);
+#else
         _tlsClientCertificate = new X509Certificate2(path, password);
+#endif
         return this;
     }
 
