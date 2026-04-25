@@ -20,12 +20,17 @@ public sealed class CircuitBreaker
 {
     private readonly CircuitBreakerOptions _options;
     private readonly ClickHouseLogger? _logger;
+    private readonly TimeProvider _timeProvider;
     private readonly object _lock = new();
 
     private CircuitBreakerState _state = CircuitBreakerState.Closed;
-    private DateTime _lastStateChange = DateTime.UtcNow;
+    private DateTime _lastStateChange;
     private int _failureCount;
-    private DateTime _windowStart = DateTime.UtcNow;
+    private DateTime _windowStart;
+
+    // Read all wall-clock samples through this. _timeProvider may be a
+    // FakeTimeProvider in tests; never use DateTime.UtcNow directly.
+    private DateTime UtcNow => _timeProvider.GetUtcNow().UtcDateTime;
 
     /// <summary>
     /// Gets or sets the server address for telemetry labeling.
@@ -85,7 +90,7 @@ public sealed class CircuitBreaker
     /// </summary>
     /// <param name="options">The circuit breaker options, or null to use defaults.</param>
     public CircuitBreaker(CircuitBreakerOptions? options = null)
-        : this(options, logger: null)
+        : this(options, logger: null, timeProvider: null)
     {
     }
 
@@ -95,9 +100,31 @@ public sealed class CircuitBreaker
     /// <param name="options">The circuit breaker options, or null to use defaults.</param>
     /// <param name="logger">Optional logger for state transitions.</param>
     public CircuitBreaker(CircuitBreakerOptions? options, ClickHouseLogger? logger)
+        : this(options, logger, timeProvider: null)
+    {
+    }
+
+    /// <summary>
+    /// Creates a new circuit breaker with the specified options, logger, and clock source.
+    /// </summary>
+    /// <param name="options">The circuit breaker options, or null to use defaults.</param>
+    /// <param name="logger">Optional logger for state transitions.</param>
+    /// <param name="timeProvider">
+    /// Clock source for state-transition timing. Pass a deterministic provider
+    /// (e.g. <c>FakeTimeProvider</c>) in tests; production callers pass null and get
+    /// <see cref="TimeProvider.System"/>.
+    /// </param>
+    public CircuitBreaker(
+        CircuitBreakerOptions? options,
+        ClickHouseLogger? logger,
+        TimeProvider? timeProvider)
     {
         _options = options ?? CircuitBreakerOptions.Default;
         _logger = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        var now = UtcNow;
+        _lastStateChange = now;
+        _windowStart = now;
     }
 
     /// <summary>
@@ -173,8 +200,8 @@ public sealed class CircuitBreaker
             }
             _state = CircuitBreakerState.Closed;
             _failureCount = 0;
-            _windowStart = DateTime.UtcNow;
-            _lastStateChange = DateTime.UtcNow;
+            _windowStart = UtcNow;
+            _lastStateChange = UtcNow;
         }
 
         // Real state transition — keep OnStateChanged semantics unchanged.
@@ -224,7 +251,7 @@ public sealed class CircuitBreaker
 
             if (_state == CircuitBreakerState.Open)
             {
-                var elapsed = DateTime.UtcNow - _lastStateChange;
+                var elapsed = UtcNow - _lastStateChange;
                 var remaining = _options.OpenDuration - elapsed;
                 throw CircuitBreakerOpenException.Create(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
             }
@@ -236,12 +263,12 @@ public sealed class CircuitBreaker
         // Must be called under lock
         if (_state == CircuitBreakerState.Open)
         {
-            var elapsed = DateTime.UtcNow - _lastStateChange;
+            var elapsed = UtcNow - _lastStateChange;
             if (elapsed >= _options.OpenDuration)
             {
                 var oldState = _state;
                 _state = CircuitBreakerState.HalfOpen;
-                _lastStateChange = DateTime.UtcNow;
+                _lastStateChange = UtcNow;
                 RaiseStateChanged(oldState, _state);
             }
         }
@@ -292,14 +319,14 @@ public sealed class CircuitBreaker
                 _state = CircuitBreakerState.Closed;
                 newState = _state;
                 _failureCount = 0;
-                _windowStart = DateTime.UtcNow;
-                _lastStateChange = DateTime.UtcNow;
+                _windowStart = UtcNow;
+                _lastStateChange = UtcNow;
             }
             else if (_state == CircuitBreakerState.Closed)
             {
                 // Reset failure count on success while closed
                 _failureCount = 0;
-                _windowStart = DateTime.UtcNow;
+                _windowStart = UtcNow;
             }
         }
 
@@ -316,7 +343,7 @@ public sealed class CircuitBreaker
 
         lock (_lock)
         {
-            var now = DateTime.UtcNow;
+            var now = UtcNow;
 
             if (_state == CircuitBreakerState.HalfOpen)
             {

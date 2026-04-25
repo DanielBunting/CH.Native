@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using CH.Native.Resilience;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace CH.Native.Tests.Unit.Resilience;
@@ -16,20 +17,19 @@ public class CircuitBreakerEventAtomicityTests
     [Fact]
     public async Task ConcurrentFailureInHalfOpen_RaisesExpectedHalfOpenToOpenEventOnce()
     {
+        var time = new FakeTimeProvider();
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 1,
-            OpenDuration = TimeSpan.FromMilliseconds(50),
+            OpenDuration = TimeSpan.FromSeconds(30),
         };
-        var breaker = new CircuitBreaker(options);
+        var breaker = new CircuitBreaker(options, logger: null, timeProvider: time);
 
-        // Drive it to HalfOpen: one failure, wait out the open duration.
+        // Drive it to HalfOpen: one failure, then advance the fake clock past OpenDuration.
         breaker.RecordFailure();
         Assert.Equal(CircuitBreakerState.Open, breaker.State);
 
-        for (int i = 0; i < 50 && breaker.State != CircuitBreakerState.HalfOpen; i++)
-            await Task.Delay(20);
-
+        time.Advance(TimeSpan.FromSeconds(31));
         Assert.Equal(CircuitBreakerState.HalfOpen, breaker.State);
 
         var events = new ConcurrentBag<CircuitBreakerStateChangedEventArgs>();
@@ -71,16 +71,16 @@ public class CircuitBreakerEventAtomicityTests
     {
         // Alternative assertion: the total number of events from any Open↔HalfOpen
         // transitions should equal the number of logical transitions (1 in this test).
+        var time = new FakeTimeProvider();
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 1,
-            OpenDuration = TimeSpan.FromMilliseconds(30),
+            OpenDuration = TimeSpan.FromSeconds(30),
         };
-        var breaker = new CircuitBreaker(options);
+        var breaker = new CircuitBreaker(options, logger: null, timeProvider: time);
 
         breaker.RecordFailure();
-        for (int i = 0; i < 50 && breaker.State != CircuitBreakerState.HalfOpen; i++)
-            await Task.Delay(20);
+        time.Advance(TimeSpan.FromSeconds(31));
         Assert.Equal(CircuitBreakerState.HalfOpen, breaker.State);
 
         var events = new ConcurrentBag<CircuitBreakerStateChangedEventArgs>();

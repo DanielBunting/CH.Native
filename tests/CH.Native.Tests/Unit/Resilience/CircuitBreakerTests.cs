@@ -1,5 +1,6 @@
 using CH.Native.Exceptions;
 using CH.Native.Resilience;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace CH.Native.Tests.Unit.Resilience;
@@ -111,12 +112,13 @@ public class CircuitBreakerTests
     [Fact]
     public async Task ExecuteAsync_OpenDurationExpires_TransitionsToHalfOpen()
     {
+        var time = new FakeTimeProvider();
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 1,
-            OpenDuration = TimeSpan.FromMilliseconds(50)
+            OpenDuration = TimeSpan.FromSeconds(30)
         };
-        var breaker = new CircuitBreaker(options);
+        var breaker = new CircuitBreaker(options, logger: null, timeProvider: time);
 
         // Trigger open state
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
@@ -130,8 +132,7 @@ public class CircuitBreakerTests
 
         Assert.Equal(CircuitBreakerState.Open, breaker.State);
 
-        // Wait for open duration to expire
-        await Task.Delay(100);
+        time.Advance(TimeSpan.FromSeconds(31));
 
         // State should now be HalfOpen
         Assert.Equal(CircuitBreakerState.HalfOpen, breaker.State);
@@ -140,12 +141,13 @@ public class CircuitBreakerTests
     [Fact]
     public async Task ExecuteAsync_HalfOpenSuccess_ClosesCircuit()
     {
+        var time = new FakeTimeProvider();
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 1,
-            OpenDuration = TimeSpan.FromMilliseconds(50)
+            OpenDuration = TimeSpan.FromSeconds(30)
         };
-        var breaker = new CircuitBreaker(options);
+        var breaker = new CircuitBreaker(options, logger: null, timeProvider: time);
 
         // Trigger open state
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
@@ -157,8 +159,7 @@ public class CircuitBreakerTests
             });
         });
 
-        // Wait for half-open
-        await Task.Delay(100);
+        time.Advance(TimeSpan.FromSeconds(31));
         Assert.Equal(CircuitBreakerState.HalfOpen, breaker.State);
 
         // Successful call should close
@@ -176,12 +177,13 @@ public class CircuitBreakerTests
     [Fact]
     public async Task ExecuteAsync_HalfOpenFailure_ReopensCircuit()
     {
+        var time = new FakeTimeProvider();
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 1,
-            OpenDuration = TimeSpan.FromMilliseconds(50)
+            OpenDuration = TimeSpan.FromSeconds(30)
         };
-        var breaker = new CircuitBreaker(options);
+        var breaker = new CircuitBreaker(options, logger: null, timeProvider: time);
 
         // Trigger open state
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
@@ -193,8 +195,7 @@ public class CircuitBreakerTests
             });
         });
 
-        // Wait for half-open
-        await Task.Delay(100);
+        time.Advance(TimeSpan.FromSeconds(31));
         Assert.Equal(CircuitBreakerState.HalfOpen, breaker.State);
 
         // Failure in half-open should reopen
@@ -230,17 +231,15 @@ public class CircuitBreakerTests
     [Fact]
     public async Task ExecuteAsync_FailureWindowExpires_ResetsCount()
     {
-        // Use a generous window (2s) so the three setup failures comfortably land
-        // inside it even under loaded CI where xUnit discovery/scheduling can
-        // interleave with Task.Yield — a tight 500ms window made this test a flake.
+        var time = new FakeTimeProvider();
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 5,
             FailureWindow = TimeSpan.FromSeconds(2)
         };
-        var breaker = new CircuitBreaker(options);
+        var breaker = new CircuitBreaker(options, logger: null, timeProvider: time);
 
-        // Record 3 failures
+        // Record 3 failures inside the window
         for (var i = 0; i < 3; i++)
         {
             await Assert.ThrowsAsync<InvalidOperationException>(async () =>
@@ -255,10 +254,9 @@ public class CircuitBreakerTests
 
         Assert.Equal(3, breaker.FailureCount);
 
-        // Wait for the window to expire with comfortable headroom.
-        await Task.Delay(TimeSpan.FromSeconds(2.5));
+        // Push the clock past the failure window — the next failure should start a fresh window.
+        time.Advance(TimeSpan.FromSeconds(3));
 
-        // Next failure should start fresh
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await breaker.ExecuteAsync<int>(async _ =>
@@ -352,17 +350,18 @@ public class CircuitBreakerTests
     [Fact]
     public void RecordSuccess_InHalfOpen_ClosesCircuit()
     {
+        var time = new FakeTimeProvider();
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 1,
-            OpenDuration = TimeSpan.FromMilliseconds(1)
+            OpenDuration = TimeSpan.FromSeconds(30)
         };
-        var breaker = new CircuitBreaker(options);
+        var breaker = new CircuitBreaker(options, logger: null, timeProvider: time);
 
         breaker.RecordFailure();
         Assert.Equal(CircuitBreakerState.Open, breaker.State);
 
-        Thread.Sleep(50);
+        time.Advance(TimeSpan.FromSeconds(31));
 
         // Access state to trigger transition to HalfOpen
         Assert.Equal(CircuitBreakerState.HalfOpen, breaker.State);
@@ -459,34 +458,42 @@ public class CircuitBreakerTests
     [Fact]
     public async Task OnStateChanged_Event_RaisedOnHalfOpen()
     {
+        var time = new FakeTimeProvider();
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 1,
-            OpenDuration = TimeSpan.FromMilliseconds(50)
+            OpenDuration = TimeSpan.FromSeconds(30)
         };
-        var breaker = new CircuitBreaker(options);
+        var breaker = new CircuitBreaker(options, logger: null, timeProvider: time);
         var stateChanges = new List<CircuitBreakerStateChangedEventArgs>();
+        var gate = new object();
 
-        breaker.OnStateChanged += (_, args) => stateChanges.Add(args);
+        breaker.OnStateChanged += (_, args) => { lock (gate) stateChanges.Add(args); };
 
         breaker.RecordFailure(); // Triggers Open
 
-        // Wait for first state change (Closed -> Open) with polling
-        for (int i = 0; i < 50 && stateChanges.Count < 1; i++)
+        // OnStateChanged dispatch is via Task.Run — that part is real-time, so poll.
+        for (int i = 0; i < 50; i++)
+        {
+            lock (gate) if (stateChanges.Count >= 1) break;
             await Task.Delay(20);
+        }
 
-        // Wait for HalfOpen transition to become available
-        await Task.Delay(100);
-
+        time.Advance(TimeSpan.FromSeconds(31));
         _ = breaker.State; // Triggers HalfOpen transition
 
-        // Wait for second state change (Open -> HalfOpen) with polling
-        for (int i = 0; i < 50 && stateChanges.Count < 2; i++)
+        for (int i = 0; i < 50; i++)
+        {
+            lock (gate) if (stateChanges.Count >= 2) break;
             await Task.Delay(20);
+        }
 
-        Assert.Equal(2, stateChanges.Count);
-        Assert.Equal(CircuitBreakerState.Open, stateChanges[1].OldState);
-        Assert.Equal(CircuitBreakerState.HalfOpen, stateChanges[1].NewState);
+        lock (gate)
+        {
+            Assert.Equal(2, stateChanges.Count);
+            Assert.Equal(CircuitBreakerState.Open, stateChanges[1].OldState);
+            Assert.Equal(CircuitBreakerState.HalfOpen, stateChanges[1].NewState);
+        }
     }
 
     [Fact]
@@ -594,34 +601,36 @@ public class CircuitBreakerTests
     [Fact]
     public async Task OnStateChanged_Event_RaisedOnSuccessInHalfOpen()
     {
+        var time = new FakeTimeProvider();
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 1,
-            OpenDuration = TimeSpan.FromMilliseconds(10)
+            OpenDuration = TimeSpan.FromSeconds(30)
         };
-        var breaker = new CircuitBreaker(options);
+        var breaker = new CircuitBreaker(options, logger: null, timeProvider: time);
 
         breaker.RecordFailure(); // Triggers Open
-
-        // Poll until OpenDuration has elapsed so the next State read transitions to HalfOpen
-        for (int i = 0; i < 50; i++)
-        {
-            await Task.Delay(20);
-            if (breaker.State == CircuitBreakerState.HalfOpen)
-                break;
-        }
+        time.Advance(TimeSpan.FromSeconds(31));
+        Assert.Equal(CircuitBreakerState.HalfOpen, breaker.State);
 
         var stateChanges = new List<CircuitBreakerStateChangedEventArgs>();
-        breaker.OnStateChanged += (_, args) => stateChanges.Add(args);
+        var gate = new object();
+        breaker.OnStateChanged += (_, args) => { lock (gate) stateChanges.Add(args); };
 
         breaker.RecordSuccess();
 
         // Poll for async event dispatch (Task.Run) to complete on loaded CI runners
-        for (int i = 0; i < 50 && stateChanges.Count < 1; i++)
+        for (int i = 0; i < 50; i++)
+        {
+            lock (gate) if (stateChanges.Count >= 1) break;
             await Task.Delay(20);
+        }
 
-        Assert.True(stateChanges.Count >= 1);
-        var closeEvent = stateChanges.FirstOrDefault(e => e.NewState == CircuitBreakerState.Closed);
-        Assert.NotNull(closeEvent);
+        lock (gate)
+        {
+            Assert.True(stateChanges.Count >= 1);
+            var closeEvent = stateChanges.FirstOrDefault(e => e.NewState == CircuitBreakerState.Closed);
+            Assert.NotNull(closeEvent);
+        }
     }
 }

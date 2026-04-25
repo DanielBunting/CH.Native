@@ -1,6 +1,7 @@
 using System.Diagnostics.Metrics;
 using CH.Native.Resilience;
 using CH.Native.Telemetry;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace CH.Native.Tests.Unit.Resilience;
@@ -95,16 +96,16 @@ public class CircuitBreakerMetricsTests
     public void StateGetter_OpenToHalfOpen_RecordsTransition()
     {
         using var rec = new Recorder();
-        var breaker = new CircuitBreaker(new CircuitBreakerOptions
-        {
-            FailureThreshold = 1,
-            OpenDuration = TimeSpan.FromMilliseconds(50),
-        });
+        var time = new FakeTimeProvider();
+        var breaker = new CircuitBreaker(
+            new CircuitBreakerOptions { FailureThreshold = 1, OpenDuration = TimeSpan.FromSeconds(30) },
+            logger: null,
+            timeProvider: time);
 
         breaker.RecordFailure();
         Assert.Equal(CircuitBreakerState.Open, breaker.State);
 
-        Thread.Sleep(120);
+        time.Advance(TimeSpan.FromSeconds(31));
 
         Assert.Equal(CircuitBreakerState.HalfOpen, breaker.State);
 
@@ -117,14 +118,14 @@ public class CircuitBreakerMetricsTests
     public void OnSuccess_HalfOpenToClosed_RecordsTransition()
     {
         using var rec = new Recorder();
-        var breaker = new CircuitBreaker(new CircuitBreakerOptions
-        {
-            FailureThreshold = 1,
-            OpenDuration = TimeSpan.FromMilliseconds(50),
-        });
+        var time = new FakeTimeProvider();
+        var breaker = new CircuitBreaker(
+            new CircuitBreakerOptions { FailureThreshold = 1, OpenDuration = TimeSpan.FromSeconds(30) },
+            logger: null,
+            timeProvider: time);
 
         breaker.RecordFailure();
-        Thread.Sleep(120);
+        time.Advance(TimeSpan.FromSeconds(31));
         _ = breaker.State; // trip Open→HalfOpen
 
         breaker.RecordSuccess();
@@ -138,18 +139,20 @@ public class CircuitBreakerMetricsTests
     public void OnFailure_HalfOpenToOpen_RecordsTransition()
     {
         using var rec = new Recorder();
-        var breaker = new CircuitBreaker(new CircuitBreakerOptions
-        {
-            FailureThreshold = 1,
-            OpenDuration = TimeSpan.FromMilliseconds(50),
-        });
+        var time = new FakeTimeProvider();
+        var breaker = new CircuitBreaker(
+            new CircuitBreakerOptions { FailureThreshold = 1, OpenDuration = TimeSpan.FromSeconds(30) },
+            logger: null,
+            timeProvider: time);
 
         breaker.RecordFailure();
-        Thread.Sleep(120);
+        time.Advance(TimeSpan.FromSeconds(31));
         _ = breaker.State; // trip Open→HalfOpen
 
         breaker.RecordFailure();
 
+        // The final State read must NOT push past OpenDuration again — clock is
+        // fake and frozen, so this is deterministic regardless of CI scheduler.
         Assert.Equal(CircuitBreakerState.Open, breaker.State);
         Assert.Equal(3, rec.Samples.Count);
         Assert.Equal(("halfopen", "open"), (rec.Samples[2].From, rec.Samples[2].To));
@@ -200,14 +203,14 @@ public class CircuitBreakerMetricsTests
         // The winner flips HalfOpen→Open and emits one transition; the loser sees
         // _state == Open and must not emit a second event.
         using var rec = new Recorder();
-        var breaker = new CircuitBreaker(new CircuitBreakerOptions
-        {
-            FailureThreshold = 1,
-            OpenDuration = TimeSpan.FromMilliseconds(50),
-        });
+        var time = new FakeTimeProvider();
+        var breaker = new CircuitBreaker(
+            new CircuitBreakerOptions { FailureThreshold = 1, OpenDuration = TimeSpan.FromSeconds(30) },
+            logger: null,
+            timeProvider: time);
 
         breaker.RecordFailure();
-        await Task.Delay(120);
+        time.Advance(TimeSpan.FromSeconds(31));
         _ = breaker.State; // Open→HalfOpen
 
         var samplesBefore = rec.Samples.Count;
