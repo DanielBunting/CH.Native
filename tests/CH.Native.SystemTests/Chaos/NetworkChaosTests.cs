@@ -86,8 +86,10 @@ public class NetworkChaosTests : IAsyncLifetime
         await conn.OpenAsync();
 
         // Issue a long-running query so the connection is mid-flight when we reset.
-        var queryTask = Task.Run(() => conn.ExecuteScalarAsync<ulong>(
-            "SELECT count() FROM numbers(1000000000)"));
+        // sleep(3) stalls the server response for ~3s — count() over numbers() is
+        // constant-folded by ClickHouse and returns before the toxic can land.
+        var queryTask = Task.Run(() => conn.ExecuteScalarAsync<byte>(
+            "SELECT sleep(3)"));
 
         await Task.Delay(150);
 

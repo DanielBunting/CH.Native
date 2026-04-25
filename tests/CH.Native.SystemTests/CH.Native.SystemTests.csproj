@@ -19,10 +19,12 @@
     <PackageReference Include="Testcontainers" Version="4.0.0" />
     <PackageReference Include="OpenTelemetry" Version="1.9.0" />
     <PackageReference Include="OpenTelemetry.Exporter.InMemory" Version="1.9.0" />
+    <PackageReference Include="Dapper" Version="2.1.35" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\CH.Native\CH.Native.csproj" />
+    <ProjectReference Include="..\..\src\CH.Native.Dapper\CH.Native.Dapper.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -9,7 +9,7 @@ namespace CH.Native.SystemTests.Allocation;
 /// </summary>
 internal static class AllocationProbe
 {
-    public static async Task<long> MeasureAsync(Func<Task> workload, int warmups = 1, int samples = 3)
+    public static async Task<long> MeasureAsync(Func<Task> workload, int warmups = 2, int samples = 7)
     {
         for (int i = 0; i < warmups; i++)
             await workload().ConfigureAwait(false);
@@ -30,7 +30,7 @@ internal static class AllocationProbe
         return min;
     }
 
-    public static long Measure(Action workload, int warmups = 1, int samples = 3)
+    public static long Measure(Action workload, int warmups = 2, int samples = 7)
     {
         for (int i = 0; i < warmups; i++)
             workload();
