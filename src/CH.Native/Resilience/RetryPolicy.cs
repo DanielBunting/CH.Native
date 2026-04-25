@@ -162,6 +162,33 @@ public sealed class RetryPolicy
         return TransientErrorCodes.Contains(errorCode);
     }
 
+    /// <summary>
+    /// Determines whether a transient exception leaves the underlying connection in
+    /// an unusable state and therefore requires a reconnect before the next retry.
+    /// Network-level failures (TCP reset, broken pipe, half-open socket) poison the
+    /// wire; server-side <see cref="ClickHouseServerException"/> instances do NOT —
+    /// the server emits the exception cleanly and the connection is reusable.
+    /// </summary>
+    /// <remarks>
+    /// This is a strict subset of <see cref="IsTransientException(Exception)"/>:
+    /// every connection-poisoning exception is transient, but not vice-versa.
+    /// <see cref="Resilience.ResilientConnection"/> uses this predicate to decide
+    /// when to evict the current connection between retry attempts so the next
+    /// attempt opens a fresh socket.
+    /// </remarks>
+    public static bool IsConnectionPoisoning(Exception ex)
+    {
+        return ex switch
+        {
+            SocketException => true,
+            IOException => true,
+            ClickHouseConnectionException => true,
+            AggregateException aggEx => aggEx.InnerExceptions.Any(IsConnectionPoisoning),
+            _ when ex.InnerException != null => IsConnectionPoisoning(ex.InnerException),
+            _ => false
+        };
+    }
+
     private TimeSpan CalculateDelay(int attempt)
     {
         // Exponential backoff: baseDelay * multiplier^(attempt-1)

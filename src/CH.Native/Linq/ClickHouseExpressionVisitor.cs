@@ -520,21 +520,21 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
                 VisitPredicate(method.Object!);
                 _currentExpression.Append(" LIKE ");
                 var containsValue = GetConstantValue<string>(method.Arguments[0]);
-                _currentExpression.Append(EscapeLikePattern($"%{containsValue}%"));
+                _currentExpression.Append(BuildLikePattern("%", containsValue, "%"));
                 break;
 
             case nameof(string.StartsWith):
                 VisitPredicate(method.Object!);
                 _currentExpression.Append(" LIKE ");
                 var startsValue = GetConstantValue<string>(method.Arguments[0]);
-                _currentExpression.Append(EscapeLikePattern($"{startsValue}%"));
+                _currentExpression.Append(BuildLikePattern("", startsValue, "%"));
                 break;
 
             case nameof(string.EndsWith):
                 VisitPredicate(method.Object!);
                 _currentExpression.Append(" LIKE ");
                 var endsValue = GetConstantValue<string>(method.Arguments[0]);
-                _currentExpression.Append(EscapeLikePattern($"%{endsValue}"));
+                _currentExpression.Append(BuildLikePattern("%", endsValue, ""));
                 break;
 
             case nameof(string.ToLower):
@@ -850,22 +850,34 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
         }
     }
 
-    private static string EscapeLikePattern(string pattern)
+    /// <summary>
+    /// Emits a ClickHouse LIKE pattern literal. <paramref name="prefix"/> and
+    /// <paramref name="suffix"/> are written verbatim so wrapper wildcards
+    /// ('%' from Contains/StartsWith/EndsWith) remain active; only the user's
+    /// <paramref name="value"/> is escaped, so literal '%' and '_' in user
+    /// input don't accidentally turn into wildcards.
+    /// </summary>
+    private static string BuildLikePattern(string prefix, string value, string suffix)
     {
-        // Escape ClickHouse LIKE special characters in the search term
-        // Note: The % and _ in the pattern template are intentional wildcards
-        var sb = new StringBuilder(pattern.Length + 10);
+        var sb = new StringBuilder(value.Length + prefix.Length + suffix.Length + 4);
         sb.Append('\'');
+        sb.Append(prefix);
 
-        foreach (var c in pattern)
+        foreach (var c in value)
         {
             switch (c)
             {
-                case '\'':
-                    sb.Append("\\'");
-                    break;
                 case '\\':
-                    sb.Append("\\\\");
+                    sb.Append(@"\\");
+                    break;
+                case '\'':
+                    sb.Append(@"\'");
+                    break;
+                case '%':
+                    sb.Append(@"\%");
+                    break;
+                case '_':
+                    sb.Append(@"\_");
                     break;
                 default:
                     sb.Append(c);
@@ -873,6 +885,7 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
             }
         }
 
+        sb.Append(suffix);
         sb.Append('\'');
         return sb.ToString();
     }

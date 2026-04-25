@@ -204,21 +204,59 @@ public static class ClickHouseMeter
     }
 
     /// <summary>
-    /// Records metrics for a retry attempt.
+    /// Records metrics for a retry attempt. The raw exception type name is
+    /// bucketed into a small fixed set of labels (<c>network</c>, <c>timeout</c>,
+    /// <c>server</c>, <c>cancelled</c>, <c>client</c>, <c>other</c>) before being
+    /// emitted as the <c>error.type</c> tag, to keep series cardinality bounded
+    /// for Prometheus-style backends.
     /// </summary>
     /// <param name="attemptNumber">The attempt number (1-based).</param>
     /// <param name="delay">The delay before this attempt.</param>
-    /// <param name="exceptionType">The type of exception that triggered the retry.</param>
+    /// <param name="exceptionType">The simple type name of the exception that triggered the retry (e.g. <c>SocketException</c>).</param>
     public static void RecordRetry(int attemptNumber, TimeSpan delay, string exceptionType)
     {
         var tags = new TagList
         {
             { "attempt", attemptNumber },
-            { "error.type", exceptionType }
+            { "error.type", BucketExceptionType(exceptionType) }
         };
 
         RetryAttemptsTotal.Add(1, tags);
         RetryDelaySeconds.Record(delay.TotalSeconds, tags);
+    }
+
+    /// <summary>
+    /// Maps an exception's simple type name to one of a small fixed set of
+    /// metric labels. Anything not specifically recognised lands in
+    /// <c>other</c>. The bucket set is intentionally short to bound series
+    /// cardinality; per-exception detail belongs in trace spans, not metrics.
+    /// </summary>
+    internal static string BucketExceptionType(string? exceptionTypeName)
+    {
+        if (string.IsNullOrEmpty(exceptionTypeName)) return "other";
+
+        // Match on the simple type name (suffix-tolerant for namespaced inputs).
+        var name = exceptionTypeName;
+        var lastDot = name.LastIndexOf('.');
+        if (lastDot >= 0 && lastDot + 1 < name.Length) name = name[(lastDot + 1)..];
+
+        // Order matters: more-specific matches before fallbacks.
+        if (name.Contains("Timeout", StringComparison.Ordinal)) return "timeout";
+        if (name == "OperationCanceledException" || name == "TaskCanceledException") return "cancelled";
+        if (name == "ClickHouseServerException") return "server";
+        if (name == "SocketException"
+            || name == "ClickHouseConnectionException"
+            || name.EndsWith("IOException", StringComparison.Ordinal)) return "network";
+        if (name == "ClickHouseProtocolException"
+            || name == "ArgumentException"
+            || name == "ArgumentNullException"
+            || name == "ArgumentOutOfRangeException"
+            || name == "InvalidOperationException"
+            || name == "OverflowException"
+            || name == "FormatException"
+            || name == "InvalidDataException") return "client";
+
+        return "other";
     }
 
     /// <summary>

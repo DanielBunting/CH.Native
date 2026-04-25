@@ -22,6 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\CH.Native\CH.Native.csproj" />
     <ProjectReference Include="..\..\src\CH.Native.DependencyInjection\CH.Native.DependencyInjection.csproj" />
+    <ProjectReference Include="..\..\src\CH.Native.Dapper\CH.Native.Dapper.csproj" />
   </ItemGroup>
 
 </Project>

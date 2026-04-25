@@ -170,4 +170,53 @@ public class CompressedBlockTests
             data[i] = (byte)(i % 256);
         return data;
     }
+
+    // Audit finding #17: CompressPooled writes payload first, then computes the
+    // checksum over that payload. The pooled buffer is rented privately inside
+    // the method and only escapes via the returned struct after both writes
+    // complete, so there is no observable mid-write state — verify by round-trip
+    // and by confirming the checksum produced equals one computed independently.
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(100)]
+    [InlineData(64 * 1024)]
+    public void CompressPooled_ProducesValidChecksumAndRoundTrips(int size)
+    {
+        var original = CreateTestData(size);
+
+        using var compressed = CompressedBlock.CompressPooled(original, Lz4Compressor.Instance);
+
+        // Independent re-compute of the checksum over the payload bytes.
+        var payload = compressed.Span[16..];
+        Span<byte> expectedChecksum = stackalloc byte[16];
+        CityHash128.HashBytes(payload, expectedChecksum);
+
+        Assert.True(compressed.Span[..16].SequenceEqual(expectedChecksum),
+            "Checksum stored in pooled result does not match independently-computed checksum");
+
+        // Round-trip via Decompress to prove the buffer is internally consistent.
+        var decompressed = CompressedBlock.Decompress(compressed.Span);
+        Assert.Equal(original, decompressed);
+    }
+
+    [Fact]
+    public void CompressPooled_RepeatedCalls_DoNotCorruptViaPoolReuse()
+    {
+        // Force several rent/return cycles to surface any aliasing between pooled
+        // result buffers; if the checksum write or payload copy ever raced with
+        // a re-rent, one of these round-trips would fail.
+        var rng = new Random(1234);
+        for (int iter = 0; iter < 64; iter++)
+        {
+            var size = rng.Next(0, 4096);
+            var data = new byte[size];
+            rng.NextBytes(data);
+
+            using (var c = CompressedBlock.CompressPooled(data, Lz4Compressor.Instance))
+            {
+                Assert.Equal(data, CompressedBlock.Decompress(c.Span));
+            }
+        }
+    }
 }

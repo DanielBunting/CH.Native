@@ -1,10 +1,12 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
+using System.Text.Json;
 using CH.Native.Connection;
 using CH.Native.Data;
 using CH.Native.Data.Variant;
 using CH.Native.Protocol.Messages;
+using CH.Native.Telemetry;
 
 namespace CH.Native.Results;
 
@@ -16,12 +18,15 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
     private readonly IAsyncEnumerator<object> _messageEnumerator;
     private readonly ClickHouseConnection? _connection;
     private readonly Activity? _activity;
+    private readonly Stopwatch? _queryStopwatch;
 
     private TypedBlock? _currentBlock;
     private int _currentRowIndex = -1;
     private bool _hasInitialized;
     private bool _isCompleted;
     private bool _disposed;
+    private long _rowsRead;
+    private bool _failed;
 
     private ClickHouseColumn[]? _columns;
     private Dictionary<string, int>? _ordinalLookup;
@@ -30,11 +35,13 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
         IAsyncEnumerator<object> messageEnumerator,
         ClickHouseConnection? connection = null,
         Activity? activity = null,
-        string? queryId = null)
+        string? queryId = null,
+        Stopwatch? queryStopwatch = null)
     {
         _messageEnumerator = messageEnumerator;
         _connection = connection;
         _activity = activity;
+        _queryStopwatch = queryStopwatch;
         QueryId = queryId;
     }
 
@@ -99,26 +106,42 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (!_hasInitialized)
+        bool advanced;
+        try
         {
-            await InitializeAsync(cancellationToken);
+            if (!_hasInitialized)
+            {
+                await InitializeAsync(cancellationToken);
+            }
+
+            if (_isCompleted)
+            {
+                return false;
+            }
+
+            // Try to move to next row in current block
+            _currentRowIndex++;
+
+            if (_currentBlock is not null && _currentRowIndex < _currentBlock.RowCount)
+            {
+                advanced = true;
+            }
+            else
+            {
+                // Need to fetch next block
+                advanced = await MoveToNextBlockAsync(cancellationToken);
+            }
+        }
+        catch
+        {
+            _failed = true;
+            throw;
         }
 
-        if (_isCompleted)
-        {
-            return false;
-        }
+        if (advanced)
+            _rowsRead++;
 
-        // Try to move to next row in current block
-        _currentRowIndex++;
-
-        if (_currentBlock is not null && _currentRowIndex < _currentBlock.RowCount)
-        {
-            return true;
-        }
-
-        // Need to fetch next block
-        return await MoveToNextBlockAsync(cancellationToken);
+        return advanced;
     }
 
     /// <summary>
@@ -166,6 +189,13 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
         // Handle DateTimeOffset → DateTime conversion for timezone-aware columns
         if (typeof(T) == typeof(DateTime) && value is DateTimeOffset dto)
             return (T)(object)dto.UtcDateTime;
+
+        // JSON columns surface as JsonDocument. Caller asked for string → hand back
+        // the raw text so GetFieldValue<string>("json_col") works as users expect
+        // rather than falling through to Convert.ChangeType (JsonDocument doesn't
+        // implement IConvertible and throws InvalidCastException).
+        if (typeof(T) == typeof(string) && value is JsonDocument jsonDoc)
+            return (T)(object)jsonDoc.RootElement.GetRawText();
 
         // Handle numeric and other conversions
         return (T)Convert.ChangeType(value, typeof(T));
@@ -301,12 +331,35 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
         catch
         {
             // Don't throw from dispose
+            _failed = true;
         }
         finally
         {
             _currentBlock?.Dispose();
             _currentBlock = null;
             await _messageEnumerator.DisposeAsync();
+
+            // Streaming reader owns the query lifetime, so the metric must be
+            // recorded here rather than in ExecuteReaderAsync's caller — by the
+            // time control returns there, rows haven't been consumed yet.
+            if (_queryStopwatch is not null && _connection is not null)
+            {
+                _queryStopwatch.Stop();
+                var success = _isCompleted && !_failed;
+                ClickHouseMeter.RecordQuery(
+                    _connection.Settings.Database,
+                    _queryStopwatch.Elapsed,
+                    _rowsRead,
+                    success);
+                if (!success)
+                    ClickHouseMeter.ErrorsTotal.Add(1);
+                if (success && QueryId is not null)
+                    _connection.Logger.QueryCompleted(
+                        QueryId,
+                        _rowsRead,
+                        _queryStopwatch.Elapsed.TotalMilliseconds);
+            }
+
             _activity?.Dispose();
         }
     }

@@ -31,7 +31,7 @@ public static class JsonBinaryDecoder
     /// <param name="factory">Column-reader factory used to resolve typed-path readers.</param>
     public static JsonDocument[] DecodeVersion0(ref ProtocolReader reader, int rowCount, ColumnReaderFactory factory)
     {
-        var pathCount = checked((int)reader.ReadUInt64());
+        var pathCount = reader.ReadUInt64AsInt32("JSON path count");
 
         var pathNames = new string[pathCount];
         for (int i = 0; i < pathCount; i++)

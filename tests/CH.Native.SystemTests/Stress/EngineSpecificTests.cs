@@ -1,23 +1,23 @@
 using CH.Native.BulkInsert;
 using CH.Native.Connection;
 using CH.Native.Mapping;
-using CH.Native.StressTests.Fixtures;
+using CH.Native.SystemTests.Fixtures;
 using Xunit;
 
-namespace CH.Native.StressTests;
+namespace CH.Native.SystemTests.Stress;
 
-[Collection("ClickHouse")]
+[Collection("SingleNode")]
+[Trait(Categories.Name, Categories.Stress)]
 public class EngineSpecificTests
 {
-    private readonly ClickHouseFixture _fixture;
+    private readonly SingleNodeFixture _fixture;
 
-    public EngineSpecificTests(ClickHouseFixture fixture)
+    public EngineSpecificTests(SingleNodeFixture fixture)
     {
         _fixture = fixture;
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task BulkInsert_MergeTree_WithOrderBy()
     {
         var tableName = $"test_engine_mt_{Guid.NewGuid():N}";
@@ -35,7 +35,6 @@ public class EngineSpecificTests
             await using var inserter = connection.CreateBulkInserter<SimpleRow>(tableName);
             await inserter.InitAsync();
 
-            // Insert out-of-order rows
             await inserter.AddAsync(new SimpleRow { Id = 5, Name = "five" });
             await inserter.AddAsync(new SimpleRow { Id = 3, Name = "three" });
             await inserter.AddAsync(new SimpleRow { Id = 1, Name = "one" });
@@ -44,7 +43,6 @@ public class EngineSpecificTests
 
             await inserter.CompleteAsync();
 
-            // Query with ORDER BY id and verify sorted order
             var names = new List<string>();
             await using var reader = await connection.ExecuteReaderAsync(
                 $"SELECT name FROM {tableName} ORDER BY id");
@@ -62,7 +60,6 @@ public class EngineSpecificTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task BulkInsert_ReplacingMergeTree_Dedup()
     {
         var tableName = $"test_engine_rmt_{Guid.NewGuid():N}";
@@ -80,7 +77,6 @@ public class EngineSpecificTests
             await using var inserter = connection.CreateBulkInserter<SimpleRow>(tableName);
             await inserter.InitAsync();
 
-            // Insert duplicate ids
             await inserter.AddAsync(new SimpleRow { Id = 1, Name = "first_1" });
             await inserter.AddAsync(new SimpleRow { Id = 2, Name = "first_2" });
             await inserter.AddAsync(new SimpleRow { Id = 3, Name = "first_3" });
@@ -89,11 +85,19 @@ public class EngineSpecificTests
 
             await inserter.CompleteAsync();
 
-            // Force merge to deduplicate
             await connection.ExecuteNonQueryAsync($"OPTIMIZE TABLE {tableName} FINAL");
 
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
             Assert.Equal(3, count);
+
+            // Verify the LATEST inserted version won the dedup, not the first.
+            // ReplacingMergeTree keeps the last-inserted row per ORDER BY key.
+            var name2 = await connection.ExecuteScalarAsync<string>(
+                $"SELECT name FROM {tableName} WHERE id = 2");
+            var name3 = await connection.ExecuteScalarAsync<string>(
+                $"SELECT name FROM {tableName} WHERE id = 3");
+            Assert.Equal("second_2", name2);
+            Assert.Equal("second_3", name3);
         }
         finally
         {
@@ -102,7 +106,6 @@ public class EngineSpecificTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task BulkInsert_SummingMergeTree_Aggregation()
     {
         var tableName = $"test_engine_smt_{Guid.NewGuid():N}";
@@ -120,7 +123,6 @@ public class EngineSpecificTests
             await using var inserter = connection.CreateBulkInserter<SummingRow>(tableName);
             await inserter.InitAsync();
 
-            // Insert same key with different values
             await inserter.AddAsync(new SummingRow { Key = "alpha", Value = 10 });
             await inserter.AddAsync(new SummingRow { Key = "alpha", Value = 20 });
             await inserter.AddAsync(new SummingRow { Key = "alpha", Value = 30 });
@@ -129,7 +131,6 @@ public class EngineSpecificTests
 
             await inserter.CompleteAsync();
 
-            // Force merge to aggregate
             await connection.ExecuteNonQueryAsync($"OPTIMIZE TABLE {tableName} FINAL");
 
             var alphaSum = await connection.ExecuteScalarAsync<long>(
@@ -147,7 +148,6 @@ public class EngineSpecificTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task BulkInsert_CollapsingMergeTree_Cancellation()
     {
         var tableName = $"test_engine_cmt_{Guid.NewGuid():N}";
@@ -166,13 +166,11 @@ public class EngineSpecificTests
             await using var inserter = connection.CreateBulkInserter<CollapsingRow>(tableName);
             await inserter.InitAsync();
 
-            // Insert row with sign=1, then cancel with sign=-1
             await inserter.AddAsync(new CollapsingRow { Id = 1, Name = "record_1", Sign = 1 });
             await inserter.AddAsync(new CollapsingRow { Id = 1, Name = "record_1", Sign = -1 });
 
             await inserter.CompleteAsync();
 
-            // Force merge to collapse
             await connection.ExecuteNonQueryAsync($"OPTIMIZE TABLE {tableName} FINAL");
 
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
@@ -185,7 +183,6 @@ public class EngineSpecificTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task BulkInsert_MergeTree_WithTTL()
     {
         var tableName = $"test_engine_ttl_{Guid.NewGuid():N}";
@@ -211,13 +208,19 @@ public class EngineSpecificTests
 
             await inserter.CompleteAsync();
 
-            // Wait for TTL to expire
             await Task.Delay(TimeSpan.FromSeconds(2));
 
-            // Force merge to apply TTL
-            await connection.ExecuteNonQueryAsync($"OPTIMIZE TABLE {tableName} FINAL");
-
-            var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
+            // TTL eviction needs a merge to materialise. Loop OPTIMIZE up to 5s so a
+            // slow merge cycle on CI doesn't false-fail the test.
+            long count = 1;
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+            while (DateTime.UtcNow < deadline)
+            {
+                await connection.ExecuteNonQueryAsync($"OPTIMIZE TABLE {tableName} FINAL");
+                count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
+                if (count == 0) break;
+                await Task.Delay(200);
+            }
             Assert.Equal(0, count);
         }
         finally
@@ -227,7 +230,6 @@ public class EngineSpecificTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task BulkInsert_MergeTree_Partitioned()
     {
         var tableName = $"test_engine_part_{Guid.NewGuid():N}";
@@ -246,7 +248,6 @@ public class EngineSpecificTests
             await using var inserter = connection.CreateBulkInserter<PartitionedRow>(tableName);
             await inserter.InitAsync();
 
-            // Insert rows spanning 3 months
             await inserter.AddAsync(new PartitionedRow { Id = 1, Name = "jan", Date = new DateOnly(2024, 1, 15) });
             await inserter.AddAsync(new PartitionedRow { Id = 2, Name = "jan2", Date = new DateOnly(2024, 1, 20) });
             await inserter.AddAsync(new PartitionedRow { Id = 3, Name = "feb", Date = new DateOnly(2024, 2, 10) });
@@ -255,7 +256,6 @@ public class EngineSpecificTests
 
             await inserter.CompleteAsync();
 
-            // Verify partitions exist by querying system.parts
             var partitions = new List<string>();
             await using var reader = await connection.ExecuteReaderAsync(
                 $"SELECT partition FROM system.parts WHERE table = '{tableName}' AND active GROUP BY partition ORDER BY partition");
@@ -276,7 +276,6 @@ public class EngineSpecificTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task BulkInsert_Memory_Engine_Baseline()
     {
         var tableName = $"test_engine_memory_{Guid.NewGuid():N}";
@@ -304,7 +303,6 @@ public class EngineSpecificTests
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
             Assert.Equal(1000, count);
 
-            // Verify a sample row
             var sampleName = await connection.ExecuteScalarAsync<string>(
                 $"SELECT name FROM {tableName} WHERE id = 500");
             Assert.Equal("memory_500", sampleName);
@@ -314,8 +312,6 @@ public class EngineSpecificTests
             await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
         }
     }
-
-    #region Test POCOs
 
     private class SimpleRow
     {
@@ -370,6 +366,4 @@ public class EngineSpecificTests
         [ClickHouseColumn(Name = "date", Order = 2)]
         public DateOnly Date { get; set; }
     }
-
-    #endregion
 }

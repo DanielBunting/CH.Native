@@ -78,6 +78,43 @@ public sealed class CircuitBreakerStateChangedEventArgs : EventArgs
 }
 
 /// <summary>
+/// Event arguments for circuit breaker resets. Fires on every call to
+/// <see cref="CircuitBreaker.Reset"/>, including a no-op reset on an
+/// already-Closed breaker — unlike <see cref="CircuitBreakerStateChangedEventArgs"/>,
+/// which only fires on actual state transitions.
+/// </summary>
+public sealed class CircuitBreakerResetEventArgs : EventArgs
+{
+    /// <summary>
+    /// Gets the state of the breaker immediately before the reset call.
+    /// When equal to <see cref="CircuitBreakerState.Closed"/>, the reset was a no-op
+    /// from the state-machine's perspective, but the caller still asked for one.
+    /// </summary>
+    public CircuitBreakerState PreviousState { get; }
+
+    /// <summary>
+    /// Gets the failure count at the moment of the reset call (before the counter
+    /// was zeroed).
+    /// </summary>
+    public int PreviousFailureCount { get; }
+
+    /// <summary>
+    /// Gets the timestamp of the reset call.
+    /// </summary>
+    public DateTime Timestamp { get; }
+
+    /// <summary>
+    /// Creates a new circuit breaker reset event args instance.
+    /// </summary>
+    public CircuitBreakerResetEventArgs(CircuitBreakerState previousState, int previousFailureCount)
+    {
+        PreviousState = previousState;
+        PreviousFailureCount = previousFailureCount;
+        Timestamp = DateTime.UtcNow;
+    }
+}
+
+/// <summary>
 /// Event arguments for health check completions.
 /// </summary>
 public sealed class HealthCheckCompletedEventArgs : EventArgs

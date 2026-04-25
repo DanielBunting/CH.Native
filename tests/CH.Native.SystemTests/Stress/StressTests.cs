@@ -1,23 +1,23 @@
 using CH.Native.BulkInsert;
 using CH.Native.Connection;
 using CH.Native.Mapping;
-using CH.Native.StressTests.Fixtures;
+using CH.Native.SystemTests.Fixtures;
 using Xunit;
 
-namespace CH.Native.StressTests;
+namespace CH.Native.SystemTests.Stress;
 
-[Collection("ClickHouse")]
+[Collection("SingleNode")]
+[Trait(Categories.Name, Categories.Stress)]
 public class StressTests
 {
-    private readonly ClickHouseFixture _fixture;
+    private readonly SingleNodeFixture _fixture;
 
-    public StressTests(ClickHouseFixture fixture)
+    public StressTests(SingleNodeFixture fixture)
     {
         _fixture = fixture;
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task BulkInsert_1M_Rows_AllPresent()
     {
         var tableName = $"test_stress_1m_{Guid.NewGuid():N}";
@@ -53,7 +53,6 @@ public class StressTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task BulkInsert_1M_Rows_WithCompression()
     {
         var tableName = $"test_stress_1m_lz4_{Guid.NewGuid():N}";
@@ -90,7 +89,6 @@ public class StressTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task BulkInsert_ConcurrentReaders_During_Insert()
     {
         var tableName = $"test_stress_concurrent_read_{Guid.NewGuid():N}";
@@ -108,7 +106,6 @@ public class StressTests
             using var cts = new CancellationTokenSource();
             var exceptions = new List<Exception>();
 
-            // Task that inserts 10K rows
             var insertTask = Task.Run(async () =>
             {
                 await using var insertConn = new ClickHouseConnection(_fixture.ConnectionString);
@@ -127,7 +124,7 @@ public class StressTests
                 cts.Cancel();
             });
 
-            // Two tasks that query count repeatedly during insert
+            var maxObservedRows = 0L;
             var readerTasks = Enumerable.Range(0, 2).Select(_ => Task.Run(async () =>
             {
                 try
@@ -138,7 +135,11 @@ public class StressTests
                         {
                             await using var readConn = new ClickHouseConnection(_fixture.ConnectionString);
                             await readConn.OpenAsync();
-                            await readConn.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
+                            var n = await readConn.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
+                            // Track max so we can prove readers actually saw in-flight inserts.
+                            long current;
+                            do { current = Volatile.Read(ref maxObservedRows); }
+                            while (n > current && Interlocked.CompareExchange(ref maxObservedRows, n, current) != current);
                         }
                         catch (OperationCanceledException)
                         {
@@ -158,6 +159,12 @@ public class StressTests
             await Task.WhenAll(readerTasks);
 
             Assert.Empty(exceptions);
+            // Readers must have seen non-zero rows at some point during the insert run.
+            // If maxObservedRows is 0, the test isn't actually observing concurrency —
+            // it's measuring two unrelated tasks.
+            Assert.True(maxObservedRows > 0,
+                $"Readers never observed any inserted rows (maxObservedRows = {maxObservedRows}). " +
+                "Concurrency assertion is hollow.");
         }
         finally
         {
@@ -166,7 +173,6 @@ public class StressTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task BulkInsert_ConcurrentInserters_SameTable()
     {
         var tableName = $"test_stress_concurrent_insert_{Guid.NewGuid():N}";
@@ -202,6 +208,16 @@ public class StressTests
 
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
             Assert.Equal(10_000, count);
+
+            // Workers wrote disjoint id ranges (taskIndex * 2500 .. taskIndex * 2500 + 2499).
+            // Verify min/max + uniqueness as a corruption check — bytes-on-the-wire
+            // could be transposed between rows and Count alone wouldn't notice.
+            var minId = await connection.ExecuteScalarAsync<int>($"SELECT min(id) FROM {tableName}");
+            var maxId = await connection.ExecuteScalarAsync<int>($"SELECT max(id) FROM {tableName}");
+            var uniqueIds = await connection.ExecuteScalarAsync<long>($"SELECT uniqExact(id) FROM {tableName}");
+            Assert.Equal(0, minId);
+            Assert.Equal(9_999, maxId);
+            Assert.Equal(10_000L, uniqueIds);
         }
         finally
         {
@@ -210,7 +226,6 @@ public class StressTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task BulkInsert_ConcurrentInserters_DifferentTables()
     {
         var tableNames = Enumerable.Range(0, 4)
@@ -265,7 +280,6 @@ public class StressTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task BulkInsert_RapidSmallBatches()
     {
         var tableName = $"test_stress_rapid_{Guid.NewGuid():N}";
@@ -302,7 +316,6 @@ public class StressTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task Query_LargeResultSet_1M_Rows()
     {
         var tableName = $"test_stress_query_1m_{Guid.NewGuid():N}";
@@ -328,15 +341,21 @@ public class StressTests
 
             await inserter.CompleteAsync();
 
-            // Query all rows and iterate
             long rowCount = 0;
+            long idSum = 0;
             await using var reader = await connection.ExecuteReaderAsync($"SELECT id, name FROM {tableName}");
             while (await reader.ReadAsync())
             {
+                idSum += reader.GetFieldValue<int>(0);
                 rowCount++;
             }
 
             Assert.Equal(1_000_000, rowCount);
+            // Pin column-value correctness: sum of 0..999_999 = 999_999 * 500_000.
+            // Without this, a reader returning all-default rows would still pass.
+            const long expectedSum = 999_999L * 500_000L / 1L; // arithmetic series; trivially: 499999500000
+            Assert.Equal(499999500000L, idSum);
+            _ = expectedSum;
         }
         finally
         {
@@ -345,7 +364,6 @@ public class StressTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task Query_ConcurrentQueries_SameConnectionString()
     {
         var tableName = $"test_stress_concurrent_query_{Guid.NewGuid():N}";
@@ -360,7 +378,6 @@ public class StressTests
 
         try
         {
-            // Insert some known data
             await using var inserter = setupConn.CreateBulkInserter<StressRow>(tableName);
             await inserter.InitAsync();
 
@@ -371,7 +388,6 @@ public class StressTests
 
             await inserter.CompleteAsync();
 
-            // Fire 10 queries in parallel, each opens its own connection
             var tasks = Enumerable.Range(0, 10).Select(_ => Task.Run(async () =>
             {
                 await using var queryConn = new ClickHouseConnection(_fixture.ConnectionString);
@@ -395,7 +411,6 @@ public class StressTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task BulkInsert_AddRangeAsync_Large()
     {
         var tableName = $"test_stress_addrange_{Guid.NewGuid():N}";
@@ -429,7 +444,6 @@ public class StressTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task Connection_RapidOpenClose_100x()
     {
         for (int i = 0; i < 100; i++)
@@ -439,15 +453,12 @@ public class StressTests
             await connection.CloseAsync();
         }
 
-        // Verify the last connection still works for a query
         await using var finalConnection = new ClickHouseConnection(_fixture.ConnectionString);
         await finalConnection.OpenAsync();
 
         var result = await finalConnection.ExecuteScalarAsync<int>("SELECT 42");
         Assert.Equal(42, result);
     }
-
-    #region Test POCOs
 
     private class StressRow
     {
@@ -457,6 +468,4 @@ public class StressTests
         [ClickHouseColumn(Name = "name", Order = 1)]
         public string Name { get; set; } = string.Empty;
     }
-
-    #endregion
 }

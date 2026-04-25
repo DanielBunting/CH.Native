@@ -39,7 +39,10 @@ jobs:
         run: dotnet build --no-restore --configuration Release
 
       - name: Pack
-        run: dotnet pack src/CH.Native/CH.Native.csproj --no-build --configuration Release --output ./nupkg /p:Version=${{ steps.version.outputs.version }}
+        run: |
+          dotnet pack src/CH.Native/CH.Native.csproj --no-build --configuration Release --output ./nupkg /p:Version=${{ steps.version.outputs.version }}
+          dotnet pack src/CH.Native.Dapper/CH.Native.Dapper.csproj --no-build --configuration Release --output ./nupkg /p:Version=${{ steps.version.outputs.version }}
+          dotnet pack src/CH.Native.DependencyInjection/CH.Native.DependencyInjection.csproj --no-build --configuration Release --output ./nupkg /p:Version=${{ steps.version.outputs.version }}
 
       - name: Push to NuGet
         run: dotnet nuget push ./nupkg/*.nupkg --api-key ${{ secrets.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate

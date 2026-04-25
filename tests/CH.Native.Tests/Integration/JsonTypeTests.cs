@@ -106,7 +106,7 @@ public class JsonTypeTests
         }
     }
 
-    [Fact(Skip = "JSON Object structure serialization version mismatch with ClickHouse 25.10 — pre-existing client incompatibility surfaced when the test image was bumped from 24.1.")]
+    [Fact]
     public async Task Select_NullableJson_HandlesNull()
     {
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
@@ -411,7 +411,7 @@ public class JsonTypeTests
     // Array(JSON) Tests
     // ============================================================
 
-    [Fact(Skip = "JSON Object structure serialization version mismatch with ClickHouse 25.10 — pre-existing client incompatibility surfaced when the test image was bumped from 24.1.")]
+    [Fact]
     public async Task CreateTable_WithArrayJsonColumn_Succeeds()
     {
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
@@ -455,7 +455,7 @@ public class JsonTypeTests
         }
     }
 
-    [Fact(Skip = "JSON Object structure serialization version mismatch with ClickHouse 25.10 — pre-existing client incompatibility surfaced when the test image was bumped from 24.1.")]
+    [Fact]
     public async Task Select_EmptyArrayJson_ReturnsEmptyArray()
     {
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
@@ -490,7 +490,7 @@ public class JsonTypeTests
         }
     }
 
-    [Fact(Skip = "JSON Object structure serialization version mismatch with ClickHouse 25.10 — pre-existing client incompatibility surfaced when the test image was bumped from 24.1.")]
+    [Fact]
     public async Task Select_ArrayJsonWithNestedObjects_ParsesCorrectly()
     {
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
@@ -538,7 +538,7 @@ public class JsonTypeTests
         }
     }
 
-    [Fact(Skip = "JSON Object structure serialization version mismatch with ClickHouse 25.10 — pre-existing client incompatibility surfaced when the test image was bumped from 24.1.")]
+    [Fact]
     public async Task Select_ArrayJsonLiteral_ReturnsArray()
     {
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);

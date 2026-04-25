@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Text;
+using CH.Native.Exceptions;
 
 namespace CH.Native.Protocol;
 
@@ -45,13 +46,16 @@ public readonly struct PooledBytes : IDisposable
     public int Length => Memory.Length;
 
     /// <summary>
-    /// Returns the pooled array if one was used.
+    /// Returns the pooled array to the pool after clearing its contents.
+    /// Wire data (column payloads, strings, potentially auth text during the hello
+    /// handshake) must not linger in a buffer that returns to <see cref="ArrayPool{T}.Shared"/>,
+    /// which is shared process-wide.
     /// </summary>
     public void Dispose()
     {
         if (_pool != null && _array != null)
         {
-            _pool.Return(_array);
+            _pool.Return(_array, clearArray: true);
         }
     }
 }
@@ -86,22 +90,28 @@ public ref struct ProtocolReader
     /// <summary>
     /// Reads a variable-length encoded unsigned integer.
     /// </summary>
+    /// <exception cref="InvalidOperationException">Not enough bytes available.</exception>
+    /// <exception cref="InvalidDataException">
+    /// The encoding exceeds <see cref="VarInt.MaxLength"/> bytes (malformed wire data).
+    /// </exception>
     public ulong ReadVarInt()
     {
         ulong result = 0;
         int shift = 0;
 
-        byte b;
-        do
+        for (int i = 0; i < VarInt.MaxLength; i++)
         {
-            if (!_reader.TryRead(out b))
+            if (!_reader.TryRead(out byte b))
                 throw new InvalidOperationException("Unexpected end of data while reading VarInt.");
 
             result |= (ulong)(b & 0x7F) << shift;
+            if ((b & 0x80) == 0)
+                return result;
             shift += 7;
-        } while ((b & 0x80) != 0);
+        }
 
-        return result;
+        throw new InvalidDataException(
+            $"Malformed VarInt: continuation bit set on byte {VarInt.MaxLength} (maximum encoding length).");
     }
 
     /// <summary>
@@ -237,11 +247,37 @@ public ref struct ProtocolReader
     }
 
     /// <summary>
+    /// Reads a VarInt length/count and converts it to <see cref="int"/>, raising
+    /// a typed <see cref="ClickHouseProtocolException"/> if the value exceeds
+    /// <see cref="int.MaxValue"/>. Use this in preference to
+    /// <c>checked((int)ReadVarInt())</c> so that wire-supplied overflows are
+    /// caught as protocol errors rather than as raw <see cref="OverflowException"/>s,
+    /// letting the connection layer tear down a corrupt stream cleanly.
+    /// </summary>
+    /// <param name="fieldName">A short label naming the field being read (for diagnostics).</param>
+    public int ReadVarIntAsInt32(string fieldName)
+        => ProtocolGuards.ToInt32(ReadVarInt(), fieldName);
+
+    /// <summary>
+    /// Reads a little-endian UInt32 and converts it to <see cref="int"/>, throwing
+    /// <see cref="ClickHouseProtocolException"/> if the value exceeds Int32.MaxValue.
+    /// </summary>
+    public int ReadUInt32AsInt32(string fieldName)
+        => ProtocolGuards.ToInt32(ReadUInt32(), fieldName);
+
+    /// <summary>
+    /// Reads a little-endian UInt64 and converts it to <see cref="int"/>, throwing
+    /// <see cref="ClickHouseProtocolException"/> if the value exceeds Int32.MaxValue.
+    /// </summary>
+    public int ReadUInt64AsInt32(string fieldName)
+        => ProtocolGuards.ToInt32(ReadUInt64(), fieldName);
+
+    /// <summary>
     /// Reads a string with VarInt length prefix and UTF-8 encoding.
     /// </summary>
     public string ReadString()
     {
-        var length = (int)ReadVarInt();
+        var length = ReadVarIntAsInt32("string length");
         if (length == 0)
             return string.Empty;
 
@@ -323,39 +359,51 @@ public ref struct ProtocolReader
     /// Used for validating data completeness before parsing.
     /// </summary>
     /// <returns>True if successfully skipped; false if not enough data available.</returns>
+    /// <exception cref="InvalidDataException">
+    /// The encoding exceeds <see cref="VarInt.MaxLength"/> bytes (malformed wire data).
+    /// </exception>
     public bool TrySkipVarInt()
     {
-        byte b;
-        do
+        for (int i = 0; i < VarInt.MaxLength; i++)
         {
-            if (!_reader.TryRead(out b))
+            if (!_reader.TryRead(out byte b))
                 return false;
-        } while ((b & 0x80) != 0);
+            if ((b & 0x80) == 0)
+                return true;
+        }
 
-        return true;
+        throw new InvalidDataException(
+            $"Malformed VarInt: continuation bit set on byte {VarInt.MaxLength} (maximum encoding length).");
     }
 
     /// <summary>
-    /// Tries to read a variable-length encoded unsigned integer without throwing.
+    /// Tries to read a variable-length encoded unsigned integer without throwing on short reads.
     /// </summary>
     /// <param name="value">The value read, or 0 if not enough data.</param>
     /// <returns>True if successfully read; false if not enough data available.</returns>
+    /// <exception cref="InvalidDataException">
+    /// The encoding exceeds <see cref="VarInt.MaxLength"/> bytes (malformed wire data).
+    /// Malformed data is a different failure mode from an incomplete stream and
+    /// surfaces eagerly so callers can't retry-loop on corrupt input.
+    /// </exception>
     public bool TryReadVarInt(out ulong value)
     {
         value = 0;
         int shift = 0;
 
-        byte b;
-        do
+        for (int i = 0; i < VarInt.MaxLength; i++)
         {
-            if (!_reader.TryRead(out b))
+            if (!_reader.TryRead(out byte b))
                 return false;
 
             value |= (ulong)(b & 0x7F) << shift;
+            if ((b & 0x80) == 0)
+                return true;
             shift += 7;
-        } while ((b & 0x80) != 0);
+        }
 
-        return true;
+        throw new InvalidDataException(
+            $"Malformed VarInt: continuation bit set on byte {VarInt.MaxLength} (maximum encoding length).");
     }
 
     /// <summary>

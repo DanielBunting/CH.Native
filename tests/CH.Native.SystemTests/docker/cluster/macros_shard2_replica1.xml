@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<clickhouse>
+    <macros>
+        <cluster>test_cluster</cluster>
+        <shard>2</shard>
+        <replica>chs2r1</replica>
+    </macros>
+</clickhouse>

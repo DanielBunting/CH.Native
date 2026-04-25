@@ -1,0 +1,8 @@
+{
+  "BulkInsert.10k": 2105656,
+  "ExecuteNonQuery.Trivial.x100": 4881424,
+  "ExecuteScalar.Int.x100": 4890464,
+  "ExecuteScalar.String.x100": 4893264,
+  "QueryAsync.Lz4.NumbersAndStrings.10k": 3153752,
+  "QueryAsync.NumbersAndStrings.10k": 3157064
+}

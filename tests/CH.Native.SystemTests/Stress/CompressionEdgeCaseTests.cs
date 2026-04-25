@@ -2,23 +2,23 @@ using CH.Native.BulkInsert;
 using CH.Native.Compression;
 using CH.Native.Connection;
 using CH.Native.Mapping;
-using CH.Native.StressTests.Fixtures;
+using CH.Native.SystemTests.Fixtures;
 using Xunit;
 
-namespace CH.Native.StressTests;
+namespace CH.Native.SystemTests.Stress;
 
-[Collection("ClickHouse")]
+[Collection("SingleNode")]
+[Trait(Categories.Name, Categories.Stress)]
 public class CompressionEdgeCaseTests
 {
-    private readonly ClickHouseFixture _fixture;
+    private readonly SingleNodeFixture _fixture;
 
-    public CompressionEdgeCaseTests(ClickHouseFixture fixture)
+    public CompressionEdgeCaseTests(SingleNodeFixture fixture)
     {
         _fixture = fixture;
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task Compression_LZ4_EmptyBlock()
     {
         var tableName = $"test_comp_lz4_empty_{Guid.NewGuid():N}";
@@ -44,7 +44,6 @@ public class CompressionEdgeCaseTests
             await using var inserter = connection.CreateBulkInserter<CompressionRow>(tableName);
             await inserter.InitAsync();
 
-            // Insert 0 rows -- just complete immediately
             await inserter.CompleteAsync();
 
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
@@ -57,7 +56,6 @@ public class CompressionEdgeCaseTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task Compression_Zstd_EmptyBlock()
     {
         var tableName = $"test_comp_zstd_empty_{Guid.NewGuid():N}";
@@ -83,7 +81,6 @@ public class CompressionEdgeCaseTests
             await using var inserter = connection.CreateBulkInserter<CompressionRow>(tableName);
             await inserter.InitAsync();
 
-            // Insert 0 rows -- just complete immediately
             await inserter.CompleteAsync();
 
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
@@ -96,7 +93,6 @@ public class CompressionEdgeCaseTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task Compression_LZ4_SingleByte()
     {
         var tableName = $"test_comp_lz4_byte_{Guid.NewGuid():N}";
@@ -134,7 +130,6 @@ public class CompressionEdgeCaseTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task Compression_LZ4_LargeBlock_10MB()
     {
         var tableName = $"test_comp_lz4_large_{Guid.NewGuid():N}";
@@ -157,7 +152,6 @@ public class CompressionEdgeCaseTests
 
         try
         {
-            // Each row has a ~1KB string, 10000 rows => ~10MB uncompressed
             var largeString = new string('A', 1024);
             var options = new BulkInsertOptions { BatchSize = 5000 };
             await using var inserter = connection.CreateBulkInserter<PayloadRow>(tableName, options);
@@ -173,10 +167,18 @@ public class CompressionEdgeCaseTests
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
             Assert.Equal(10_000, count);
 
-            // Verify data integrity by checking a sample row
-            var samplePayload = await connection.ExecuteScalarAsync<string>(
-                $"SELECT payload FROM {tableName} WHERE id = 0");
-            Assert.Equal(largeString, samplePayload);
+            // Verify payload integrity at multiple sample points (start, middle, end)
+            // to catch corruption that a single-row sample would miss.
+            foreach (var id in new[] { 0, 5000, 9999 })
+            {
+                var sample = await connection.ExecuteScalarAsync<string>(
+                    $"SELECT payload FROM {tableName} WHERE id = {id}");
+                Assert.Equal(largeString, sample);
+            }
+            // Strongest check: any divergent payload anywhere in the table.
+            var divergent = await connection.ExecuteScalarAsync<long>(
+                $"SELECT count() FROM {tableName} WHERE payload != '{new string('A', 1024)}'");
+            Assert.Equal(0, divergent);
         }
         finally
         {
@@ -185,7 +187,6 @@ public class CompressionEdgeCaseTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task Compression_Zstd_LargeBlock_10MB()
     {
         var tableName = $"test_comp_zstd_large_{Guid.NewGuid():N}";
@@ -208,7 +209,6 @@ public class CompressionEdgeCaseTests
 
         try
         {
-            // Each row has a ~1KB string, 10000 rows => ~10MB uncompressed
             var largeString = new string('B', 1024);
             var options = new BulkInsertOptions { BatchSize = 5000 };
             await using var inserter = connection.CreateBulkInserter<PayloadRow>(tableName, options);
@@ -224,10 +224,15 @@ public class CompressionEdgeCaseTests
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
             Assert.Equal(10_000, count);
 
-            // Verify data integrity by checking a sample row
-            var samplePayload = await connection.ExecuteScalarAsync<string>(
-                $"SELECT payload FROM {tableName} WHERE id = 0");
-            Assert.Equal(largeString, samplePayload);
+            foreach (var id in new[] { 0, 5000, 9999 })
+            {
+                var sample = await connection.ExecuteScalarAsync<string>(
+                    $"SELECT payload FROM {tableName} WHERE id = {id}");
+                Assert.Equal(largeString, sample);
+            }
+            var divergent = await connection.ExecuteScalarAsync<long>(
+                $"SELECT count() FROM {tableName} WHERE payload != '{new string('B', 1024)}'");
+            Assert.Equal(0, divergent);
         }
         finally
         {
@@ -236,12 +241,10 @@ public class CompressionEdgeCaseTests
     }
 
     [Fact]
-    [Trait("Category", "Stress")]
     public async Task Compression_LZ4_Insert_Zstd_Query()
     {
         var tableName = $"test_comp_cross_{Guid.NewGuid():N}";
 
-        // Create table using uncompressed connection
         await using var setupConn = new ClickHouseConnection(_fixture.ConnectionString);
         await setupConn.OpenAsync();
 
@@ -253,7 +256,6 @@ public class CompressionEdgeCaseTests
 
         try
         {
-            // Insert with LZ4 compression
             var lz4Settings = ClickHouseConnectionSettings.CreateBuilder()
                 .WithHost(_fixture.Host)
                 .WithPort(_fixture.Port)
@@ -275,7 +277,6 @@ public class CompressionEdgeCaseTests
 
             await inserter.CompleteAsync();
 
-            // Query with Zstd compression
             var zstdSettings = ClickHouseConnectionSettings.CreateBuilder()
                 .WithHost(_fixture.Host)
                 .WithPort(_fixture.Port)
@@ -290,7 +291,6 @@ public class CompressionEdgeCaseTests
             var count = await zstdConnection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
             Assert.Equal(1000, count);
 
-            // Verify data reads correctly through Zstd connection
             var sampleName = await zstdConnection.ExecuteScalarAsync<string>(
                 $"SELECT name FROM {tableName} WHERE id = 500");
             Assert.Equal("cross_comp_500", sampleName);
@@ -300,8 +300,6 @@ public class CompressionEdgeCaseTests
             await setupConn.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
         }
     }
-
-    #region Test POCOs
 
     private class CompressionRow
     {
@@ -326,6 +324,4 @@ public class CompressionEdgeCaseTests
         [ClickHouseColumn(Name = "payload", Order = 1)]
         public string Payload { get; set; } = string.Empty;
     }
-
-    #endregion
 }

@@ -25,43 +25,47 @@ public static class ParameterSerializer
 
         // All values are serialized as quoted strings in field dump format.
         // The SQL placeholder contains the type information (e.g., {param:Int32}).
+        // The wire format is consumed by ClickHouse's two-pass parameter decode, so
+        // strings are wrapped with EscapeStringForParameter (double-escape for
+        // backslash/control chars) instead of the single-pass EscapeString used by
+        // the LINQ provider when inlining literals into generated SQL text.
         return value switch
         {
-            // Strings - quoted with single quotes and escaped
-            string s => EscapeString(s),
+            // Strings - quoted with single quotes and escaped (two-pass-safe)
+            string s => EscapeStringForParameter(s),
 
             // Booleans - as string "1" or "0"
-            bool b => EscapeString(b ? "1" : "0"),
+            bool b => EscapeStringForParameter(b ? "1" : "0"),
 
             // Integers (signed) - as quoted string
-            sbyte sb => EscapeString(sb.ToString(CultureInfo.InvariantCulture)),
-            short sh => EscapeString(sh.ToString(CultureInfo.InvariantCulture)),
-            int i => EscapeString(i.ToString(CultureInfo.InvariantCulture)),
-            long l => EscapeString(l.ToString(CultureInfo.InvariantCulture)),
-            Int128 i128 => EscapeString(i128.ToString(CultureInfo.InvariantCulture)),
+            sbyte sb => EscapeStringForParameter(sb.ToString(CultureInfo.InvariantCulture)),
+            short sh => EscapeStringForParameter(sh.ToString(CultureInfo.InvariantCulture)),
+            int i => EscapeStringForParameter(i.ToString(CultureInfo.InvariantCulture)),
+            long l => EscapeStringForParameter(l.ToString(CultureInfo.InvariantCulture)),
+            Int128 i128 => EscapeStringForParameter(i128.ToString(CultureInfo.InvariantCulture)),
 
             // Integers (unsigned) - as quoted string
-            byte by => EscapeString(by.ToString(CultureInfo.InvariantCulture)),
-            ushort us => EscapeString(us.ToString(CultureInfo.InvariantCulture)),
-            uint ui => EscapeString(ui.ToString(CultureInfo.InvariantCulture)),
-            ulong ul => EscapeString(ul.ToString(CultureInfo.InvariantCulture)),
-            UInt128 ui128 => EscapeString(ui128.ToString(CultureInfo.InvariantCulture)),
+            byte by => EscapeStringForParameter(by.ToString(CultureInfo.InvariantCulture)),
+            ushort us => EscapeStringForParameter(us.ToString(CultureInfo.InvariantCulture)),
+            uint ui => EscapeStringForParameter(ui.ToString(CultureInfo.InvariantCulture)),
+            ulong ul => EscapeStringForParameter(ul.ToString(CultureInfo.InvariantCulture)),
+            UInt128 ui128 => EscapeStringForParameter(ui128.ToString(CultureInfo.InvariantCulture)),
 
             // Floating point - as quoted string
-            float f => EscapeString(SerializeFloatValue(f)),
-            double d => EscapeString(SerializeDoubleValue(d)),
-            decimal dec => EscapeString(dec.ToString(CultureInfo.InvariantCulture)),
+            float f => EscapeStringForParameter(SerializeFloatValue(f)),
+            double d => EscapeStringForParameter(SerializeDoubleValue(d)),
+            decimal dec => EscapeStringForParameter(dec.ToString(CultureInfo.InvariantCulture)),
 
             // Date/Time - quoted string format
-            DateTime dt => EscapeString(SerializeDateTimeRaw(dt, clickHouseType)),
-            DateTimeOffset dto => EscapeString(SerializeDateTimeOffsetRaw(dto)),
-            DateOnly date => EscapeString(date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
+            DateTime dt => EscapeStringForParameter(SerializeDateTimeRaw(dt, clickHouseType)),
+            DateTimeOffset dto => EscapeStringForParameter(SerializeDateTimeOffsetRaw(dto)),
+            DateOnly date => EscapeStringForParameter(date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
 
             // Guid - quoted UUID format
-            Guid g => EscapeString(g.ToString("D")),
+            Guid g => EscapeStringForParameter(g.ToString("D")),
 
             // IP addresses - quoted format
-            System.Net.IPAddress ip => EscapeString(ip.ToString()),
+            System.Net.IPAddress ip => EscapeStringForParameter(ip.ToString()),
 
             // Arrays/Collections (but not string which is IEnumerable<char>)
             IEnumerable enumerable when value is not string => SerializeArray(enumerable, clickHouseType),
@@ -79,30 +83,62 @@ public static class ParameterSerializer
     /// <returns>The escaped string with surrounding quotes.</returns>
     public static string EscapeString(string value)
     {
-        // ClickHouse Field dump format escaping rules:
-        // - Single quotes are escaped as \'
-        // - Backslashes are escaped as \\
-        // - Control characters are passed through as-is (ClickHouse handles them)
+        // SQL-literal form: surrounded by single quotes with standard SQL-style
+        // escapes. Used by the LINQ provider to inline string literals into the
+        // generated SQL text, where ClickHouse's SQL parser does a SINGLE decode
+        // pass. For the query-parameter wire protocol, use
+        // <see cref="EscapeStringForParameter"/> instead — that path requires a
+        // second layer of escaping to survive the server's two-pass decode.
 
         var sb = new StringBuilder(value.Length + 10);
         sb.Append('\'');
-
         foreach (var c in value)
         {
             switch (c)
             {
-                case '\'':
-                    sb.Append("\\'");
-                    break;
-                case '\\':
-                    sb.Append("\\\\");
-                    break;
-                default:
-                    sb.Append(c);
-                    break;
+                case '\'': sb.Append("\\'"); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\t': sb.Append("\\t"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\0': sb.Append("\\0"); break;
+                case '\b': sb.Append("\\b"); break;
+                case '\f': sb.Append("\\f"); break;
+                default: sb.Append(c); break;
             }
         }
+        sb.Append('\'');
+        return sb.ToString();
+    }
 
+    /// <summary>
+    /// Escapes a string value for the ClickHouse query-parameter wire protocol.
+    /// The server decodes parameter values in two passes (readQuotedString then
+    /// deserializeTextEscaped), so control characters and backslashes must be
+    /// DOUBLE-escaped on the wire to survive both passes intact. Single quotes
+    /// are single-escaped because pass (b) treats them as literal.
+    /// </summary>
+    /// <param name="value">The string value to escape.</param>
+    /// <returns>The quoted, double-escaped representation for the parameter wire.</returns>
+    public static string EscapeStringForParameter(string value)
+    {
+        var sb = new StringBuilder(value.Length + 10);
+        sb.Append('\'');
+        foreach (var c in value)
+        {
+            switch (c)
+            {
+                case '\'': sb.Append("\\'"); break;
+                case '\\': sb.Append("\\\\\\\\"); break;
+                case '\t': sb.Append("\\\\t"); break;
+                case '\n': sb.Append("\\\\n"); break;
+                case '\r': sb.Append("\\\\r"); break;
+                case '\0': sb.Append("\\\\0"); break;
+                case '\b': sb.Append("\\\\b"); break;
+                case '\f': sb.Append("\\\\f"); break;
+                default: sb.Append(c); break;
+            }
+        }
         sb.Append('\'');
         return sb.ToString();
     }
@@ -163,8 +199,9 @@ public static class ParameterSerializer
             elements.Add(SerializeRawValue(item, elementType));
         }
 
-        // Return array as quoted string
-        return EscapeString($"[{string.Join(", ", elements)}]");
+        // Return array as quoted string — double-escape for the parameter-wire
+        // two-pass decode (matches the String path in Serialize).
+        return EscapeStringForParameter($"[{string.Join(", ", elements)}]");
     }
 
     /// <summary>
@@ -216,21 +253,25 @@ public static class ParameterSerializer
     /// </summary>
     private static string EscapeStringForArray(string value)
     {
+        // Array elements are embedded inside a [..]-delimited literal which is itself
+        // then wrapped and escaped by EscapeString, so each element only needs the
+        // pass-(a) escape set (single-quoted with SQL-style `\'` / `\\` escapes). The
+        // outer EscapeString handles the second pass.
         var sb = new StringBuilder(value.Length + 10);
         sb.Append('\'');
         foreach (var c in value)
         {
             switch (c)
             {
-                case '\'':
-                    sb.Append("\\'");
-                    break;
-                case '\\':
-                    sb.Append("\\\\");
-                    break;
-                default:
-                    sb.Append(c);
-                    break;
+                case '\'': sb.Append("\\'"); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\t': sb.Append("\\t"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\0': sb.Append("\\0"); break;
+                case '\b': sb.Append("\\b"); break;
+                case '\f': sb.Append("\\f"); break;
+                default: sb.Append(c); break;
             }
         }
         sb.Append('\'');

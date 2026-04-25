@@ -230,10 +230,13 @@ public class CircuitBreakerTests
     [Fact]
     public async Task ExecuteAsync_FailureWindowExpires_ResetsCount()
     {
+        // Use a generous window (2s) so the three setup failures comfortably land
+        // inside it even under loaded CI where xUnit discovery/scheduling can
+        // interleave with Task.Yield — a tight 500ms window made this test a flake.
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 5,
-            FailureWindow = TimeSpan.FromMilliseconds(500)
+            FailureWindow = TimeSpan.FromSeconds(2)
         };
         var breaker = new CircuitBreaker(options);
 
@@ -252,8 +255,8 @@ public class CircuitBreakerTests
 
         Assert.Equal(3, breaker.FailureCount);
 
-        // Wait for failure window to expire (window is 500ms, wait 700ms for headroom on slow CI)
-        await Task.Delay(700);
+        // Wait for the window to expire with comfortable headroom.
+        await Task.Delay(TimeSpan.FromSeconds(2.5));
 
         // Next failure should start fresh
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
@@ -506,6 +509,86 @@ public class CircuitBreakerTests
         Assert.Single(stateChanges);
         Assert.Equal(CircuitBreakerState.Open, stateChanges[0].OldState);
         Assert.Equal(CircuitBreakerState.Closed, stateChanges[0].NewState);
+    }
+
+    // Bug #13 in audit 04-connection-pooling-resilience.md:
+    // Callers need an observable hook for every Reset() call, including a no-op
+    // reset on an already-Closed breaker (e.g. manual intervention after a
+    // deploy, periodic recovery signal, dashboard "force clear" button).
+    //
+    // The fix is a dedicated OnReset event: it fires unconditionally on every
+    // Reset() call with the prior state in the args. OnStateChanged continues
+    // to fire only on real transitions so listeners that care about state
+    // changes aren't flooded with Closed→Closed noise.
+    [Fact]
+    public async Task OnReset_Event_RaisedOnReset_WhenAlreadyClosed()
+    {
+        var breaker = new CircuitBreaker();
+        Assert.Equal(CircuitBreakerState.Closed, breaker.State);
+
+        var resets = new List<CircuitBreakerResetEventArgs>();
+        breaker.OnReset += (_, args) => resets.Add(args);
+
+        breaker.Reset();
+
+        for (int i = 0; i < 50 && resets.Count < 1; i++)
+            await Task.Delay(20);
+
+        Assert.True(resets.Count >= 1,
+            "Reset() on an already-Closed breaker should emit OnReset so listeners can observe manual recovery attempts.");
+        Assert.Equal(CircuitBreakerState.Closed, resets[0].PreviousState);
+    }
+
+    [Fact]
+    public async Task OnReset_Event_RaisedOnEveryReset()
+    {
+        // Covers the flow where callers use Reset() as a "force clear" signal
+        // in a loop. Every call produces a matching OnReset event — even ones
+        // where the state didn't actually change.
+        //
+        // Wait for the first event to be observed before firing the second: the
+        // event handler writes to a plain List<T>, and the handler is dispatched
+        // via Task.Run, so back-to-back Reset() calls can land on two threads
+        // concurrently and race List.Add. Gating on observation of the first
+        // event serialises the two dispatches.
+        var options = new CircuitBreakerOptions { FailureThreshold = 1 };
+        var breaker = new CircuitBreaker(options);
+        breaker.RecordFailure();
+        Assert.Equal(CircuitBreakerState.Open, breaker.State);
+
+        var resets = new List<CircuitBreakerResetEventArgs>();
+        breaker.OnReset += (_, args) => resets.Add(args);
+
+        breaker.Reset();   // Open → Closed
+        for (int i = 0; i < 50 && resets.Count < 1; i++)
+            await Task.Delay(20);
+
+        breaker.Reset();   // Closed → Closed (no-op transition, still emits OnReset)
+        for (int i = 0; i < 50 && resets.Count < 2; i++)
+            await Task.Delay(20);
+
+        Assert.Equal(2, resets.Count);
+        Assert.Equal(CircuitBreakerState.Open, resets[0].PreviousState);
+        Assert.Equal(CircuitBreakerState.Closed, resets[1].PreviousState);
+    }
+
+    [Fact]
+    public async Task OnStateChanged_NotRaised_OnRedundantReset()
+    {
+        // Converse guarantee: a Reset() on an already-Closed breaker must NOT
+        // flood OnStateChanged listeners with Closed→Closed events.
+        var breaker = new CircuitBreaker();
+        Assert.Equal(CircuitBreakerState.Closed, breaker.State);
+
+        var stateChanges = new List<CircuitBreakerStateChangedEventArgs>();
+        breaker.OnStateChanged += (_, args) => stateChanges.Add(args);
+
+        breaker.Reset();
+
+        // Give async dispatch a chance to post anything it might have posted.
+        await Task.Delay(100);
+
+        Assert.Empty(stateChanges);
     }
 
     [Fact]

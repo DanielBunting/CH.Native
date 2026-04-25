@@ -33,9 +33,16 @@ public ref struct ProtocolWriter
     }
 
     /// <summary>
-    /// Writes a variable-length encoded signed integer.
+    /// Writes a variable-length encoded signed integer. Negative values are
+    /// rejected — VarInt on this wire is always an unsigned size/count, and a
+    /// negative argument always indicates a caller bug (which would otherwise
+    /// be silently widened to a ~ulong.MaxValue encoding and corrupt the wire).
     /// </summary>
-    public void WriteVarInt(int value) => WriteVarInt((ulong)value);
+    public void WriteVarInt(int value)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(value);
+        WriteVarInt((ulong)value);
+    }
 
     /// <summary>
     /// Writes a single byte.

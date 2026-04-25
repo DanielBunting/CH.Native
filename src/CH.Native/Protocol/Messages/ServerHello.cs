@@ -65,9 +65,9 @@ public sealed class ServerHello
         }
 
         var serverName = reader.ReadString();
-        var versionMajor = (int)reader.ReadVarInt();
-        var versionMinor = (int)reader.ReadVarInt();
-        var protocolRevision = (int)reader.ReadVarInt();
+        var versionMajor = reader.ReadVarIntAsInt32("ServerHello versionMajor");
+        var versionMinor = reader.ReadVarIntAsInt32("ServerHello versionMinor");
+        var protocolRevision = reader.ReadVarIntAsInt32("ServerHello protocolRevision");
 
         // Server wire order (see TCPHandler::sendHello): parallel-replicas version (54471),
         // then timezone/display name (54423), then version patch, then chunked-packets

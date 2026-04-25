@@ -123,7 +123,7 @@ public sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
 
         // Read dictionary values - keep the column alive during index resolution
         using var dictColumn = dictSize > 0
-            ? _innerReader.ReadTypedColumn(ref reader, (int)dictSize)
+            ? _innerReader.ReadTypedColumn(ref reader, ProtocolGuards.ToInt32(dictSize, "LowCardinality dictionary size"))
             : null;
 
         // Read number of indices (should match rowCount)
@@ -193,9 +193,10 @@ public sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
         T[] dictionary;
         if (dictSize > 0)
         {
-            using var dictColumn = _innerReader.ReadTypedColumn(ref reader, (int)dictSize);
-            dictionary = new T[(int)dictSize];
-            for (int i = 0; i < (int)dictSize; i++)
+            var dictSizeInt = ProtocolGuards.ToInt32(dictSize, "LowCardinality dictionary size");
+            using var dictColumn = _innerReader.ReadTypedColumn(ref reader, dictSizeInt);
+            dictionary = new T[dictSizeInt];
+            for (int i = 0; i < dictSizeInt; i++)
             {
                 dictionary[i] = dictColumn[i];
             }
@@ -218,8 +219,8 @@ public sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
             {
                 IndexTypeUInt8 => reader.ReadByte(),
                 IndexTypeUInt16 => reader.ReadUInt16(),
-                IndexTypeUInt32 => (int)reader.ReadUInt32(),
-                IndexTypeUInt64 => (int)reader.ReadUInt64(),
+                IndexTypeUInt32 => reader.ReadUInt32AsInt32("LowCardinality index"),
+                IndexTypeUInt64 => reader.ReadUInt64AsInt32("LowCardinality index"),
                 _ => throw new NotSupportedException($"Unknown LowCardinality index type: {indexType}")
             };
         }
