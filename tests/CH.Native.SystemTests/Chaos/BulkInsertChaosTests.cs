@@ -44,7 +44,7 @@ public class BulkInsertChaosTests : IAsyncLifetime
             // Throttle the upstream so the bulk insert is in-flight long enough that
             // the reset injection lands mid-stream rather than after completion.
             await _proxy.Client.AddToxicAsync(ToxiproxyFixture.ProxyName, "bandwidth", "upstream",
-                new() { ["rate"] = 1024 }); // 1 KiB/s
+                new() { ["rate"] = 1024 }); // 1 MB/s (Toxiproxy 'rate' is KB/s)
 
             var injectTask = Task.Run(async () =>
             {

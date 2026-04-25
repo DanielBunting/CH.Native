@@ -44,7 +44,8 @@ public class StreamFailureTests
             await using var conn = new ClickHouseConnection(_proxy.BuildSettings());
             await conn.OpenAsync();
 
-            // Throttle upstream so the iterator is in-flight when we kick the socket.
+            // Throttle downstream so the iterator is in-flight when we kick the socket.
+            // 4096 = 4 MB/s; Toxiproxy 'rate' is KB/s.
             await _proxy.Client.AddToxicAsync(ToxiproxyFixture.ProxyName, "bandwidth", "downstream",
                 new() { ["rate"] = 4096 });
 
@@ -104,6 +105,7 @@ public class StreamFailureTests
             await using var conn = new ClickHouseConnection(_proxy.BuildSettings());
             await conn.OpenAsync();
 
+            // 4096 = 4 MB/s; Toxiproxy 'rate' is KB/s.
             await _proxy.Client.AddToxicAsync(ToxiproxyFixture.ProxyName, "bandwidth", "downstream",
                 new() { ["rate"] = 4096 });
 
@@ -191,7 +193,7 @@ public class StreamFailureTests
                 // the "discard accumulated parts" path rather than the "never sent
                 // anything" path.
                 await _proxy.Client.AddToxicAsync(ToxiproxyFixture.ProxyName, "bandwidth", "upstream",
-                    new() { ["rate"] = 524288 }); // 512 KB/s
+                    new() { ["rate"] = 512 }); // 512 KB/s — Toxiproxy 'rate' is KB/s, not bytes/s
 
                 var injector = Task.Run(async () =>
                 {
@@ -213,7 +215,13 @@ public class StreamFailureTests
                 Exception? caught = null;
                 try
                 {
-                    await using var conn = new ClickHouseConnection(_proxy.BuildSettings());
+                    // Compression off: the 'x'-padded payload compresses ~30:1 under LZ4,
+                    // which makes the 512 KB/s bandwidth toxic finish the whole stream
+                    // before the 400 ms reset_peer lands and the test no-ops. Disabling
+                    // compression here keeps on-wire bytes ≈ raw bytes so the toxic
+                    // actually throttles the insert into the reset window.
+                    await using var conn = new ClickHouseConnection(
+                        _proxy.BuildSettings(b => b.WithCompression(false)));
                     await conn.OpenAsync();
                     await conn.BulkInsertAsync(table, Source(),
                         new BulkInsertOptions { BatchSize = 500 });

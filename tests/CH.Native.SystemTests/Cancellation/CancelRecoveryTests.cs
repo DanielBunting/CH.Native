@@ -112,9 +112,12 @@ public class CancelRecoveryTests
         // -> partition.temp_part->cancel(); MemorySink drops new_blocks). So a successful
         // mid-flight cancel must produce EXACTLY zero rows committed.
         //
-        // To make the cancel reliably fire mid-flight rather than after the whole insert
-        // already completed on a fast loopback, we use a payload large enough that the
-        // wire write cannot finish inside the cancellation window.
+        // Deterministic trigger: cancel from inside the loop at a fixed row index, not
+        // a wall-clock timer. A timer-based cancel is host-speed-dependent — on a fast
+        // loopback the insert can finish before the timer fires, making the test pass
+        // for the wrong reason (terminator already sent, all rows committed) or fail
+        // because cancel was observed only at dispose-time. Tripping the CTS at row N
+        // guarantees the cancel lands strictly before CompleteAsync.
         var table = $"cancel_bi_{Guid.NewGuid():N}";
         await using var setup = new ClickHouseConnection(_fixture.BuildSettings());
         await setup.OpenAsync();
@@ -124,12 +127,13 @@ public class CancelRecoveryTests
         try
         {
             const int rowCount = 200_000;
-            const int payloadBytes = 4096; // ~800 MB total; will not finish in 200 ms on loopback
-            const int cancelMs = 200;
+            const int cancelAtRow = 50_000;
+            const int payloadBytes = 4096;
             var payload = new string('x', payloadBytes);
 
-            using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(cancelMs));
+            using var cts = new CancellationTokenSource();
             bool observedCancel = false;
+            bool reachedComplete = false;
             try
             {
                 await using var conn = new ClickHouseConnection(_fixture.BuildSettings());
@@ -139,7 +143,12 @@ public class CancelRecoveryTests
                 await inserter.InitAsync(cts.Token);
 
                 for (int i = 0; i < rowCount; i++)
+                {
+                    if (i == cancelAtRow)
+                        cts.Cancel();
                     await inserter.AddAsync(new Row { Id = i, Payload = payload }, cts.Token);
+                }
+                reachedComplete = true;
                 await inserter.CompleteAsync(cts.Token);
             }
             catch (OperationCanceledException) { observedCancel = true; }
@@ -158,15 +167,307 @@ public class CancelRecoveryTests
             Assert.Equal(1, v);
 
             var rows = await fresh.ExecuteScalarAsync<ulong>($"SELECT count() FROM {table}");
-            _output.WriteLine($"BulkInsert mid-flight cancel: observedCancel={observedCancel}, rows committed={rows}");
+            _output.WriteLine($"BulkInsert mid-flight cancel: observedCancel={observedCancel}, reachedComplete={reachedComplete}, rows committed={rows}");
 
-            // Cancellation must have actually fired; otherwise the test isn't testing
-            // what it claims (e.g. the insert finished before the timer).
+            // The throw must have come from inside the AddAsync loop, before CompleteAsync.
+            // If reachedComplete is true the cancel landed too late to be "mid-flight" —
+            // the test isn't exercising what it claims.
+            Assert.False(reachedComplete,
+                "Cancel landed after the AddAsync loop — CompleteAsync was reached, so this isn't a mid-flight cancel.");
             Assert.True(observedCancel,
-                "Cancellation never propagated — payload may be too small or timeout too generous; test isn't exercising mid-flight cancel.");
+                "Cancellation never propagated out of the AddAsync loop.");
 
             // And because the protocol is all-or-nothing per INSERT statement, a
             // mid-flight cancel commits exactly zero rows.
+            Assert.Equal(0UL, rows);
+        }
+        finally
+        {
+            await setup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_CancelImmediatelyAfterBoundaryFlush_CommitsZero()
+    {
+        // Variant of BulkInsert_CancelMidFlight_ServerStaysHealthy that exercises a
+        // different wire state at cancel time. With a post-step trigger, AddAsync at
+        // i = cancelAtRow runs to completion first — the boundary flush (50th batch)
+        // lands fully on the wire, AddAsync returns, THEN cts.Cancel() fires. The
+        // next iteration's AddAsync sees the dead token and enters the slow path
+        // with the most recent batch already fully written and no in-flight
+        // server-bound write. Atomicity contract still demands zero committed rows.
+        var table = $"cancel_bi_post_{Guid.NewGuid():N}";
+        await using var setup = new ClickHouseConnection(_fixture.BuildSettings());
+        await setup.OpenAsync();
+        await setup.ExecuteNonQueryAsync(
+            $"CREATE TABLE {table} (id Int32, payload String) ENGINE = Memory");
+
+        try
+        {
+            const int rowCount = 200_000;
+            const int cancelAtRow = 49_999; // last row of 50th batch — AddAsync triggers flush
+            const int payloadBytes = 4096;
+            var payload = new string('x', payloadBytes);
+
+            using var cts = new CancellationTokenSource();
+            bool observedCancel = false;
+            bool reachedComplete = false;
+            try
+            {
+                await using var conn = new ClickHouseConnection(_fixture.BuildSettings());
+                await conn.OpenAsync(cts.Token);
+                await using var inserter = conn.CreateBulkInserter<Row>(table,
+                    new BulkInsert.BulkInsertOptions { BatchSize = 1000 });
+                await inserter.InitAsync(cts.Token);
+
+                for (int i = 0; i < rowCount; i++)
+                {
+                    await inserter.AddAsync(new Row { Id = i, Payload = payload }, cts.Token);
+                    // Post-step trigger: at i == 49_999 the AddAsync above has just
+                    // completed the 50th batch flush. Cancel fires AFTER the flush
+                    // returns, so the next iteration enters AddAsync with a dead
+                    // token and the wire is quiescent.
+                    if (i == cancelAtRow)
+                        cts.Cancel();
+                }
+                reachedComplete = true;
+                await inserter.CompleteAsync(cts.Token);
+            }
+            catch (OperationCanceledException) { observedCancel = true; }
+            catch (Exception ex) when (ex is not Xunit.Sdk.XunitException) { observedCancel = true; }
+
+            await using var fresh = new ClickHouseConnection(_fixture.BuildSettings());
+            await fresh.OpenAsync();
+            Assert.Equal(1, await fresh.ExecuteScalarAsync<int>("SELECT 1"));
+
+            var rows = await fresh.ExecuteScalarAsync<ulong>($"SELECT count() FROM {table}");
+            _output.WriteLine($"Post-flush cancel: observedCancel={observedCancel}, reachedComplete={reachedComplete}, rows committed={rows}");
+
+            Assert.False(reachedComplete,
+                "Cancel landed after the AddAsync loop — CompleteAsync was reached, so this isn't a mid-flight cancel.");
+            Assert.True(observedCancel,
+                "Cancellation never propagated out of the AddAsync loop.");
+            Assert.Equal(0UL, rows);
+        }
+        finally
+        {
+            await setup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_CancelMidBatch_NonBoundary_CommitsZero()
+    {
+        // Cancel at a non-batch-boundary row: 50 batches flushed, 500 rows still
+        // sitting in the local List<T> buffer when the cancel observation runs.
+        // Those 500 rows were never on the wire; the 50_000 already-flushed rows
+        // were on the wire but never committed (no terminator). Both must end at
+        // zero. Pins that BulkInserter doesn't accidentally drain a buffered
+        // remainder during the cancel path.
+        var table = $"cancel_bi_mid_{Guid.NewGuid():N}";
+        await using var setup = new ClickHouseConnection(_fixture.BuildSettings());
+        await setup.OpenAsync();
+        await setup.ExecuteNonQueryAsync(
+            $"CREATE TABLE {table} (id Int32, payload String) ENGINE = Memory");
+
+        try
+        {
+            const int rowCount = 200_000;
+            const int cancelAtRow = 50_500; // 50 batches flushed, 500 rows buffered
+            const int payloadBytes = 4096;
+            var payload = new string('x', payloadBytes);
+
+            using var cts = new CancellationTokenSource();
+            bool observedCancel = false;
+            bool reachedComplete = false;
+            int bufferAtCancel = -1;
+            try
+            {
+                await using var conn = new ClickHouseConnection(_fixture.BuildSettings());
+                await conn.OpenAsync(cts.Token);
+                await using var inserter = conn.CreateBulkInserter<Row>(table,
+                    new BulkInsert.BulkInsertOptions { BatchSize = 1000 });
+                await inserter.InitAsync(cts.Token);
+
+                for (int i = 0; i < rowCount; i++)
+                {
+                    if (i == cancelAtRow)
+                    {
+                        // Snapshot BEFORE Cancel — Abort() clears the buffer in the
+                        // slow path, so an after-the-fact read would always see 0.
+                        bufferAtCancel = inserter.BufferedCount;
+                        cts.Cancel();
+                    }
+                    await inserter.AddAsync(new Row { Id = i, Payload = payload }, cts.Token);
+                }
+                reachedComplete = true;
+                await inserter.CompleteAsync(cts.Token);
+            }
+            catch (OperationCanceledException) { observedCancel = true; }
+            catch (Exception ex) when (ex is not Xunit.Sdk.XunitException) { observedCancel = true; }
+
+            await using var fresh = new ClickHouseConnection(_fixture.BuildSettings());
+            await fresh.OpenAsync();
+            Assert.Equal(1, await fresh.ExecuteScalarAsync<int>("SELECT 1"));
+
+            var rows = await fresh.ExecuteScalarAsync<ulong>($"SELECT count() FROM {table}");
+            _output.WriteLine($"Mid-batch cancel: observedCancel={observedCancel}, reachedComplete={reachedComplete}, buffered at cancel={bufferAtCancel}, rows committed={rows}");
+
+            Assert.False(reachedComplete,
+                "Cancel landed after the AddAsync loop — CompleteAsync was reached, so this isn't a mid-flight cancel.");
+            Assert.True(observedCancel,
+                "Cancellation never propagated out of the AddAsync loop.");
+            // 500 rows were locally buffered at cancel time. If a future change to
+            // AddAsync's flush-trigger logic shifts the boundary, this drifts and
+            // we want the test to fail loudly so the new behaviour is reviewed.
+            Assert.Equal(500, bufferAtCancel);
+            Assert.Equal(0UL, rows);
+        }
+        finally
+        {
+            await setup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_CancelMidFlight_SameConnection_StaysReusable()
+    {
+        // Sister to BulkInsert_CancelMidFlight_ServerStaysHealthy. That one verifies
+        // server health on a FRESH connection — necessary but insufficient. This test
+        // pins the drain-realignment claim end-to-end: after ObserveCancellationSlowPathAsync
+        // runs SendCancelAsync → DrainAfterCancellationAsync, the SAME connection that
+        // owned the cancelled insert must accept a follow-up scalar query AND a fresh
+        // BulkInsert that completes successfully. If the drain left bytes on the wire,
+        // the second insert would either hang or read garbled response bytes.
+        var table = $"cancel_reuse_{Guid.NewGuid():N}";
+        await using var setup = new ClickHouseConnection(_fixture.BuildSettings());
+        await setup.OpenAsync();
+        await setup.ExecuteNonQueryAsync(
+            $"CREATE TABLE {table} (id Int32, payload String) ENGINE = Memory");
+
+        try
+        {
+            const int rowCount = 200_000;
+            const int cancelAtRow = 50_000;
+            const int payloadBytes = 4096;
+            const int reuseRowCount = 1_000;
+            var payload = new string('x', payloadBytes);
+
+            // Hold ONE connection for the whole test — this is the contract under audit.
+            await using var conn = new ClickHouseConnection(_fixture.BuildSettings());
+            await conn.OpenAsync();
+
+            using var cts = new CancellationTokenSource();
+            bool observedCancel = false;
+            bool reachedComplete = false;
+            try
+            {
+                await using var inserter = conn.CreateBulkInserter<Row>(table,
+                    new BulkInsert.BulkInsertOptions { BatchSize = 1000 });
+                await inserter.InitAsync(cts.Token);
+
+                for (int i = 0; i < rowCount; i++)
+                {
+                    if (i == cancelAtRow)
+                        cts.Cancel();
+                    await inserter.AddAsync(new Row { Id = i, Payload = payload }, cts.Token);
+                }
+                reachedComplete = true;
+                await inserter.CompleteAsync(cts.Token);
+            }
+            catch (OperationCanceledException) { observedCancel = true; }
+            catch (Exception ex) when (ex is not Xunit.Sdk.XunitException) { observedCancel = true; }
+
+            Assert.False(reachedComplete,
+                "Cancel landed after the AddAsync loop — CompleteAsync was reached, so this isn't a mid-flight cancel.");
+            Assert.True(observedCancel,
+                "Cancellation never propagated out of the AddAsync loop.");
+
+            // 1) Same connection still answers a trivial scalar — proves the drain
+            //    advanced the pipe reader to a clean message boundary.
+            var v = await conn.ExecuteScalarAsync<int>("SELECT 1");
+            Assert.Equal(1, v);
+
+            // 2) Same connection accepts a NEW BulkInserter and finishes a clean
+            //    insert. This is the real witness of wire realignment — the second
+            //    inserter sends its own INSERT query, reads schema, flushes batches,
+            //    and reads the end-of-stream ack on a connection whose previous
+            //    state machine ran through the cancel-and-drain path.
+            await using (var inserter2 = conn.CreateBulkInserter<Row>(table,
+                new BulkInsert.BulkInsertOptions { BatchSize = 500 }))
+            {
+                await inserter2.InitAsync();
+                for (int i = 0; i < reuseRowCount; i++)
+                    await inserter2.AddAsync(new Row { Id = i, Payload = "y" });
+                await inserter2.CompleteAsync();
+            }
+
+            // The cancelled insert contributed zero rows; only the reuse insert's
+            // rows should be present.
+            var rows = await conn.ExecuteScalarAsync<ulong>($"SELECT count() FROM {table}");
+            _output.WriteLine($"Same-conn reuse: observedCancel={observedCancel}, reachedComplete={reachedComplete}, rows committed={rows} (expected {reuseRowCount})");
+            Assert.Equal((ulong)reuseRowCount, rows);
+        }
+        finally
+        {
+            await setup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_CancelBeforeInit_ThrowsCleanly_NoServerSideQuery()
+    {
+        // Pre-INSERT cancel: token is already dead at the moment InitAsync starts.
+        // BulkInserter.InitAsync's first action is a plain ThrowIfCancellationRequested
+        // — NOT ObserveCancellationAsync — because nothing has been sent on the wire
+        // yet (the INSERT query hasn't been issued, so there's nothing to cancel
+        // server-side and a Cancel packet here would be wire garbage). This test
+        // pins that boundary: no INSERT query reaches system.processes, the table
+        // stays empty, and the same connection remains usable.
+        //
+        // The comment at BulkInserter.cs:140-145 is load-bearing — a future refactor
+        // that "unifies" the cancellation paths could regress this. The test catches
+        // the regression at the integration boundary.
+        var table = $"cancel_preinit_{Guid.NewGuid():N}";
+        await using var setup = new ClickHouseConnection(_fixture.BuildSettings());
+        await setup.OpenAsync();
+        await setup.ExecuteNonQueryAsync(
+            $"CREATE TABLE {table} (id Int32, payload String) ENGINE = Memory");
+
+        try
+        {
+            await using var conn = new ClickHouseConnection(_fixture.BuildSettings());
+            await conn.OpenAsync();
+
+            using var cts = new CancellationTokenSource();
+            cts.Cancel(); // dead at entry
+
+            await using var inserter = conn.CreateBulkInserter<Row>(table,
+                new BulkInsert.BulkInsertOptions { BatchSize = 1000 });
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => inserter.InitAsync(cts.Token));
+
+            // Same connection: scalar still works.
+            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+
+            // No INSERT query should have been registered server-side. Match only
+            // INSERT INTO {table} (avoid the self-referential LIKE pattern from
+            // CancelDuringRoundTripTests.cs:179-188). Poll briefly for race tolerance.
+            var deadline = DateTime.UtcNow.AddSeconds(2);
+            ulong stuckQueries = 1;
+            while (DateTime.UtcNow < deadline)
+            {
+                stuckQueries = await conn.ExecuteScalarAsync<ulong>(
+                    $"SELECT count() FROM system.processes WHERE query LIKE 'INSERT INTO {table}%'");
+                if (stuckQueries == 0) break;
+                await Task.Delay(100);
+            }
+            Assert.Equal(0UL, stuckQueries);
+
+            var rows = await conn.ExecuteScalarAsync<ulong>($"SELECT count() FROM {table}");
+            _output.WriteLine($"Pre-init cancel: stuck queries={stuckQueries}, rows committed={rows}");
             Assert.Equal(0UL, rows);
         }
         finally

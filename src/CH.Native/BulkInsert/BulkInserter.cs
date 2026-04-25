@@ -86,15 +86,38 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     /// Pre-init paths must use the plain throw — no Cancel should be sent
     /// before the INSERT query has been issued.
     /// </remarks>
-    private async ValueTask ObserveCancellationAsync(CancellationToken cancellationToken)
+    private ValueTask ObserveCancellationAsync(CancellationToken cancellationToken)
     {
-        if (!cancellationToken.IsCancellationRequested)
-            return;
+        // Synchronous fast path: when the token can't be cancelled (the common
+        // CancellationToken.None case in AddAsync's per-row hot loop), or when
+        // it's live but not yet fired, return a completed ValueTask so the
+        // async state machine in the caller stays allocation-free.
+        if (!cancellationToken.CanBeCanceled || !cancellationToken.IsCancellationRequested)
+            return ValueTask.CompletedTask;
 
+        return ObserveCancellationSlowPathAsync(cancellationToken);
+    }
+
+    private async ValueTask ObserveCancellationSlowPathAsync(CancellationToken cancellationToken)
+    {
         await _connection.SendCancelAsync().ConfigureAwait(false);
         Abort();
         await _connection.DrainAfterCancellationAsync().ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    /// <summary>
+    /// Registers <see cref="ClickHouseConnection.SendCancelAsync"/> to fire on
+    /// token cancellation, returning <c>default</c> for non-cancellable tokens
+    /// so the bulk-insert hot path skips the registration ceremony entirely
+    /// (closure + linked-list-node allocation otherwise charged per I/O call).
+    /// Caller disposes the registration via <c>using</c>.
+    /// </summary>
+    private CancellationTokenRegistration RegisterCancelHook(CancellationToken cancellationToken)
+    {
+        return cancellationToken.CanBeCanceled
+            ? cancellationToken.Register(static state => _ = ((ClickHouseConnection)state!).SendCancelAsync(), _connection)
+            : default;
     }
 
     /// <summary>
@@ -121,7 +144,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         // against a connection that hasn't even sent the INSERT query.
         cancellationToken.ThrowIfCancellationRequested();
 
-        await using var registration = cancellationToken.Register(() => _ = _connection.SendCancelAsync());
+        using var registration = RegisterCancelHook(cancellationToken);
         try
         {
             // Build column list from POCO properties
@@ -264,7 +287,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         var batchSize = _options.BatchSize;
         var batch = ArrayPool<T>.Shared.Rent(batchSize);
 
-        await using var registration = cancellationToken.Register(() => _ = _connection.SendCancelAsync());
+        using var registration = RegisterCancelHook(cancellationToken);
         try
         {
             var batchIndex = 0;
@@ -344,7 +367,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         var batchSize = _options.BatchSize;
         var batch = ArrayPool<T>.Shared.Rent(batchSize);
 
-        await using var registration = cancellationToken.Register(() => _ = _connection.SendCancelAsync());
+        using var registration = RegisterCancelHook(cancellationToken);
         try
         {
             var batchIndex = 0;
@@ -414,7 +437,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             activity.SetTag("db.clickhouse.rows", _buffer.Count);
         }
 
-        await using var registration = cancellationToken.Register(() => _ = _connection.SendCancelAsync());
+        using var registration = RegisterCancelHook(cancellationToken);
         try
         {
             if (_useDirectPath && _extractors != null)
@@ -485,7 +508,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
 
         using var activity = ClickHouseActivitySource.StartBulkInsert(_tableName, _connection.Settings.Database, _connection.Settings.Telemetry);
 
-        await using var registration = cancellationToken.Register(() => _ = _connection.SendCancelAsync());
+        using var registration = RegisterCancelHook(cancellationToken);
         try
         {
             // Flush any remaining items

@@ -325,7 +325,15 @@ public class ResilienceChaosTests
                     .WithRetry(new RetryOptions { MaxRetries = 1, BaseDelay = TimeSpan.FromMilliseconds(20) })
                     .WithCircuitBreaker(new CircuitBreakerOptions
                     {
-                        FailureThreshold = 3,
+                        // FailureThreshold = 1: the LoadBalancer evicts a server from
+                        // rotation on its first observed failure (LoadBalancer.MarkServerFailed
+                        // → ServerNode.MarkUnhealthyImmediate). Once both endpoints are out
+                        // of rotation, ResilientConnection throws "No healthy servers
+                        // available" without consulting any CB, so per-endpoint breakers
+                        // would never accumulate enough failures to cross a higher threshold.
+                        // Threshold = 1 is the only setting that lets this test exercise an
+                        // actual closed→open transition under the current LB policy.
+                        FailureThreshold = 1,
                         OpenDuration = TimeSpan.FromSeconds(2),
                     })));
 
@@ -347,14 +355,32 @@ public class ResilienceChaosTests
                 $"After CB trip, call should fail fast (< 500ms); took {sw.ElapsedMilliseconds}ms");
 
             // Verify the breaker actually transitioned — the state-change counter
-            // should have ticked at least once (closed → open).
+            // should have ticked at least once (closed → open) and carry the
+            // expected tag triple so a wiring regression that drops tags also fails.
             meter!.ForceFlush(timeoutMilliseconds: 1000);
             long stateChanges = 0;
-            foreach (var m in metrics.Where(x => x.Name == "ch_native_circuit_breaker_state_changes"))
+            var sawClosedToOpen = false;
+            var sawServerAddress = false;
+            foreach (var m in metrics.Where(x => x.Name == "ch_native_circuit_breaker_state_changes_total"))
+            {
                 foreach (var p in m.GetMetricPoints())
+                {
                     stateChanges += p.GetSumLong();
+                    string? from = null, to = null;
+                    foreach (var t in p.Tags)
+                    {
+                        if (t.Key == "from_state") from = t.Value as string;
+                        else if (t.Key == "to_state") to = t.Value as string;
+                        else if (t.Key == "server.address" && !string.IsNullOrEmpty(t.Value as string))
+                            sawServerAddress = true;
+                    }
+                    if (from == "closed" && to == "open") sawClosedToOpen = true;
+                }
+            }
             Assert.True(stateChanges >= 1,
                 $"Expected ≥ 1 circuit-breaker state change; saw {stateChanges}.");
+            Assert.True(sawClosedToOpen, "Expected a closed→open transition tag pair on the counter.");
+            Assert.True(sawServerAddress, "Expected a non-empty server.address tag on the counter.");
         }
         finally
         {
