@@ -48,13 +48,19 @@ public sealed class LoadBalancer
     }
 
     /// <summary>
-    /// Marks a server as having failed, immediately updating its health status.
+    /// Marks a server as having failed, immediately taking it out of rotation.
     /// </summary>
+    /// <remarks>
+    /// Intended for failures observed by in-flight operations. Unlike the background
+    /// probe path (which requires three consecutive failures before flipping the
+    /// node), one observed failure here is treated as conclusive — the background
+    /// health checker will restore the node on the next successful probe.
+    /// </remarks>
     /// <param name="address">The address of the server that failed.</param>
     public void MarkServerFailed(ServerAddress address)
     {
         var node = _healthChecker.Nodes.FirstOrDefault(n => n.Address == address);
-        node?.MarkUnhealthy();
+        node?.MarkUnhealthyImmediate();
     }
 
     /// <summary>

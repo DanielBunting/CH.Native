@@ -26,6 +26,11 @@ public sealed record ResilienceOptions
     public TimeSpan HealthCheckInterval { get; init; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
+    /// Gets the timeout for an individual health-check probe. Default is 5 seconds.
+    /// </summary>
+    public TimeSpan HealthCheckTimeout { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Gets whether retry is enabled.
     /// </summary>
     public bool HasRetry => Retry != null;

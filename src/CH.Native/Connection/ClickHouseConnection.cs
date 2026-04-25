@@ -111,6 +111,15 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     }
 
     /// <summary>
+    /// True between the moment <see cref="SendCancelAsync"/> writes a Cancel packet
+    /// and the next query (which resets the flag). Bulk-insert / read-path catch
+    /// blocks read this to gate the post-OCE drain — without the gate, an OCE
+    /// thrown synchronously before any Cancel was sent would trigger a drain
+    /// against a server that has nothing to drain, hanging until the 5s timeout.
+    /// </summary>
+    internal bool WasCancellationRequested => _cancellationRequested;
+
+    /// <summary>
     /// Gets the server information received during handshake.
     /// </summary>
     public ServerHello? ServerInfo { get; private set; }
@@ -246,6 +255,11 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         {
             _networkStream = await EstablishTlsAsync(_networkStream, timeoutCts.Token);
         }
+
+        // Wrap with MeteredNetworkStream so BytesSentTotal/BytesReceivedTotal
+        // capture every byte that crosses the wire, including post-TLS framing
+        // and ClickHouse-level compression headers.
+        _networkStream = new MeteredNetworkStream(_networkStream, leaveOpen: false);
 
         // Use larger buffer sizes to reduce fragmentation and improve IsSingleSegment hit rate
         var pipeReaderOptions = new StreamPipeReaderOptions(
@@ -971,9 +985,10 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             throw new InvalidOperationException("Connection is not open.");
 
         var effectiveQueryId = ResolveQueryId(queryId);
-        // Note: Activity is started here but will continue throughout the reader's lifetime.
-        // For full duration tracking, the ClickHouseDataReader would need to record when disposed.
+        // Activity, stopwatch, and rows-read counter all live for the reader's
+        // lifetime — the reader records the query metric on disposal.
         var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+        var stopwatch = Stopwatch.StartNew();
         _logger.LogQueryStarted(effectiveQueryId, sql);
 
         try
@@ -983,12 +998,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             var enumerator = ReadServerMessagesAsync(cancellationToken)
                 .GetAsyncEnumerator(cancellationToken);
 
-            return new ClickHouseDataReader(enumerator, this, activity, effectiveQueryId);
+            return new ClickHouseDataReader(enumerator, this, activity, effectiveQueryId, stopwatch);
         }
         catch (Exception ex)
         {
-            activity?.Dispose();
+            stopwatch.Stop();
             ClickHouseActivitySource.SetError(activity, ex);
+            activity?.Dispose();
+            ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, 0, success: false);
             ClickHouseMeter.ErrorsTotal.Add(1);
             _logger.QueryFailed(effectiveQueryId, ex.Message);
             if (ex is ClickHouseProtocolException) await CloseInternalAsync();
@@ -1597,12 +1614,30 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
         var effectiveQueryId = ResolveQueryId(queryId);
         var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-        await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
+        var activity = ClickHouseActivitySource.StartQuery(rewrittenSql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+        var stopwatch = Stopwatch.StartNew();
+        _logger.LogQueryStarted(effectiveQueryId, rewrittenSql);
 
-        var enumerator = ReadServerMessagesAsync(cancellationToken)
-            .GetAsyncEnumerator(cancellationToken);
+        try
+        {
+            await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
 
-        return new ClickHouseDataReader(enumerator, this, queryId: effectiveQueryId);
+            var enumerator = ReadServerMessagesAsync(cancellationToken)
+                .GetAsyncEnumerator(cancellationToken);
+
+            return new ClickHouseDataReader(enumerator, this, activity, effectiveQueryId, stopwatch);
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            ClickHouseActivitySource.SetError(activity, ex);
+            activity?.Dispose();
+            ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, 0, success: false);
+            ClickHouseMeter.ErrorsTotal.Add(1);
+            _logger.QueryFailed(effectiveQueryId, ex.Message);
+            if (ex is ClickHouseProtocolException) await CloseInternalAsync();
+            throw;
+        }
     }
 
     private Task SendQueryAsync(string sql, CancellationToken cancellationToken, string? queryId = null)
@@ -1812,7 +1847,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// detached continuation could null out the slot belonging to a subsequent
     /// query started on the same connection.
     /// </remarks>
-    private async Task DrainAfterCancellationAsync()
+    internal async Task DrainAfterCancellationAsync()
     {
         if (_pipeReader == null || !_isOpen)
             return;
@@ -1860,8 +1895,10 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         }
         catch
         {
-            // Timeout or other error - connection may be in bad state
-            // but we've done our best to drain
+            // Drain timed out or read garbled bytes. The wire is at an unknown
+            // offset, so the connection must not be reused. _protocolFatal flips
+            // CanBePooled to false, so a pool / ResilientConnection discards it.
+            _protocolFatal = true;
         }
         finally
         {
@@ -2352,6 +2389,9 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
         // Set compression state for response handling
         _compressionEnabled = _settings.Compress;
+        // Mirror SendQueryAsync (line 1661) — clear stale cancel state from a
+        // prior query so the bulk-path drain gate does not mis-trigger.
+        _cancellationRequested = false;
 
         var effectiveQueryId = ResolveQueryId(queryId);
         var queryMessage = QueryMessage.Create(

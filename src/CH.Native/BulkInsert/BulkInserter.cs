@@ -60,6 +60,44 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     public int BufferedCount => _buffer.Count;
 
     /// <summary>
+    /// Suppresses the dispose-time "unflushed rows" failure for callers that
+    /// already know the wire is being torn down (e.g. cancellation: the
+    /// connection-level drain has already finalised protocol state, so retrying
+    /// the implicit complete in <see cref="DisposeAsync"/> would race a server
+    /// that has already moved on).
+    /// </summary>
+    internal void Abort()
+    {
+        _completeStarted = true;
+        _buffer.Clear();
+    }
+
+    /// <summary>
+    /// Synchronous-cancel observer for the post-initialised insert path.
+    /// </summary>
+    /// <remarks>
+    /// Replaces <c>cancellationToken.ThrowIfCancellationRequested()</c> in
+    /// methods that run after <see cref="InitAsync"/> has put the wire into
+    /// INSERT state. A bare <c>ThrowIfCancellationRequested</c> here would
+    /// poison the connection: the server is waiting for the terminator block,
+    /// the client has thrown OCE without sending Cancel, and the next query on
+    /// the same connection reads the orphaned response. Sending Cancel + drain
+    /// before re-throwing realigns the wire so the connection is reusable.
+    /// Pre-init paths must use the plain throw — no Cancel should be sent
+    /// before the INSERT query has been issued.
+    /// </remarks>
+    private async ValueTask ObserveCancellationAsync(CancellationToken cancellationToken)
+    {
+        if (!cancellationToken.IsCancellationRequested)
+            return;
+
+        await _connection.SendCancelAsync().ConfigureAwait(false);
+        Abort();
+        await _connection.DrainAfterCancellationAsync().ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    /// <summary>
     /// Initializes the bulk inserter by sending the INSERT query and receiving the schema.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -76,50 +114,69 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         if (_initialized)
             throw new InvalidOperationException("BulkInserter is already initialized.");
 
-        // Build column list from POCO properties
-        var propertyMappings = GetPropertyMappings();
-        var columnList = string.Join(", ", propertyMappings.Select(p => p.ColumnName));
-        _schemaCacheKey = new SchemaKey(_tableName, columnList);
+        // Pre-INSERT: nothing on the wire yet, so a cancelled token at entry
+        // is a plain throw — no Cancel packet to send, no drain to perform.
+        // Must check before the registration is set up: Register on an already-
+        // cancelled token fires synchronously, which would dispatch SendCancel
+        // against a connection that hasn't even sent the INSERT query.
+        cancellationToken.ThrowIfCancellationRequested();
 
-        // Send INSERT query (required for server-side protocol state even on cache hit)
-        var sql = $"INSERT INTO {_tableName} ({columnList}) VALUES";
-        // Snapshot to IReadOnlyList so the wire path doesn't observe later mutation.
-        var rolesSnapshot = _options.Roles is null ? null : (IReadOnlyList<string>)_options.Roles.ToArray();
-        await _connection.SendInsertQueryAsync(
-            sql,
-            cancellationToken,
-            rolesOverride: rolesSnapshot,
-            queryId: _options.QueryId);
-
-        // Per-call override wins; null falls back to the connection setting.
-        var useCache = _options.UseSchemaCache ?? _connection.Settings.UseSchemaCache;
-
-        if (useCache &&
-            _connection.SchemaCache.TryGet(_schemaCacheKey, out var cachedSchema))
+        await using var registration = cancellationToken.Register(() => _ = _connection.SendCancelAsync());
+        try
         {
-            // Cache hit: use cached schema, skip the schema read round-trip.
-            // The server's schema Data block will be drained by ReceiveEndOfStreamAsync.
-            MapPropertiesToSchema(propertyMappings, cachedSchema.ColumnNames, cachedSchema.ColumnTypes);
-            _usedCachedSchema = true;
-            _connection.Logger.BulkInsertSchemaFetched(_tableName, cachedSchema.ColumnNames.Length, fromCache: true);
-        }
-        else
-        {
-            // Cache miss (or caching disabled): wait for server schema, then map.
-            var schemaBlock = await _connection.ReceiveSchemaBlockAsync(cancellationToken);
-            var names = schemaBlock.ColumnNames;
-            var types = schemaBlock.ColumnTypes;
-            MapPropertiesToSchema(propertyMappings, names, types);
+            // Build column list from POCO properties
+            var propertyMappings = GetPropertyMappings();
+            var columnList = string.Join(", ", propertyMappings.Select(p => p.ColumnName));
+            _schemaCacheKey = new SchemaKey(_tableName, columnList);
 
-            if (useCache)
+            // Send INSERT query (required for server-side protocol state even on cache hit)
+            var sql = $"INSERT INTO {_tableName} ({columnList}) VALUES";
+            // Snapshot to IReadOnlyList so the wire path doesn't observe later mutation.
+            var rolesSnapshot = _options.Roles is null ? null : (IReadOnlyList<string>)_options.Roles.ToArray();
+            await _connection.SendInsertQueryAsync(
+                sql,
+                cancellationToken,
+                rolesOverride: rolesSnapshot,
+                queryId: _options.QueryId);
+
+            // Per-call override wins; null falls back to the connection setting.
+            var useCache = _options.UseSchemaCache ?? _connection.Settings.UseSchemaCache;
+
+            if (useCache &&
+                _connection.SchemaCache.TryGet(_schemaCacheKey, out var cachedSchema))
             {
-                _connection.SchemaCache.Set(_schemaCacheKey, new BulkInsertSchema(names, types));
+                // Cache hit: use cached schema, skip the schema read round-trip.
+                // The server's schema Data block will be drained by ReceiveEndOfStreamAsync.
+                MapPropertiesToSchema(propertyMappings, cachedSchema.ColumnNames, cachedSchema.ColumnTypes);
+                _usedCachedSchema = true;
+                _connection.Logger.BulkInsertSchemaFetched(_tableName, cachedSchema.ColumnNames.Length, fromCache: true);
+            }
+            else
+            {
+                // Cache miss (or caching disabled): wait for server schema, then map.
+                var schemaBlock = await _connection.ReceiveSchemaBlockAsync(cancellationToken);
+                var names = schemaBlock.ColumnNames;
+                var types = schemaBlock.ColumnTypes;
+                MapPropertiesToSchema(propertyMappings, names, types);
+
+                if (useCache)
+                {
+                    _connection.SchemaCache.Set(_schemaCacheKey, new BulkInsertSchema(names, types));
+                }
+
+                _connection.Logger.BulkInsertSchemaFetched(_tableName, names.Length, fromCache: false);
             }
 
-            _connection.Logger.BulkInsertSchemaFetched(_tableName, names.Length, fromCache: false);
+            _initialized = true;
         }
-
-        _initialized = true;
+        catch (OperationCanceledException) when (_connection.WasCancellationRequested)
+        {
+            // SendCancelAsync wrote the Cancel packet; drain the server's
+            // response so the wire is realigned for connection reuse.
+            Abort();
+            await _connection.DrainAfterCancellationAsync();
+            throw;
+        }
     }
 
     /// <summary>
@@ -134,6 +191,14 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             throw new InvalidOperationException("BulkInserter must be initialized before adding items.");
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
+
+        // Honor cancellation at the boundary so a cancelled token reliably
+        // aborts the in-progress insert. Without this, AddAsync is purely
+        // synchronous between flushes and would never observe the token on a
+        // fast/local connection — letting the caller silently commit data
+        // they asked us to abandon. ObserveCancellationAsync also drains the
+        // wire so the connection is reusable after the throw.
+        await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
 
         _buffer.Add(item);
 
@@ -156,8 +221,12 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
 
+        await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
+
         foreach (var item in items)
         {
+            await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
+
             _buffer.Add(item);
 
             if (_buffer.Count >= _options.BatchSize)
@@ -182,6 +251,8 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
 
+        await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
+
         // If we don't have the direct path available, fall back to regular AddRangeAsync
         if (!_useDirectPath || _extractors == null)
         {
@@ -193,12 +264,15 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         var batchSize = _options.BatchSize;
         var batch = ArrayPool<T>.Shared.Rent(batchSize);
 
+        await using var registration = cancellationToken.Register(() => _ = _connection.SendCancelAsync());
         try
         {
             var batchIndex = 0;
 
             foreach (var item in items)
             {
+                await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
+
                 batch[batchIndex++] = item;
 
                 if (batchIndex >= batchSize)
@@ -225,6 +299,12 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
                     batchIndex,
                     cancellationToken);
             }
+        }
+        catch (OperationCanceledException) when (_connection.WasCancellationRequested)
+        {
+            Abort();
+            await _connection.DrainAfterCancellationAsync();
+            throw;
         }
         finally
         {
@@ -248,6 +328,8 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
 
+        await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
+
         // If we don't have the direct path available, fall back to adding one by one
         if (!_useDirectPath || _extractors == null)
         {
@@ -262,6 +344,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         var batchSize = _options.BatchSize;
         var batch = ArrayPool<T>.Shared.Rent(batchSize);
 
+        await using var registration = cancellationToken.Register(() => _ = _connection.SendCancelAsync());
         try
         {
             var batchIndex = 0;
@@ -295,6 +378,12 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
                     cancellationToken);
             }
         }
+        catch (OperationCanceledException) when (_connection.WasCancellationRequested)
+        {
+            Abort();
+            await _connection.DrainAfterCancellationAsync();
+            throw;
+        }
         finally
         {
             // Return pooled array with clearing to release object references
@@ -312,6 +401,8 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         if (!_initialized)
             throw new InvalidOperationException("BulkInserter must be initialized before flushing.");
 
+        await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
+
         if (_buffer.Count == 0)
             return;
 
@@ -323,6 +414,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             activity.SetTag("db.clickhouse.rows", _buffer.Count);
         }
 
+        await using var registration = cancellationToken.Register(() => _ = _connection.SendCancelAsync());
         try
         {
             if (_useDirectPath && _extractors != null)
@@ -351,6 +443,13 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             _totalRowsInserted += _buffer.Count;
             _connection.Logger.BulkInsertFlushed(_tableName, _buffer.Count);
         }
+        catch (OperationCanceledException ex) when (_connection.WasCancellationRequested)
+        {
+            ClickHouseActivitySource.SetError(activity, ex);
+            Abort();
+            await _connection.DrainAfterCancellationAsync();
+            throw;
+        }
         catch (Exception ex)
         {
             ClickHouseActivitySource.SetError(activity, ex);
@@ -372,6 +471,13 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         if (_completed)
             return;
 
+        // ClickHouse's native protocol commits an INSERT only when the empty
+        // terminator block lands. If the caller passed a cancelled token, we
+        // must NOT send the buffered remainder or the terminator — doing so
+        // would commit work the caller asked us to abandon. ObserveCancellation
+        // also drains the wire so the connection is reusable after the throw.
+        await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
+
         // Mark the attempt so Dispose knows not to retry after a failed complete
         // (retry would re-invoke ReceiveEndOfStreamAsync on a broken wire and mask
         // the original server/protocol exception).
@@ -379,6 +485,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
 
         using var activity = ClickHouseActivitySource.StartBulkInsert(_tableName, _connection.Settings.Database, _connection.Settings.Telemetry);
 
+        await using var registration = cancellationToken.Register(() => _ = _connection.SendCancelAsync());
         try
         {
             // Flush any remaining items
@@ -401,6 +508,18 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             // the next inserter refreshes, and surface the error to the caller.
             _connection.SchemaCache.InvalidateTable(_tableName);
             ClickHouseActivitySource.SetError(activity, ex);
+            throw;
+        }
+        catch (OperationCanceledException ex) when (_connection.WasCancellationRequested)
+        {
+            ClickHouseActivitySource.SetError(activity, ex);
+            // FlushAsync's own catch may have already drained; if so, draining
+            // again is a no-op (the queryId is already cleared and the wire
+            // realigned). Calling unconditionally keeps CompleteAsync robust
+            // when the OCE escaped a non-flush write (SendEmptyBlockAsync /
+            // ReceiveEndOfStreamAsync) without going through FlushAsync's catch.
+            Abort();
+            await _connection.DrainAfterCancellationAsync();
             throw;
         }
         catch (Exception ex)

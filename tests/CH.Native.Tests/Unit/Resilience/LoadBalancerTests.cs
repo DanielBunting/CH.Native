@@ -117,9 +117,8 @@ public class LoadBalancerTests
 
         Assert.Equal(2, balancer.HealthyServerCount);
 
-        // Mark server1 as failed 3 times (threshold to become unhealthy)
-        balancer.MarkServerFailed(servers[0]);
-        balancer.MarkServerFailed(servers[0]);
+        // Caller-observed failures take the node out immediately; the 3-strike
+        // rule only applies to background probes.
         balancer.MarkServerFailed(servers[0]);
 
         Assert.Equal(1, balancer.HealthyServerCount);
@@ -157,9 +156,7 @@ public class LoadBalancerTests
         await using var healthChecker = CreateTestHealthChecker(servers);
         var balancer = new LoadBalancer(healthChecker, LoadBalancingStrategy.FirstAvailable);
 
-        // Mark first server as unhealthy
-        balancer.MarkServerFailed(servers[0]);
-        balancer.MarkServerFailed(servers[0]);
+        // Mark first server as unhealthy (one observed failure is enough)
         balancer.MarkServerFailed(servers[0]);
 
         // Should skip server1 and return server2

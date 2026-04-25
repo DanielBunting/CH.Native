@@ -141,6 +141,58 @@ public class RetryPolicyTests
         Assert.False(RetryPolicy.IsTransientException(notTransient));
     }
 
+    [Theory]
+    [InlineData(typeof(SocketException), true)]
+    [InlineData(typeof(IOException), true)]
+    [InlineData(typeof(TimeoutException), false)]            // transient but wire is fine
+    [InlineData(typeof(InvalidOperationException), false)]
+    public void IsConnectionPoisoning_ClassifiesCommonTypes(Type exceptionType, bool expected)
+    {
+        var ex = (Exception)Activator.CreateInstance(exceptionType)!;
+        Assert.Equal(expected, RetryPolicy.IsConnectionPoisoning(ex));
+    }
+
+    [Fact]
+    public void IsConnectionPoisoning_ClickHouseConnectionException_IsPoisoning()
+    {
+        var ex = new ClickHouseConnectionException("Connection failed");
+        Assert.True(RetryPolicy.IsConnectionPoisoning(ex));
+    }
+
+    [Fact]
+    public void IsConnectionPoisoning_ServerException_IsNotPoisoning()
+    {
+        // code 241 MEMORY_LIMIT_EXCEEDED is transient per the retry policy, but the
+        // wire is fine — the server emits Exception then EndOfStream cleanly.
+        var ex = new ClickHouseServerException(241, "DB::Exception", "OOM", "");
+        Assert.False(RetryPolicy.IsConnectionPoisoning(ex));
+
+        // code 159 TIMEOUT_EXCEEDED — same logic.
+        var timeout = new ClickHouseServerException(159, "DB::Exception", "Timeout", "");
+        Assert.False(RetryPolicy.IsConnectionPoisoning(timeout));
+    }
+
+    [Fact]
+    public void IsConnectionPoisoning_AggregateUnwrapsToAnyPoisoningInner()
+    {
+        var ex = new AggregateException(
+            new InvalidOperationException(),
+            new SocketException());
+        Assert.True(RetryPolicy.IsConnectionPoisoning(ex));
+
+        var none = new AggregateException(
+            new InvalidOperationException(),
+            new TimeoutException());
+        Assert.False(RetryPolicy.IsConnectionPoisoning(none));
+    }
+
+    [Fact]
+    public void IsConnectionPoisoning_UnwrapsInnerException()
+    {
+        var ex = new InvalidOperationException("wrapper", new IOException("Broken pipe"));
+        Assert.True(RetryPolicy.IsConnectionPoisoning(ex));
+    }
+
     [Fact]
     public async Task ExecuteAsync_AppliesExponentialBackoff()
     {

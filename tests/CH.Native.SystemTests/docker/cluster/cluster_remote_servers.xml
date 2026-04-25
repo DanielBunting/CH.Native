@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<clickhouse>
+    <remote_servers>
+        <test_cluster>
+            <shard>
+                <internal_replication>true</internal_replication>
+                <replica>
+                    <host>chs1r1</host>
+                    <port>9000</port>
+                    <user>default</user>
+                    <password>test_password</password>
+                </replica>
+                <replica>
+                    <host>chs1r2</host>
+                    <port>9000</port>
+                    <user>default</user>
+                    <password>test_password</password>
+                </replica>
+            </shard>
+            <shard>
+                <internal_replication>true</internal_replication>
+                <replica>
+                    <host>chs2r1</host>
+                    <port>9000</port>
+                    <user>default</user>
+                    <password>test_password</password>
+                </replica>
+                <replica>
+                    <host>chs2r2</host>
+                    <port>9000</port>
+                    <user>default</user>
+                    <password>test_password</password>
+                </replica>
+            </shard>
+        </test_cluster>
+    </remote_servers>
+
+    <zookeeper>
+        <node>
+            <host>keeper</host>
+            <port>9181</port>
+        </node>
+    </zookeeper>
+</clickhouse>

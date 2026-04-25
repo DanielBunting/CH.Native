@@ -604,6 +604,7 @@ public sealed class ResilienceOptionsBuilder
     private RetryOptions? _retry;
     private CircuitBreakerOptions? _circuitBreaker;
     private TimeSpan _healthCheckInterval = TimeSpan.FromSeconds(10);
+    private TimeSpan _healthCheckTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Enables retry with the specified options.
@@ -659,6 +660,17 @@ public sealed class ResilienceOptionsBuilder
     }
 
     /// <summary>
+    /// Sets the timeout for an individual health-check probe.
+    /// </summary>
+    /// <param name="timeout">The probe timeout.</param>
+    /// <returns>This builder for chaining.</returns>
+    public ResilienceOptionsBuilder WithHealthCheckTimeout(TimeSpan timeout)
+    {
+        _healthCheckTimeout = timeout;
+        return this;
+    }
+
+    /// <summary>
     /// Builds the resilience options.
     /// </summary>
     /// <returns>The built resilience options.</returns>
@@ -668,7 +680,8 @@ public sealed class ResilienceOptionsBuilder
         {
             Retry = _retry,
             CircuitBreaker = _circuitBreaker,
-            HealthCheckInterval = _healthCheckInterval
+            HealthCheckInterval = _healthCheckInterval,
+            HealthCheckTimeout = _healthCheckTimeout
         };
     }
 }
