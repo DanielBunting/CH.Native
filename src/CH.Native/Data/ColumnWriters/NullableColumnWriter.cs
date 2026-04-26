@@ -158,11 +158,12 @@ public sealed class NullableRefColumnWriter<T> : IColumnWriter<T?>
             writer.WriteByte(values[i] is null ? (byte)1 : (byte)0);
         }
 
-        // Step 2: Write all values (default/empty for nulls)
-        for (int i = 0; i < values.Length; i++)
-        {
-            _innerWriter.WriteValue(ref writer, values[i]!);
-        }
+        // Step 2: Delegate to the inner column writer so composite inner types
+        // (Array, Map, ...) emit their columnar offset blocks rather than per-row
+        // framing. T?[] and T[] share the same array runtime type for reference T,
+        // so the cast is a no-op; the inner writer treats null entries as empty
+        // (string -> "", T[] -> length 0, Dictionary -> Count 0).
+        _innerWriter.WriteColumn(ref writer, values!);
     }
 
     /// <inheritdoc />
@@ -180,11 +181,10 @@ public sealed class NullableRefColumnWriter<T> : IColumnWriter<T?>
             writer.WriteByte(values[i] is null ? (byte)1 : (byte)0);
         }
 
-        // Step 2: Write all values
-        for (int i = 0; i < values.Length; i++)
-        {
-            _innerWriter.WriteValue(ref writer, (values[i] as T)!);
-        }
+        // Step 2: Delegate to the inner writer's non-generic WriteColumn so
+        // composite inner types emit their proper columnar layout. The inner's
+        // non-generic path handles type coercion and null substitution.
+        ((IColumnWriter)_innerWriter).WriteColumn(ref writer, values);
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)
