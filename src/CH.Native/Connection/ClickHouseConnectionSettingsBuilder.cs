@@ -35,6 +35,7 @@ public sealed class ClickHouseConnectionSettingsBuilder
     private TelemetrySettings? _telemetry;
     private StringMaterialization _stringMaterialization = StringMaterialization.Eager;
     private bool _useSchemaCache = false;
+    private int _maxStringLengthBytes = 256 * 1024 * 1024; // 256 MiB — see WithMaxStringLength
     private ClickHouseAuthMethod? _authMethod;
     private bool _passwordExplicitlySet;
     private string? _jwtToken;
@@ -519,6 +520,26 @@ public sealed class ClickHouseConnectionSettingsBuilder
     }
 
     /// <summary>
+    /// Sets the maximum number of bytes a single VarInt-prefixed string read from the
+    /// server is allowed to declare. A length larger than this throws
+    /// <see cref="Exceptions.ClickHouseProtocolException"/> at the length-prefix check,
+    /// before any allocation, and tears the connection down. Default is 256 MiB.
+    ///
+    /// <para>Raise this only if you genuinely expect strings larger than 256 MiB on the
+    /// wire — leaving it low is what stops a malformed or hostile server from forcing
+    /// the client to allocate a multi-gigabyte buffer before noticing the wire is bad.</para>
+    /// </summary>
+    /// <param name="bytes">Maximum allowed string length in bytes. Must be positive.</param>
+    /// <returns>This builder for chaining.</returns>
+    public ClickHouseConnectionSettingsBuilder WithMaxStringLength(int bytes)
+    {
+        if (bytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(bytes), "MaxStringLength must be positive.");
+        _maxStringLengthBytes = bytes;
+        return this;
+    }
+
+    /// <summary>
     /// Builds the connection settings.
     /// </summary>
     /// <returns>The built settings.</returns>
@@ -554,6 +575,7 @@ public sealed class ClickHouseConnectionSettingsBuilder
             _telemetry,
             _stringMaterialization,
             _useSchemaCache,
+            _maxStringLengthBytes,
             authMethod,
             _jwtToken,
             _sshPrivateKey,

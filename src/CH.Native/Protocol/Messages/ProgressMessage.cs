@@ -78,6 +78,36 @@ public readonly struct ProgressMessage
     }
 
     /// <summary>
+    /// Non-allocating scan that returns true iff a complete ProgressMessage is buffered.
+    /// Mirrors <see cref="Read"/> field-for-field — keep them in sync. See the same
+    /// note on <see cref="ExceptionMessage.TryScan"/> for the why.
+    /// </summary>
+    public static bool TryScan(ref ProtocolReader reader, int protocolRevision)
+    {
+        if (!reader.TrySkipVarInt()) return false; // rows
+        if (!reader.TrySkipVarInt()) return false; // bytes
+        if (!reader.TrySkipVarInt()) return false; // totalRows
+
+        if (protocolRevision >= ProtocolVersion.WithTotalBytesInProgress)
+        {
+            if (!reader.TrySkipVarInt()) return false; // total_bytes_to_read
+        }
+
+        if (protocolRevision >= ProtocolVersion.WithClientWriteInfo)
+        {
+            if (!reader.TrySkipVarInt()) return false; // writtenRows
+            if (!reader.TrySkipVarInt()) return false; // writtenBytes
+        }
+
+        if (protocolRevision >= ProtocolVersion.WithServerQueryTimeInProgress)
+        {
+            if (!reader.TrySkipVarInt()) return false; // elapsed_ns
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Converts this progress message to a QueryProgress for public API.
     /// </summary>
     /// <returns>A QueryProgress instance.</returns>

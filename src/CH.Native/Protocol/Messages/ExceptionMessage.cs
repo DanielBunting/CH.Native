@@ -59,4 +59,46 @@ public sealed record ExceptionMessage
             Nested = nested
         };
     }
+
+    /// <summary>
+    /// Non-allocating, non-throwing scan that returns true iff the bytes for a complete
+    /// ExceptionMessage (and any nested exceptions) are present in the reader. Mirrors
+    /// <see cref="Read"/> field-for-field — keep them in sync. The reader's position is
+    /// unspecified on false; callers must rebuild a fresh reader from the original
+    /// buffer position once more bytes arrive (see ProtocolReader's Try* contract).
+    ///
+    /// <para>Why we need a separate scan pass: <see cref="Read"/> throws on incomplete
+    /// data, which used to be caught at the connection-pump catch-all and treated as
+    /// "not enough bytes". That worked but conflated incomplete-data with any other
+    /// <see cref="InvalidOperationException"/> the parser might throw. The scan pass
+    /// makes the contract explicit: false means incomplete (caller pumps more bytes),
+    /// throw means malformed (caller tears the connection down).</para>
+    /// </summary>
+    public static bool TryScan(ref ProtocolReader reader)
+    {
+        // Code = Int32 (4 bytes LE).
+        if (!reader.TryReadInt32(out _))
+            return false;
+
+        // Name, message, stack trace — three VarInt-prefixed strings.
+        if (!reader.TrySkipString())
+            return false;
+        if (!reader.TrySkipString())
+            return false;
+        if (!reader.TrySkipString())
+            return false;
+
+        // hasNested byte.
+        if (!reader.TryReadByte(out var hasNested))
+            return false;
+
+        // Recurse into nested exception if present.
+        if (hasNested != 0)
+        {
+            if (!TryScan(ref reader))
+                return false;
+        }
+
+        return true;
+    }
 }

@@ -18,4 +18,6 @@ internal static class Categories
     public const string ServerFailures = "ServerFailures";
     public const string Cancellation = "Cancellation";
     public const string Streams = "Streams";
+    public const string Linq = "Linq";
+    public const string Security = "Security";
 }

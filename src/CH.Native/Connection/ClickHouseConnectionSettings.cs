@@ -178,6 +178,15 @@ public sealed class ClickHouseConnectionSettings
     public bool UseSchemaCache { get; }
 
     /// <summary>
+    /// Maximum number of bytes a single VarInt-prefixed string read from the server is
+    /// allowed to declare. A length larger than this throws
+    /// <see cref="Exceptions.ClickHouseProtocolException"/> before any allocation and
+    /// tears the connection down. Default 256 MiB; configurable via
+    /// <see cref="ClickHouseConnectionSettingsBuilder.WithMaxStringLength"/>.
+    /// </summary>
+    public int MaxStringLengthBytes { get; }
+
+    /// <summary>
     /// Gets the effective port to use for the connection (TlsPort if UseTls, otherwise Port).
     /// </summary>
     public int EffectivePort => UseTls ? TlsPort : Port;
@@ -209,6 +218,7 @@ public sealed class ClickHouseConnectionSettings
         TelemetrySettings? telemetry,
         StringMaterialization stringMaterialization,
         bool useSchemaCache,
+        int maxStringLengthBytes,
         ClickHouseAuthMethod authMethod = ClickHouseAuthMethod.Password,
         string? jwtToken = null,
         byte[]? sshPrivateKey = null,
@@ -259,6 +269,9 @@ public sealed class ClickHouseConnectionSettings
 
         // Bulk-insert schema cache default
         UseSchemaCache = useSchemaCache;
+
+        // Wire-string cap (defence against hostile / malformed servers)
+        MaxStringLengthBytes = maxStringLengthBytes;
     }
 
     /// <summary>

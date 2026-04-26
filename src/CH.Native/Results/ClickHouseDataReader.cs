@@ -290,6 +290,19 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
     /// Disposes the reader and drains any remaining server messages.
     /// If the query hasn't completed, sends a Cancel message to stop the server-side query.
     /// </summary>
+    /// <summary>
+    /// Marks the reader as having seen EndOfStream. Idempotent. Releases the
+    /// connection's busy slot so a subsequent query on the same connection can
+    /// proceed without waiting for explicit Dispose — natural enumerator
+    /// completion is the contract.
+    /// </summary>
+    private void MarkCompleted()
+    {
+        if (_isCompleted) return;
+        _isCompleted = true;
+        _connection?.ExitBusy();
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed)
@@ -320,7 +333,7 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
 
                 if (_messageEnumerator.Current is EndOfStreamMessage)
                 {
-                    _isCompleted = true;
+                    MarkCompleted();
                     break;
                 }
 
@@ -361,6 +374,11 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
             }
 
             _activity?.Dispose();
+
+            // Safety net: release the connection's busy slot if natural
+            // completion didn't fire (e.g. DisposeAsync called before any
+            // ReadAsync, or drain threw). ExitBusy is idempotent.
+            _connection?.ExitBusy();
         }
     }
 
@@ -381,7 +399,7 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
                     return;
 
                 case EndOfStreamMessage:
-                    _isCompleted = true;
+                    MarkCompleted();
                     _columns = [];
                     return;
 
@@ -392,7 +410,7 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
         }
 
         // No messages received
-        _isCompleted = true;
+        MarkCompleted();
         _columns = [];
     }
 
@@ -434,7 +452,7 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
                     break;
 
                 case EndOfStreamMessage:
-                    _isCompleted = true;
+                    MarkCompleted();
                     return false;
 
                 case ProgressMessage:
@@ -443,7 +461,7 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
             }
         }
 
-        _isCompleted = true;
+        MarkCompleted();
         return false;
     }
 

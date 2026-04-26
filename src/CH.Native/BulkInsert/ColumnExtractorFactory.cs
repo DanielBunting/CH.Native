@@ -667,11 +667,18 @@ public static class ColumnExtractorFactory
             }
             else
             {
-                // Write values directly
+                // Write values directly. Null into a non-nullable column is a
+                // type-system violation — surface it loudly rather than coerce
+                // to "" and silently land an empty row in the database.
                 for (int i = 0; i < rowCount; i++)
                 {
                     var value = _getter(rows[i]);
-                    writer.WriteString(value ?? string.Empty);
+                    if (value is null)
+                        throw new InvalidOperationException(
+                            $"Column '{ColumnName}' is non-nullable {TypeName} but row {i} has a null value. " +
+                            $"Either declare the column as Nullable({TypeName}), or ensure the source " +
+                            $"property is non-null before AddAsync.");
+                    writer.WriteString(value);
                 }
             }
         }
@@ -715,9 +722,16 @@ public static class ColumnExtractorFactory
             }
             else
             {
+                // Non-nullable: surface null loudly rather than write a
+                // zero-padded buffer that looks like a valid empty value.
                 for (int i = 0; i < rowCount; i++)
                 {
                     var value = _getter(rows[i]);
+                    if (value is null)
+                        throw new InvalidOperationException(
+                            $"Column '{ColumnName}' is non-nullable {TypeName} but row {i} has a null value. " +
+                            $"Either declare the column as Nullable({TypeName}), or ensure the source " +
+                            $"property is non-null before AddAsync.");
                     WriteFixedString(ref writer, value);
                 }
             }
@@ -766,9 +780,13 @@ public static class ColumnExtractorFactory
             for (int i = 0; i < rowCount; i++)
             {
                 var value = _getter(rows[i]);
-                var utcValue = value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
-                var unixSeconds = (uint)((utcValue - UnixEpoch).TotalSeconds);
-                writer.WriteUInt32(unixSeconds);
+                var utcValue = value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : value;
+                var seconds = (long)(utcValue - UnixEpoch).TotalSeconds;
+                if (seconds < 0 || seconds > uint.MaxValue)
+                    throw new ArgumentOutOfRangeException(nameof(rows),
+                        $"DateTime {value:O} is outside the legacy DateTime range " +
+                        $"[1970-01-01, 2106-02-07 UTC]. Use DateTime64 for wider ranges.");
+                writer.WriteUInt32((uint)seconds);
             }
         }
     }
@@ -806,9 +824,13 @@ public static class ColumnExtractorFactory
                 var value = _getter(rows[i]);
                 if (value.HasValue)
                 {
-                    var utcValue = value.Value.Kind == DateTimeKind.Utc ? value.Value : value.Value.ToUniversalTime();
-                    var unixSeconds = (uint)((utcValue - UnixEpoch).TotalSeconds);
-                    writer.WriteUInt32(unixSeconds);
+                    var utcValue = value.Value.Kind == DateTimeKind.Local ? value.Value.ToUniversalTime() : value.Value;
+                    var seconds = (long)(utcValue - UnixEpoch).TotalSeconds;
+                    if (seconds < 0 || seconds > uint.MaxValue)
+                        throw new ArgumentOutOfRangeException(nameof(rows),
+                            $"DateTime {value.Value:O} is outside the legacy DateTime range " +
+                            $"[1970-01-01, 2106-02-07 UTC]. Use DateTime64 for wider ranges.");
+                    writer.WriteUInt32((uint)seconds);
                 }
                 else
                 {
@@ -858,7 +880,7 @@ public static class ColumnExtractorFactory
 
         private long Encode(DateTime value)
         {
-            var utcValue = value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
+            var utcValue = value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : value;
             var ticks = (utcValue - UnixEpoch).Ticks;
             return _precision > 7
                 ? ticks * _highPrecisionMultiplier
@@ -910,7 +932,7 @@ public static class ColumnExtractorFactory
 
         private long Encode(DateTime value)
         {
-            var utcValue = value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
+            var utcValue = value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : value;
             var ticks = (utcValue - UnixEpoch).Ticks;
             return _precision > 7
                 ? ticks * _highPrecisionMultiplier
@@ -1230,8 +1252,12 @@ public static class ColumnExtractorFactory
                 }
                 else
                 {
-                    var totalSeconds = (value.UtcDateTime - UnixEpoch.UtcDateTime).TotalSeconds;
-                    writer.WriteUInt32((uint)Math.Max(0, Math.Min(totalSeconds, uint.MaxValue)));
+                    var seconds = (long)(value.UtcDateTime - UnixEpoch.UtcDateTime).TotalSeconds;
+                    if (seconds < 0 || seconds > uint.MaxValue)
+                        throw new ArgumentOutOfRangeException(nameof(rows),
+                            $"DateTimeOffset {value:O} is outside the legacy DateTime range " +
+                            $"[1970-01-01, 2106-02-07 UTC]. Use DateTime64 for wider ranges.");
+                    writer.WriteUInt32((uint)seconds);
                 }
             }
         }
@@ -1293,8 +1319,12 @@ public static class ColumnExtractorFactory
                 {
                     if (value.HasValue)
                     {
-                        var totalSeconds = (value.Value.UtcDateTime - UnixEpoch.UtcDateTime).TotalSeconds;
-                        writer.WriteUInt32((uint)Math.Max(0, Math.Min(totalSeconds, uint.MaxValue)));
+                        var seconds = (long)(value.Value.UtcDateTime - UnixEpoch.UtcDateTime).TotalSeconds;
+                        if (seconds < 0 || seconds > uint.MaxValue)
+                            throw new ArgumentOutOfRangeException(nameof(rows),
+                                $"DateTimeOffset {value.Value:O} is outside the legacy DateTime range " +
+                                $"[1970-01-01, 2106-02-07 UTC]. Use DateTime64 for wider ranges.");
+                        writer.WriteUInt32((uint)seconds);
                     }
                     else
                     {

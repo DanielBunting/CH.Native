@@ -38,7 +38,11 @@ public sealed class DateTimeWithTimezoneColumnWriter : IColumnWriter<DateTimeOff
     public void WriteValue(ref ProtocolWriter writer, DateTimeOffset value)
     {
         var seconds = value.ToUnixTimeSeconds();
-        writer.WriteUInt32((uint)Math.Max(0, Math.Min(seconds, uint.MaxValue)));
+        if (seconds < 0 || seconds > uint.MaxValue)
+            throw new ArgumentOutOfRangeException(nameof(value),
+                $"DateTimeOffset {value:O} is outside the legacy DateTime range " +
+                $"[1970-01-01, 2106-02-07 UTC]. Use DateTime64 for wider ranges.");
+        writer.WriteUInt32((uint)seconds);
     }
 
     void IColumnWriter.WriteColumn(ref ProtocolWriter writer, object?[] values)

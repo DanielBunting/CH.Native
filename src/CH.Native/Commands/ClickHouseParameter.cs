@@ -1,3 +1,4 @@
+using CH.Native.Data.Types;
 using CH.Native.Parameters;
 
 namespace CH.Native.Commands;
@@ -27,7 +28,42 @@ public sealed class ClickHouseParameter
     /// Gets or sets the explicit ClickHouse type name.
     /// If null, the type is inferred from Value.
     /// </summary>
-    public string? ClickHouseType { get; set; }
+    /// <remarks>
+    /// The setter validates the type string through <see cref="ClickHouseTypeParser.Parse"/>.
+    /// This is the security gate that prevents SQL injection through the {name:Type}
+    /// placeholder in <see cref="SqlParameterRewriter.Rewrite"/>: any string containing
+    /// SQL syntax (semicolons, comments, mismatched braces, etc.) is rejected before
+    /// it can reach the wire. Surrounding whitespace is trimmed.
+    /// </remarks>
+    /// <exception cref="ArgumentException">Thrown when the type name is malformed.</exception>
+    public string? ClickHouseType
+    {
+        get => _clickHouseType;
+        set
+        {
+            if (value is null)
+            {
+                _clickHouseType = null;
+                return;
+            }
+
+            var trimmed = value.Trim();
+            try
+            {
+                ClickHouseTypeParser.Parse(trimmed);
+            }
+            catch (FormatException ex)
+            {
+                throw new ArgumentException(
+                    $"Invalid ClickHouse type name '{value}': {ex.Message}",
+                    nameof(value),
+                    ex);
+            }
+
+            _clickHouseType = trimmed;
+        }
+    }
+    private string? _clickHouseType;
 
     /// <summary>
     /// Gets the effective ClickHouse type name (explicit or inferred).

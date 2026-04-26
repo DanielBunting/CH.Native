@@ -153,43 +153,75 @@ public sealed class NullableRefColumnWriter<T> : IColumnWriter<T?>
     public void WriteColumn(ref ProtocolWriter writer, T?[] values)
     {
         // Step 1: Write null bitmap (1 byte per row)
+        bool anyNull = false;
         for (int i = 0; i < values.Length; i++)
         {
-            writer.WriteByte(values[i] is null ? (byte)1 : (byte)0);
+            var isNull = values[i] is null;
+            anyNull |= isNull;
+            writer.WriteByte(isNull ? (byte)1 : (byte)0);
         }
 
         // Step 2: Delegate to the inner column writer so composite inner types
         // (Array, Map, ...) emit their columnar offset blocks rather than per-row
-        // framing. T?[] and T[] share the same array runtime type for reference T,
-        // so the cast is a no-op; the inner writer treats null entries as empty
-        // (string -> "", T[] -> length 0, Dictionary -> Count 0).
-        _innerWriter.WriteColumn(ref writer, values!);
+        // framing. The inner is now strict on null (the boxed-path fix), so we
+        // must substitute its declared NullPlaceholder for any null slot before
+        // delegating. The no-null fast path skips the substitution allocation.
+        if (!anyNull)
+        {
+            _innerWriter.WriteColumn(ref writer, values!);
+            return;
+        }
+
+        var placeholder = _innerWriter.NullPlaceholder;
+        var substituted = new T[values.Length];
+        for (int i = 0; i < values.Length; i++)
+            substituted[i] = values[i] ?? placeholder;
+        _innerWriter.WriteColumn(ref writer, substituted);
     }
 
     /// <inheritdoc />
     public void WriteValue(ref ProtocolWriter writer, T? value)
     {
-        writer.WriteByte(value is null ? (byte)1 : (byte)0);
-        _innerWriter.WriteValue(ref writer, value!);
+        var isNull = value is null;
+        writer.WriteByte(isNull ? (byte)1 : (byte)0);
+        _innerWriter.WriteValue(ref writer, isNull ? _innerWriter.NullPlaceholder : value!);
     }
 
     void IColumnWriter.WriteColumn(ref ProtocolWriter writer, object?[] values)
     {
         // Step 1: Write null bitmap
+        bool anyNull = false;
         for (int i = 0; i < values.Length; i++)
         {
-            writer.WriteByte(values[i] is null ? (byte)1 : (byte)0);
+            var isNull = values[i] is null;
+            anyNull |= isNull;
+            writer.WriteByte(isNull ? (byte)1 : (byte)0);
         }
 
         // Step 2: Delegate to the inner writer's non-generic WriteColumn so
-        // composite inner types emit their proper columnar layout. The inner's
-        // non-generic path handles type coercion and null substitution.
-        ((IColumnWriter)_innerWriter).WriteColumn(ref writer, values);
+        // composite inner types emit their proper columnar layout. Substitute
+        // the inner's NullPlaceholder (boxed) for any null slot — the inner is
+        // now strict on null in its non-generic path too.
+        if (!anyNull)
+        {
+            ((IColumnWriter)_innerWriter).WriteColumn(ref writer, values);
+            return;
+        }
+
+        object placeholder = _innerWriter.NullPlaceholder!;
+        var substituted = new object?[values.Length];
+        for (int i = 0; i < values.Length; i++)
+            substituted[i] = values[i] ?? placeholder;
+        ((IColumnWriter)_innerWriter).WriteColumn(ref writer, substituted);
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)
     {
-        writer.WriteByte(value is null ? (byte)1 : (byte)0);
-        _innerWriter.WriteValue(ref writer, (value as T)!);
+        var isNull = value is null;
+        writer.WriteByte(isNull ? (byte)1 : (byte)0);
+        if (isNull)
+            ((IColumnWriter)_innerWriter).WriteValue(ref writer, _innerWriter.NullPlaceholder);
+        else
+            _innerWriter.WriteValue(ref writer, (value as T)!);
     }
 }

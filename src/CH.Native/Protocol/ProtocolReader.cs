@@ -63,10 +63,38 @@ public readonly struct PooledBytes : IDisposable
 /// <summary>
 /// High-performance binary reader for the ClickHouse native protocol.
 /// Wraps a <see cref="SequenceReader{T}"/> for efficient parsing of fragmented network buffers.
+///
+/// <para><b>Try* contract</b> (TryReadVarInt, TryReadString, TryReadByte, TrySkip*, etc.):</para>
+/// <list type="bullet">
+///   <item><b>Returns true</b> — value successfully read; the reader has advanced exactly past the consumed bytes.</item>
+///   <item><b>Returns false</b> — the stream is incomplete (not enough bytes). The reader's
+///     position is unspecified and may have advanced partway through the value. Callers must
+///     treat the reader as poisoned on false: pull more bytes from the pipe and rebuild a
+///     fresh <see cref="ProtocolReader"/> from the original buffer's start position. This is
+///     what the connection's pump loop does, and it is the only safe usage pattern.</item>
+///   <item><b>Throws</b> — the bytes are structurally malformed (e.g., a 10-byte VarInt with
+///     the continuation bit still set, or a string length exceeding configured caps). The
+///     reader is in an unspecified state and the connection must be torn down — re-reading
+///     with more bytes will never recover.</item>
+/// </list>
+/// <para>The split between "false" (incomplete) and "throw" (malformed) is the boundary that
+/// keeps the connection robust under network fragmentation while refusing to retry-loop on
+/// hostile input. Do not soften this distinction without thinking carefully about both sides.</para>
 /// </summary>
 public ref struct ProtocolReader
 {
     private SequenceReader<byte> _reader;
+
+    /// <summary>
+    /// Maximum number of bytes a single VarInt-prefixed string is allowed to declare.
+    /// A length larger than this throws <see cref="ClickHouseProtocolException"/> at the
+    /// length-prefix check, before any allocation. Default is <see cref="int.MaxValue"/>
+    /// (effectively uncapped) — the connection layer overrides this with the
+    /// per-connection setting. The cap is what stops a malformed or hostile server
+    /// from sending a 2 GiB string-length prefix and forcing the client to allocate
+    /// before noticing the wire is bad.
+    /// </summary>
+    public int MaxStringLengthBytes { get; set; } = int.MaxValue;
 
     /// <summary>
     /// Creates a new ProtocolReader for the specified sequence.
@@ -281,6 +309,14 @@ public ref struct ProtocolReader
         if (length == 0)
             return string.Empty;
 
+        // Cap-check before allocation. ReadVarIntAsInt32 already rejects length >
+        // Int32.MaxValue; this is a tighter, configurable defence against a hostile
+        // server sending e.g. a 2 GiB string-length prefix that would force the
+        // client to allocate before noticing the wire is bad.
+        if (length > MaxStringLengthBytes)
+            throw new ClickHouseProtocolException(
+                $"Wire string length {length} exceeds configured MaxStringLengthBytes ({MaxStringLengthBytes}); protocol stream is malformed or hostile.");
+
         using var bytes = ReadPooledBytes(length);
         return Encoding.UTF8.GetString(bytes.Span);
     }
@@ -436,6 +472,13 @@ public ref struct ProtocolReader
 
         if (length == 0)
             return true;
+
+        // Cap check mirrors ReadString — even though TrySkipString doesn't allocate,
+        // a bogus length means the stream is malformed and we want to fail fast
+        // rather than skip-and-resync past a multi-gigabyte phantom payload.
+        if (length > (ulong)MaxStringLengthBytes)
+            throw new ClickHouseProtocolException(
+                $"Wire string length {length} exceeds configured MaxStringLengthBytes ({MaxStringLengthBytes}); protocol stream is malformed or hostile.");
 
         return TrySkipBytes((long)length);
     }

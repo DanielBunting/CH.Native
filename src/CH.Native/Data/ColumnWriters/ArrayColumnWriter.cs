@@ -55,14 +55,22 @@ public sealed class ArrayColumnWriter<T> : IColumnWriter<T[]>
     public void WritePrefix(ref ProtocolWriter writer) => _elementWriter.WritePrefix(ref writer);
 
     /// <inheritdoc />
+    public T[] NullPlaceholder => Array.Empty<T>();
+
+    /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, T[][] values)
     {
-        // Step 1: Write cumulative offsets (UInt64 per row)
+        // Step 1: Write cumulative offsets (UInt64 per row). Reject null rows
+        // — Array(T) is non-nullable; Nullable(Array(T)) wraps with
+        // NullableRefColumnWriter which substitutes Array.Empty<T>() before
+        // delegating here.
         ulong offset = 0;
         int totalElements = 0;
         for (int i = 0; i < values.Length; i++)
         {
-            var len = values[i]?.Length ?? 0;
+            if (values[i] is null)
+                throw NullAt(i);
+            var len = values[i].Length;
             offset += (ulong)len;
             totalElements += len;
             writer.WriteUInt64(offset);
@@ -74,7 +82,7 @@ public sealed class ArrayColumnWriter<T> : IColumnWriter<T[]>
         for (int i = 0; i < values.Length; i++)
         {
             var array = values[i];
-            if (array != null && array.Length > 0)
+            if (array.Length > 0)
             {
                 Array.Copy(array, 0, allElements, pos, array.Length);
                 pos += array.Length;
@@ -86,15 +94,13 @@ public sealed class ArrayColumnWriter<T> : IColumnWriter<T[]>
     /// <inheritdoc />
     public void WriteValue(ref ProtocolWriter writer, T[] value)
     {
-        var length = value?.Length ?? 0;
-        writer.WriteUInt64((ulong)length);
+        if (value is null)
+            throw NullAt(rowIndex: -1);
 
-        if (value != null)
+        writer.WriteUInt64((ulong)value.Length);
+        for (int i = 0; i < value.Length; i++)
         {
-            for (int i = 0; i < value.Length; i++)
-            {
-                _elementWriter.WriteValue(ref writer, value[i]);
-            }
+            _elementWriter.WriteValue(ref writer, value[i]);
         }
     }
 
@@ -102,14 +108,20 @@ public sealed class ArrayColumnWriter<T> : IColumnWriter<T[]>
     {
         // Step 1: Write cumulative offsets. Accept any IList so that e.g. string[]
         // can pass through to FixedStringColumnWriter (ClrType=byte[] but its
-        // non-generic WriteValue also accepts strings).
+        // non-generic WriteValue also accepts strings). Reject null rows —
+        // Array(T) is non-nullable; Nullable(Array(T)) wraps with
+        // NullableRefColumnWriter which substitutes Array.Empty<T>() first.
         ulong offset = 0;
         int totalElements = 0;
         bool allMatchT = true;
         for (int i = 0; i < values.Length; i++)
         {
             int len;
-            if (values[i] is T[] typedArray)
+            if (values[i] is null)
+            {
+                throw NullAt(i);
+            }
+            else if (values[i] is T[] typedArray)
             {
                 len = typedArray.Length;
             }
@@ -120,7 +132,9 @@ public sealed class ArrayColumnWriter<T> : IColumnWriter<T[]>
             }
             else
             {
-                len = 0;
+                throw new InvalidOperationException(
+                    $"ArrayColumnWriter<{typeof(T).Name}> received unsupported value type " +
+                    $"{values[i]!.GetType().Name} at row {i}. Expected {typeof(T).Name}[] or IList.");
             }
             offset += (ulong)len;
             totalElements += len;
@@ -185,6 +199,8 @@ public sealed class ArrayColumnWriter<T> : IColumnWriter<T[]>
     {
         switch (value)
         {
+            case null:
+                throw NullAt(rowIndex: -1);
             case T[] typedArray:
                 WriteValue(ref writer, typedArray);
                 break;
@@ -195,8 +211,18 @@ public sealed class ArrayColumnWriter<T> : IColumnWriter<T[]>
                     elementWriterNonGeneric.WriteValue(ref writer, list[j]);
                 break;
             default:
-                WriteValue(ref writer, Array.Empty<T>());
-                break;
+                throw new InvalidOperationException(
+                    $"ArrayColumnWriter<{typeof(T).Name}> received unsupported value type " +
+                    $"{value.GetType().Name}. Expected {typeof(T).Name}[] or IList.");
         }
+    }
+
+    private static InvalidOperationException NullAt(int rowIndex)
+    {
+        var where = rowIndex >= 0 ? $" at row {rowIndex}" : string.Empty;
+        return new InvalidOperationException(
+            $"ArrayColumnWriter<{typeof(T).Name}> received null{where}. The Array column type " +
+            $"is non-nullable; declare the column as Nullable(Array({typeof(T).Name})) and wrap " +
+            $"this writer with NullableRefColumnWriter, or ensure source values are non-null.");
     }
 }

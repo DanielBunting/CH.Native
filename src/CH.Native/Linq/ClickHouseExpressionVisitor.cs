@@ -386,7 +386,7 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
         if (member.Expression is ParameterExpression)
         {
             var columnName = TableNameResolver.ToSnakeCase(member.Member.Name);
-            _currentExpression.Append(columnName);
+            _currentExpression.Append(SqlBuilder.QuoteIdentifier(columnName));
             return;
         }
 

@@ -6,6 +6,7 @@ using CH.Native.Connection;
 using CH.Native.Data;
 using CH.Native.Exceptions;
 using CH.Native.Mapping;
+using CH.Native.Sql;
 using CH.Native.Telemetry;
 
 namespace CH.Native.BulkInsert;
@@ -28,6 +29,10 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     private bool _completed;
     private bool _completeStarted;
     private bool _disposed;
+    // True between EnterBusyForBulkInsert and the matching ExitBusy in
+    // DisposeAsync. Lets DisposeAsync release the busy slot exactly once
+    // even when InitAsync threw before _initialized flipped.
+    private bool _slotClaimed;
     private int _totalRowsInserted;
     private bool _usedCachedSchema;
     private SchemaKey _schemaCacheKey;
@@ -144,23 +149,36 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         // against a connection that hasn't even sent the INSERT query.
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Bulk insert holds the connection's wire from InitAsync until
+        // CompleteAsync/DisposeAsync, so claim the busy slot for the lifetime
+        // of the inserter. A concurrent QueryAsync on the same connection
+        // throws ClickHouseConnectionBusyException instead of corrupting the
+        // INSERT byte stream. Resolve the query id once so the same id is
+        // surfaced in the busy exception, sent on the wire, and logged by
+        // the server.
+        var effectiveQueryId = ClickHouseConnection.ResolveQueryIdInternal(_options.QueryId);
+        _connection.EnterBusyForBulkInsert(effectiveQueryId);
+        _slotClaimed = true;
+
         using var registration = RegisterCancelHook(cancellationToken);
         try
         {
-            // Build column list from POCO properties
+            // Build column list from POCO properties. Each identifier is quoted via
+            // ClickHouseIdentifier.Quote so a hostile [ClickHouseColumn(Name=...)] value
+            // can never break out of the INSERT statement.
             var propertyMappings = GetPropertyMappings();
-            var columnList = string.Join(", ", propertyMappings.Select(p => p.ColumnName));
+            var columnList = string.Join(", ", propertyMappings.Select(p => ClickHouseIdentifier.Quote(p.ColumnName)));
             _schemaCacheKey = new SchemaKey(_tableName, columnList);
 
             // Send INSERT query (required for server-side protocol state even on cache hit)
-            var sql = $"INSERT INTO {_tableName} ({columnList}) VALUES";
+            var sql = $"INSERT INTO {ClickHouseIdentifier.Quote(_tableName)} ({columnList}) VALUES";
             // Snapshot to IReadOnlyList so the wire path doesn't observe later mutation.
             var rolesSnapshot = _options.Roles is null ? null : (IReadOnlyList<string>)_options.Roles.ToArray();
             await _connection.SendInsertQueryAsync(
                 sql,
                 cancellationToken,
                 rolesOverride: rolesSnapshot,
-                queryId: _options.QueryId);
+                queryId: effectiveQueryId);
 
             // Per-call override wins; null falls back to the connection setting.
             var useCache = _options.UseSchemaCache ?? _connection.Settings.UseSchemaCache;
@@ -198,8 +216,24 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             // response so the wire is realigned for connection reuse.
             Abort();
             await _connection.DrainAfterCancellationAsync();
+            ReleaseSlotIfClaimed();
             throw;
         }
+        catch
+        {
+            // Any other failure leaves the inserter unusable; release the busy
+            // slot so the connection can be reused (e.g. for a different
+            // operation after the caller observes the throw).
+            ReleaseSlotIfClaimed();
+            throw;
+        }
+    }
+
+    private void ReleaseSlotIfClaimed()
+    {
+        if (!_slotClaimed) return;
+        _slotClaimed = false;
+        _connection.ExitBusy();
     }
 
     /// <summary>
@@ -214,6 +248,14 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             throw new InvalidOperationException("BulkInserter must be initialized before adding items.");
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
+        // After a cancelled or failed CompleteAsync, the wire's INSERT context
+        // is torn down and any rows accepted into the buffer would be silently
+        // dropped at dispose. Reject loudly — the caller has a programming
+        // error, not a transient condition.
+        if (_completeStarted)
+            throw new InvalidOperationException(
+                "BulkInserter cannot accept more items after a cancelled or failed CompleteAsync. " +
+                "Create a new BulkInserter to retry.");
 
         // Honor cancellation at the boundary so a cancelled token reliably
         // aborts the in-progress insert. Without this, AddAsync is purely
@@ -243,6 +285,10 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             throw new InvalidOperationException("BulkInserter must be initialized before adding items.");
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
+        if (_completeStarted)
+            throw new InvalidOperationException(
+                "BulkInserter cannot accept more items after a cancelled or failed CompleteAsync. " +
+                "Create a new BulkInserter to retry.");
 
         await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
 
@@ -273,6 +319,10 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             throw new InvalidOperationException("BulkInserter must be initialized before adding items.");
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
+        if (_completeStarted)
+            throw new InvalidOperationException(
+                "BulkInserter cannot accept more items after a cancelled or failed CompleteAsync. " +
+                "Create a new BulkInserter to retry.");
 
         await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
 
@@ -350,6 +400,10 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             throw new InvalidOperationException("BulkInserter must be initialized before adding items.");
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
+        if (_completeStarted)
+            throw new InvalidOperationException(
+                "BulkInserter cannot accept more items after a cancelled or failed CompleteAsync. " +
+                "Create a new BulkInserter to retry.");
 
         await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
 
@@ -423,6 +477,11 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_initialized)
             throw new InvalidOperationException("BulkInserter must be initialized before flushing.");
+        // No `_completeStarted` guard here: CompleteAsync flips that flag
+        // before calling this method internally, and the AddAsync family
+        // already prevents new rows from landing post-cancel — so the
+        // buffer is provably empty and the natural empty-buffer no-op at
+        // the bottom of this method handles the post-cancel case correctly.
 
         await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
 
@@ -476,6 +535,18 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         catch (Exception ex)
         {
             ClickHouseActivitySource.SetError(activity, ex);
+            // Don't drain the wire here, and don't call Abort. Two contracts
+            // depend on this:
+            //  - BulkInsertBufferSurvivalTests.Flush_RowMapperException_BufferRetainsRows
+            //    requires _buffer untouched and _completeStarted=false so the
+            //    caller can retry on a fresh connection.
+            //  - BulkInsertExtractionFailureTests.Extraction_DelegateThrows_ConnectionRemainsUsable
+            //    requires the connection to be reusable, but its DisposeAsync
+            //    catch already drives the wire-finalisation path
+            //    (SendEmptyBlock + ReceiveEndOfStream) via DisposeAsync's
+            //    "unflushed rows" branch — that's where the wire gets cleaned
+            //    up. A drain here would race that path and leave Dispose's
+            //    SendEmptyBlock to land on an idle server, poisoning the wire.
             throw;
         }
 
@@ -491,7 +562,14 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_initialized)
             throw new InvalidOperationException("BulkInserter must be initialized before completing.");
-        if (_completed)
+        // Idempotent: a successful complete short-circuits future calls (the
+        // wire is back to idle), and a previously-attempted-but-cancelled
+        // complete must NOT re-run the wire sequence — the server already
+        // processed the Cancel packet and any further Data packets would be
+        // rejected with UNEXPECTED_PACKET_FROM_CLIENT, poisoning the
+        // connection. The DisposeAsync path at the end of this file follows
+        // the same convention (skips re-complete when _completeStarted is set).
+        if (_completed || _completeStarted)
             return;
 
         // ClickHouse's native protocol commits an INSERT only when the empty
@@ -523,6 +601,12 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             activity?.SetTag("db.clickhouse.rows", _totalRowsInserted);
 
             _completed = true;
+
+            // Release the busy slot now: the wire is back to idle and the
+            // caller is free to issue another query before disposing the
+            // inserter. DisposeAsync's ReleaseSlotIfClaimed is a no-op on
+            // a re-entry because _slotClaimed is now false.
+            ReleaseSlotIfClaimed();
         }
         catch (ClickHouseServerException ex) when (_usedCachedSchema)
         {
@@ -620,6 +704,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             _disposed = true;
             ReturnPooledArrays();
             _buffer.Clear();
+            ReleaseSlotIfClaimed();
         }
     }
 

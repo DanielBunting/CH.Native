@@ -7,6 +7,13 @@ namespace CH.Native.Data.ColumnWriters;
 /// Column writer for FixedString(N) values.
 /// FixedString stores exactly N bytes per value, padded with null bytes if needed.
 /// </summary>
+/// <remarks>
+/// This writer is strict: a null value into any of its write paths throws
+/// <see cref="InvalidOperationException"/>. For Nullable(FixedString) columns
+/// the caller must wrap with <see cref="NullableRefColumnWriter{T}"/>, which
+/// substitutes <see cref="NullPlaceholder"/> (an empty <c>byte[]</c> that
+/// <see cref="WriteValue"/> pads to N zero bytes) for null slots.
+/// </remarks>
 public sealed class FixedStringColumnWriter : IColumnWriter<byte[]>
 {
     private readonly int _length;
@@ -35,10 +42,15 @@ public sealed class FixedStringColumnWriter : IColumnWriter<byte[]>
     public int Length => _length;
 
     /// <inheritdoc />
+    public byte[] NullPlaceholder => Array.Empty<byte>();
+
+    /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, byte[][] values)
     {
         for (int i = 0; i < values.Length; i++)
         {
+            if (values[i] is null)
+                throw NullAt(i);
             WriteValue(ref writer, values[i]);
         }
     }
@@ -46,6 +58,9 @@ public sealed class FixedStringColumnWriter : IColumnWriter<byte[]>
     /// <inheritdoc />
     public void WriteValue(ref ProtocolWriter writer, byte[] value)
     {
+        if (value is null)
+            throw NullAt(rowIndex: -1);
+
         // Write the value bytes, truncating or padding as needed
         var bytesToWrite = Math.Min(value.Length, _length);
         for (int i = 0; i < bytesToWrite; i++)
@@ -65,6 +80,8 @@ public sealed class FixedStringColumnWriter : IColumnWriter<byte[]>
         for (int i = 0; i < values.Length; i++)
         {
             var value = values[i];
+            if (value is null)
+                throw NullAt(i);
             if (value is byte[] bytes)
             {
                 WriteValue(ref writer, bytes);
@@ -75,13 +92,17 @@ public sealed class FixedStringColumnWriter : IColumnWriter<byte[]>
             }
             else
             {
-                WriteValue(ref writer, Array.Empty<byte>());
+                throw new InvalidOperationException(
+                    $"FixedStringColumnWriter received unsupported value type {value.GetType().Name} " +
+                    $"at row {i}. Expected byte[] or string.");
             }
         }
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)
     {
+        if (value is null)
+            throw NullAt(rowIndex: -1);
         if (value is byte[] bytes)
         {
             WriteValue(ref writer, bytes);
@@ -92,7 +113,18 @@ public sealed class FixedStringColumnWriter : IColumnWriter<byte[]>
         }
         else
         {
-            WriteValue(ref writer, Array.Empty<byte>());
+            throw new InvalidOperationException(
+                $"FixedStringColumnWriter received unsupported value type {value.GetType().Name}. " +
+                $"Expected byte[] or string.");
         }
+    }
+
+    private InvalidOperationException NullAt(int rowIndex)
+    {
+        var where = rowIndex >= 0 ? $" at row {rowIndex}" : string.Empty;
+        return new InvalidOperationException(
+            $"FixedStringColumnWriter({_length}) received null{where}. The FixedString " +
+            $"column type is non-nullable; declare the column as Nullable(FixedString({_length})) " +
+            $"and wrap this writer with NullableRefColumnWriter, or ensure source values are non-null.");
     }
 }
