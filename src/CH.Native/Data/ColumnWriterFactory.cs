@@ -149,10 +149,7 @@ public sealed class ColumnWriterFactory
             throw new FormatException($"LowCardinality requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
-        if (innerType.IsDynamic)
-            throw new FormatException("LowCardinality(Dynamic) is not allowed by ClickHouse.");
-        if (innerType.IsVariant)
-            throw new FormatException("LowCardinality(Variant) is not allowed by ClickHouse.");
+        LowCardinalityInnerValidator.EnsureAllowedInsideLowCardinality(innerType);
 
         var isNullable = innerType.BaseName == "Nullable" && innerType.TypeArguments.Count == 1;
 

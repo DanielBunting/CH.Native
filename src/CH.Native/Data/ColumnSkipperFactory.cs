@@ -160,10 +160,7 @@ public sealed class ColumnSkipperFactory
             throw new FormatException($"LowCardinality requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
-        if (innerType.IsDynamic)
-            throw new FormatException("LowCardinality(Dynamic) is not allowed by ClickHouse.");
-        if (innerType.IsVariant)
-            throw new FormatException("LowCardinality(Variant) is not allowed by ClickHouse.");
+        LowCardinalityInnerValidator.EnsureAllowedInsideLowCardinality(innerType);
 
         // For Nullable inner types, ClickHouse serializes the LowCardinality dictionary
         // using the base type (without the Nullable wrapper). Strip it for correct skipping.
