@@ -11,11 +11,18 @@ public sealed class VariantColumnSkipper : IColumnSkipper
 {
     private readonly IColumnSkipper[] _innerSkippers;
     private readonly string _typeName;
+    private readonly ArrayPool<byte> _pool;
 
     public VariantColumnSkipper(IColumnSkipper[] innerSkippers, string[] innerTypeNames)
+        : this(innerSkippers, innerTypeNames, ArrayPool<byte>.Shared)
+    {
+    }
+
+    public VariantColumnSkipper(IColumnSkipper[] innerSkippers, string[] innerTypeNames, ArrayPool<byte> pool)
     {
         _innerSkippers = innerSkippers;
         _typeName = $"Variant({string.Join(", ", innerTypeNames)})";
+        _pool = pool;
     }
 
     /// <inheritdoc />
@@ -32,7 +39,7 @@ public sealed class VariantColumnSkipper : IColumnSkipper
 
         var armCount = _innerSkippers.Length;
 
-        var discriminators = ArrayPool<byte>.Shared.Rent(rowCount);
+        var discriminators = _pool.Rent(rowCount);
         try
         {
             for (int i = 0; i < rowCount; i++)
@@ -62,7 +69,7 @@ public sealed class VariantColumnSkipper : IColumnSkipper
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(discriminators);
+            _pool.Return(discriminators);
         }
     }
 }
