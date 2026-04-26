@@ -545,6 +545,62 @@ public class BulkInsertCompositeTypeTests
 
     #endregion
 
+    #region Nullable Composite Schema Guards
+
+    // ClickHouse rejects Nullable(Array(...)) and Nullable(Map(...)) at the schema level
+    // ("Nested type ... cannot be inside Nullable type", code 43, ILLEGAL_TYPE_OF_ARGUMENT).
+    // The library's writer/reader/skipper factories don't enforce this — they happily
+    // construct compositions for these types. The bulk-insert path therefore cannot be
+    // reached for these compositions in practice, because the column itself can't exist.
+    //
+    // These tests guard that invariant: if a future ClickHouse version lifts the
+    // restriction (or one of these tests starts passing CREATE), real round-trip
+    // integration tests must be added and the matching writer/reader/skipper
+    // wire format needs verification against the real server.
+    //
+    // Related fix: src/CH.Native/Data/ColumnWriters/NullableColumnWriter.cs —
+    // NullableRefColumnWriter<T>.WriteColumn now delegates to the inner writer's
+    // columnar WriteColumn so that, *if* such a column ever becomes legal, the wire
+    // bytes will be self-consistent with the matching reader/skipper.
+
+    [Theory]
+    [InlineData("Nullable(Array(String))", "Array(String)")]
+    [InlineData("Nullable(Array(Int32))", "Array(Int32)")]
+    [InlineData("Nullable(Map(String, Int32))", "Map(String, Int32)")]
+    [InlineData("Nullable(Map(String, String))", "Map(String, String)")]
+    [InlineData("Nullable(Tuple(Int32, String))", "Tuple(Int32, String)")]
+    [InlineData("Nullable(LowCardinality(String))", "LowCardinality(String)")]
+    [InlineData("Nullable(Nullable(Int32))", "Nullable(Int32)")]
+    [InlineData("Nullable(Nested(a Int32))", "Nested(a Int32)")]
+    // Note: ClickHouse 26.2 ACCEPTS Nullable(JSON) — kept out of this rejected list.
+    // See NullableInnerValidationTests.AllowedInnerTypes for the positive case.
+    public async Task Schema_NullableComposite_IsRejectedByServer(string nullableType, string innerType)
+    {
+        var tableName = $"test_guard_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        Exception? caught = null;
+        try
+        {
+            await connection.ExecuteNonQueryAsync(
+                $"CREATE TABLE {tableName} (id Int32, x {nullableType}) ENGINE = Memory");
+            // If we get here, the server accepted the schema — drop and surface a failure.
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+        catch (Exception ex)
+        {
+            caught = ex;
+        }
+
+        Assert.NotNull(caught);
+        // ClickHouse error message includes the inner type and "cannot be inside Nullable type".
+        Assert.Contains(innerType, caught!.Message);
+        Assert.Contains("Nullable", caught.Message);
+    }
+
+    #endregion
+
     #region Test POCOs
 
     private class ArrayOfArrayRow

@@ -82,10 +82,7 @@ public sealed class ColumnWriterFactory
             throw new FormatException($"Nullable requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
-        if (innerType.IsDynamic)
-            throw new FormatException("Nullable(Dynamic) is not allowed.");
-        if (innerType.IsVariant)
-            throw new FormatException("Nullable(Variant) is not allowed.");
+        NullableInnerValidator.EnsureAllowedInsideNullable(innerType);
 
         var innerWriter = CreateWriterForType(innerType);
 
