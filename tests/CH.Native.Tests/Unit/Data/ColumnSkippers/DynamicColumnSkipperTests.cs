@@ -64,6 +64,47 @@ public class DynamicColumnSkipperTests
     }
 
     [Fact]
+    public void Skip_DiscriminatorWidth_FourByte_HandledCorrectly()
+    {
+        // numberOfTypes = 65536 → totalIndexValues = 65537 → forces 4-byte discriminators.
+        // Use FixedString(1)..FixedString(65536) for distinct, parseable type names.
+        var seq = SkipperTestBase.Encode((ref ProtocolWriter w) =>
+        {
+            w.WriteUInt64(3); // structure version FLATTENED
+            w.WriteVarInt(65536); // number of types
+            for (int i = 1; i <= 65536; i++) w.WriteString($"FixedString({i})");
+            // 1 row, discriminator = 0 (UInt32 little-endian)
+            w.WriteUInt32(0);
+            // Arm 0 is FixedString(1) → 1 byte for the single row
+            w.WriteByte(0xCD);
+            // Arms 1..65535 get rowCount=0 → no bytes
+        });
+
+        var skipper = new DynamicColumnSkipper(SkipperFactory(), "Dynamic");
+        var reader = new ProtocolReader(seq);
+        Assert.True(skipper.TrySkipColumn(ref reader, rowCount: 1));
+        Assert.Equal(0, reader.Remaining);
+    }
+
+    [Fact]
+    public void Skip_DiscriminatorWidth_FourByte_TruncatedTail_ReturnsFalse()
+    {
+        // Same 4-byte path, but truncate the trailing arm-0 byte.
+        var seq = SkipperTestBase.Encode((ref ProtocolWriter w) =>
+        {
+            w.WriteUInt64(3);
+            w.WriteVarInt(65536);
+            for (int i = 1; i <= 65536; i++) w.WriteString($"FixedString({i})");
+            w.WriteUInt32(0);
+            // Omit the arm-0 byte → truncated
+        });
+
+        var skipper = new DynamicColumnSkipper(SkipperFactory(), "Dynamic");
+        var reader = new ProtocolReader(seq);
+        Assert.False(skipper.TrySkipColumn(ref reader, rowCount: 1));
+    }
+
+    [Fact]
     public void Skip_DiscriminatorOutOfRange_ReturnsFalse()
     {
         // 2-arm Dynamic, totalIndexValues = 3. Discriminator 5 is out of range → returns false.

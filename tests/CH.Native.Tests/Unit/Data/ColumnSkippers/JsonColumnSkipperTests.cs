@@ -46,6 +46,8 @@ public class JsonColumnSkipperTests
     {
         // Hand-craft the legacy version 0 binary format. There is no writer for it.
         // 2 paths: "ints" Int32, "names" String. 3 rows.
+        // Note: v0 wire format is server-frozen (deprecated). If this test ever needs
+        // its bytes updated, the v0 spec changed — investigate before tweaking.
         var seq = SkipperTestBase.Encode((ref ProtocolWriter w) =>
         {
             w.WriteUInt64(0);                  // version 0
