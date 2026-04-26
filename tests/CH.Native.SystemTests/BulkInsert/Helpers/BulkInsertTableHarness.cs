@@ -106,3 +106,14 @@ internal sealed class RowWithArrayAndNullableString
     [ClickHouseColumn(Name = "tags", Order = 1)] public int[] Tags { get; set; } = Array.Empty<int>();
     [ClickHouseColumn(Name = "payload", Order = 2)] public string? Payload { get; set; }
 }
+
+/// <summary>Same fallback-path trick as <see cref="RowWithArrayAndString"/>
+/// (the <c>Tags</c> property forces <c>_useDirectPath = false</c>) but with a
+/// <c>Map(String, Int32)</c> payload column. Used to pin
+/// <c>MapColumnWriter</c>'s strict-null contract on the boxed insert path.</summary>
+internal sealed class RowWithArrayAndMap
+{
+    [ClickHouseColumn(Name = "id", Order = 0)] public int Id { get; set; }
+    [ClickHouseColumn(Name = "tags", Order = 1)] public int[] Tags { get; set; } = Array.Empty<int>();
+    [ClickHouseColumn(Name = "mapping", Order = 2)] public Dictionary<string, int>? Mapping { get; set; }
+}

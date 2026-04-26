@@ -24,6 +24,7 @@ namespace CH.Native.SystemTests.BulkInsertFailures;
 /// failure provides deterministically.
 /// </remarks>
 [Collection("Toxiproxy")]
+[Trait(Categories.Name, Categories.Chaos)]
 public class BulkInsertBufferSurvivalTests : IAsyncLifetime
 {
     private readonly ToxiproxyFixture _proxy;

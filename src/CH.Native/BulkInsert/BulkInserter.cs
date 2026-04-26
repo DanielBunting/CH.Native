@@ -632,6 +632,11 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         catch (Exception ex)
         {
             ClickHouseActivitySource.SetError(activity, ex);
+            // Wire is mid-INSERT and Dispose's "unflushed rows" recovery is gated off
+            // by _completeStarted. Mark the connection fatal so a subsequent call
+            // fails fast with a clear "broken connection" message rather than
+            // landing on the dirty wire and producing a cryptic protocol error.
+            _connection.MarkProtocolFatal();
             throw;
         }
     }

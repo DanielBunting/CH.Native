@@ -39,31 +39,40 @@ public sealed class PointColumnWriter : IColumnWriter<Point>
     {
         for (int i = 0; i < values.Length; i++)
         {
-            var p = Coerce(values[i]);
+            var p = Coerce(values[i], rowIndex: i);
             writer.WriteFloat64(p.X);
         }
         for (int i = 0; i < values.Length; i++)
         {
-            var p = Coerce(values[i]);
+            var p = Coerce(values[i], rowIndex: i);
             writer.WriteFloat64(p.Y);
         }
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)
     {
-        var p = Coerce(value);
+        var p = Coerce(value, rowIndex: -1);
         writer.WriteFloat64(p.X);
         writer.WriteFloat64(p.Y);
     }
 
-    private static Point Coerce(object? value) => value switch
+    private static Point Coerce(object? value, int rowIndex) => value switch
     {
+        null => throw NullAt(rowIndex),
         Point p => p,
         (double x, double y) => new Point(x, y),
         Tuple<double, double> t => new Point(t.Item1, t.Item2),
-        null => Point.Zero,
         _ => throw new ArgumentException(
             $"Cannot convert {value.GetType()} to Point. Expected Point, (double,double), or Tuple<double,double>.",
             nameof(value)),
     };
+
+    private static InvalidOperationException NullAt(int rowIndex)
+    {
+        var where = rowIndex >= 0 ? $" at row {rowIndex}" : string.Empty;
+        return new InvalidOperationException(
+            $"PointColumnWriter received null{where}. The Point column type is non-nullable; " +
+            $"declare the column as Nullable(Point) and wrap this writer with NullableRefColumnWriter, " +
+            $"or ensure source values are non-null.");
+    }
 }

@@ -26,6 +26,7 @@ public class ClickHouseExtensionsTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
+        await _facts.EnsureSeededAsync(_node);
         _conn = new ClickHouseConnection(_node.BuildSettings());
         await _conn.OpenAsync();
     }

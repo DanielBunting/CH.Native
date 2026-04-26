@@ -11,7 +11,12 @@ Every test is tagged with a `[Trait("Category", ...)]` so CI can pick subsets:
 
 | Trait | Meaning | Typical runtime |
 | ----- | ------- | --------------- |
+| `Suite` | Meta-tests for the system-test suite itself, such as category coverage guards. | < 5 s |
 | `Allocation` | Allocation-budget regression tests against a checked-in baseline. | < 30 s |
+| `DependencyInjection` | DI package wiring, keyed data sources, rotating provider hooks, and health checks against real ClickHouse. | < 1 min |
+| `Security` | Identifier, parameter, unicode, and wire escaping contracts with hostile payloads. | < 1 min |
+| `Linq` | LINQ translation correctness against a seeded fact table. | < 1 min |
+| `Streams` | Stream framing, malformed server responses, scan boundaries, and poisoned-pool recovery. | < 1 min |
 | `Observability` | OpenTelemetry SDK pipeline + IProgress/Totals/Extremes coverage. | < 1 min |
 | `Cancellation` | Cancellation recovers cleanly: pool, sockets, server-side query state. | < 1 min |
 | `Cluster` | Multi-node ClickHouse (replicated + distributed + cluster DDL) scenarios. | 1–5 min |
@@ -22,8 +27,10 @@ Every test is tagged with a `[Trait("Category", ...)]` so CI can pick subsets:
 | `VersionMatrix` | Smoke + type-fuzz across pinned ClickHouse images. | 5–15 min |
 | `Soak` | Long-running mixed-workload stability tests. | 10–60 min (opt-in) |
 
-These are composable: a soak test running on a cluster carries both `Soak`
-and `Cluster`.
+Bulk-insert system coverage is intentionally spread across the scenario traits
+above: cancellation contracts live under `Cancellation`, network and atomicity
+failures under `Chaos`, extraction/data-corruption failures under `Stress`, and
+stream-pump behavior under `Streams`.
 
 ## Running
 
@@ -33,6 +40,12 @@ dotnet test tests/CH.Native.SystemTests --filter "Category=Allocation"
 
 # Observability + Cancellation — fast, single CH instance.
 dotnet test tests/CH.Native.SystemTests --filter "Category=Observability|Category=Cancellation"
+
+# DI package wiring + health checks — fast, single CH instance.
+dotnet test tests/CH.Native.SystemTests --filter "Category=DependencyInjection"
+
+# Security, LINQ, and stream protocol coverage.
+dotnet test tests/CH.Native.SystemTests --filter "Category=Security|Category=Linq|Category=Streams"
 
 # Server-side failure semantics.
 dotnet test tests/CH.Native.SystemTests --filter "Category=ServerFailures"

@@ -147,6 +147,12 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     {
         lock (_queryLock)
         {
+            if (_protocolFatal)
+            {
+                throw new InvalidOperationException(
+                    "Connection is broken: a previous operation left the wire in an indeterminate state. " +
+                    "Open a new ClickHouseConnection to continue.");
+            }
             if (_busy)
             {
                 throw new ClickHouseConnectionBusyException(_busyOwnerQueryId ?? queryIdForOwner);
@@ -155,6 +161,16 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             _busyOwnerQueryId = queryIdForOwner;
         }
     }
+
+    /// <summary>
+    /// Marks the connection as protocol-fatal: subsequent <see cref="EnterBusy"/>
+    /// gates throw <see cref="InvalidOperationException"/>, and the pool
+    /// (<see cref="CanBePooled"/>) refuses to hand it back out. Called by
+    /// <see cref="BulkInsert.BulkInserter{T}"/> when a bulk-insert write
+    /// fails after the wire has been put into INSERT state and Dispose's
+    /// recovery path has been disabled by <c>_completeStarted</c>.
+    /// </summary>
+    internal void MarkProtocolFatal() => _protocolFatal = true;
 
     /// <summary>
     /// Releases the busy slot acquired by <see cref="EnterBusy"/>. Idempotent —

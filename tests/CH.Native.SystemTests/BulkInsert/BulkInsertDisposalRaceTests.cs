@@ -14,6 +14,7 @@ namespace CH.Native.SystemTests.BulkInsertFailures;
 /// "Dispose is teardown, not commit. Already-attempted complete is not retried."
 /// </summary>
 [Collection("Toxiproxy")]
+[Trait(Categories.Name, Categories.Chaos)]
 public class BulkInsertDisposalRaceTests : IAsyncLifetime
 {
     private readonly ToxiproxyFixture _proxy;

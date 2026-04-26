@@ -20,4 +20,6 @@ internal static class Categories
     public const string Streams = "Streams";
     public const string Linq = "Linq";
     public const string Security = "Security";
+    public const string DependencyInjection = "DependencyInjection";
+    public const string Suite = "Suite";
 }

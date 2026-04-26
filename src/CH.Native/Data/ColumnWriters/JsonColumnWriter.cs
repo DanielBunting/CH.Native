@@ -18,9 +18,9 @@ namespace CH.Native.Data.ColumnWriters;
 /// <item><see cref="JsonDocument"/> - uses GetRawText()</item>
 /// <item><see cref="JsonElement"/> - uses GetRawText()</item>
 /// <item><see cref="string"/> - written directly as JSON string</item>
-/// <item><c>null</c> - written as "{}"</item>
 /// <item>Other objects - serialized using <see cref="JsonSerializer"/></item>
 /// </list>
+/// Null values are rejected — JSON columns are non-nullable on the wire.
 /// </para>
 /// </remarks>
 public sealed class JsonColumnWriter : IColumnWriter<JsonDocument>
@@ -44,35 +44,51 @@ public sealed class JsonColumnWriter : IColumnWriter<JsonDocument>
     {
         for (int i = 0; i < values.Length; i++)
         {
-            WriteValue(ref writer, values[i]);
+            if (values[i] is null)
+                throw NullAt(i);
+            writer.WriteString(values[i].RootElement.GetRawText());
         }
     }
 
     /// <inheritdoc />
     public void WriteValue(ref ProtocolWriter writer, JsonDocument value)
     {
-        var json = value?.RootElement.GetRawText() ?? "{}";
-        writer.WriteString(json);
+        if (value is null)
+            throw NullAt(rowIndex: -1);
+        writer.WriteString(value.RootElement.GetRawText());
     }
 
     void IColumnWriter.WriteColumn(ref ProtocolWriter writer, object?[] values)
     {
         for (int i = 0; i < values.Length; i++)
         {
-            ((IColumnWriter)this).WriteValue(ref writer, values[i]);
+            if (values[i] is null)
+                throw NullAt(i);
+            writer.WriteString(SerializeNonNull(values[i]!));
         }
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)
     {
-        var json = value switch
-        {
-            JsonDocument doc => doc.RootElement.GetRawText(),
-            JsonElement elem => elem.GetRawText(),
-            string s => s,
-            null => "{}",
-            _ => JsonSerializer.Serialize(value)
-        };
-        writer.WriteString(json);
+        if (value is null)
+            throw NullAt(rowIndex: -1);
+        writer.WriteString(SerializeNonNull(value));
+    }
+
+    private static string SerializeNonNull(object value) => value switch
+    {
+        JsonDocument doc => doc.RootElement.GetRawText(),
+        JsonElement elem => elem.GetRawText(),
+        string s => s,
+        _ => JsonSerializer.Serialize(value),
+    };
+
+    private static InvalidOperationException NullAt(int rowIndex)
+    {
+        var where = rowIndex >= 0 ? $" at row {rowIndex}" : string.Empty;
+        return new InvalidOperationException(
+            $"JsonColumnWriter received null{where}. The JSON column type is non-nullable; " +
+            $"ensure source values are non-null (use an empty JsonDocument like " +
+            $"JsonDocument.Parse(\"{{}}\") if an empty object is the intended sentinel).");
     }
 }

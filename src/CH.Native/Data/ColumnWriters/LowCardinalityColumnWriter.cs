@@ -115,9 +115,18 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
         // Don't insert `default!` into indexMap — null is handled via the explicit
         // null-check below, and for reference-type T (e.g. string) Dictionary rejects
         // null keys with ArgumentNullException.
+        //
+        // For reference-type T, `default(T)` is null and Phase 1's strict-null inner
+        // writers (StringColumnWriter etc.) reject it. Substitute the inner writer's
+        // declared NullPlaceholder so the slot-0 placeholder write produces benign
+        // bytes (e.g. an empty string). For value-type T, `default(T)` is the benign
+        // zero and the inner writer accepts it directly — no substitution needed.
         if (_isNullable)
         {
-            dictionary.Add(default!);
+            var slotZero = default(T) is null
+                ? _innerWriter.NullPlaceholder
+                : default!;
+            dictionary.Add(slotZero);
         }
 
         for (int i = 0; i < values.Length; i++)
@@ -130,6 +139,12 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
                 indices[i] = 0;
                 continue;
             }
+
+            // For non-nullable LowCardinality(T) where T is a reference type,
+            // reject null explicitly. Without this, null would land at the
+            // (wrong) "first unique key" dictionary slot — silent corruption.
+            if (!_isNullable && value is null)
+                throw NullAt(i);
 
             if (!indexMap.TryGetValue(value, out var index))
             {
@@ -191,13 +206,54 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
         var typed = new T[values.Length];
         for (int i = 0; i < values.Length; i++)
         {
-            typed[i] = values[i] is T v ? v : default!;
+            if (values[i] is null)
+            {
+                if (!_isNullable)
+                    throw NullAt(i);
+                typed[i] = default!;
+                continue;
+            }
+            if (values[i] is T v)
+            {
+                typed[i] = v;
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    $"LowCardinalityColumnWriter<{typeof(T).Name}> received unsupported value type " +
+                    $"{values[i]!.GetType().Name} at row {i}. Expected {typeof(T).Name}.");
+            }
         }
         WriteColumn(ref writer, typed);
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)
     {
-        WriteValue(ref writer, value is T v ? v : default!);
+        if (value is null)
+        {
+            if (!_isNullable)
+                throw NullAt(rowIndex: -1);
+            WriteValue(ref writer, default!);
+            return;
+        }
+        if (value is T v)
+        {
+            WriteValue(ref writer, v);
+        }
+        else
+        {
+            throw new InvalidOperationException(
+                $"LowCardinalityColumnWriter<{typeof(T).Name}> received unsupported value type " +
+                $"{value.GetType().Name}. Expected {typeof(T).Name}.");
+        }
+    }
+
+    private InvalidOperationException NullAt(int rowIndex)
+    {
+        var where = rowIndex >= 0 ? $" at row {rowIndex}" : string.Empty;
+        return new InvalidOperationException(
+            $"LowCardinalityColumnWriter<{typeof(T).Name}> received null{where}. The {_typeName} column " +
+            $"is non-nullable; declare the column as LowCardinality(Nullable({_innerWriter.TypeName})) " +
+            $"if null entries are valid, or ensure source values are non-null.");
     }
 }

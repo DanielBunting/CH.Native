@@ -9,16 +9,23 @@ namespace CH.Native.SystemTests.Linq.Fixtures;
 /// Provisions a single shared 1000-row fact table for the LINQ system-test suite.
 /// Reuses <see cref="SingleNodeFixture"/>'s container so we don't pay a second startup.
 /// </summary>
+/// <remarks>
+/// xUnit v2 collection fixtures cannot receive another collection fixture through their
+/// constructor (that's a v3 capability). Test classes pass the <see cref="SingleNodeFixture"/>
+/// in via <see cref="EnsureSeededAsync"/>, which is idempotent and gated so the seed runs
+/// exactly once across the LINQ collection.
+/// </remarks>
 public class LinqFactTableFixture : IAsyncLifetime
 {
     private const int RowCount = 1000;
     private static readonly string[] Countries = ["US", "UK", "DE", "FR", "JP"];
 
-    private readonly SingleNodeFixture _node;
+    private readonly SemaphoreSlim _seedLock = new(1, 1);
+    private bool _seeded;
+    private ClickHouseConnectionSettings? _settings;
 
-    public LinqFactTableFixture(SingleNodeFixture node)
+    public LinqFactTableFixture()
     {
-        _node = node;
     }
 
     /// <summary>
@@ -32,41 +39,65 @@ public class LinqFactTableFixture : IAsyncLifetime
     /// </summary>
     public IReadOnlyList<LinqFactRow> Rows { get; private set; } = Array.Empty<LinqFactRow>();
 
-    public ClickHouseConnectionSettings BuildSettings(
-        Action<ClickHouseConnectionSettingsBuilder>? configure = null)
-        => _node.BuildSettings(configure);
-
-    public async Task InitializeAsync()
+    /// <summary>
+    /// Creates the fact table and bulk-inserts the deterministic seed rows. Idempotent —
+    /// safe to call from every LINQ test class's <c>InitializeAsync</c>; only the first
+    /// caller does the work, the rest fast-path on the seeded flag.
+    /// </summary>
+    public async Task EnsureSeededAsync(SingleNodeFixture node)
     {
-        await using var conn = new ClickHouseConnection(_node.BuildSettings());
-        await conn.OpenAsync();
+        if (_seeded)
+            return;
 
-        await conn.ExecuteNonQueryAsync($@"
-            CREATE TABLE {TableName} (
-                id Int64,
-                country LowCardinality(String),
-                amount Float64,
-                quantity Int32,
-                optional_code Nullable(Int32),
-                name String,
-                created_at DateTime,
-                active UInt8
-            ) ENGINE = MergeTree() ORDER BY id");
+        await _seedLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_seeded)
+                return;
 
-        var rows = BuildRows();
-        Rows = rows;
+            _settings = node.BuildSettings();
 
-        await using var inserter = conn.CreateBulkInserter<LinqFactRow>(TableName);
-        await inserter.InitAsync();
-        await inserter.AddRangeAsync(rows);
-        await inserter.CompleteAsync();
+            await using var conn = new ClickHouseConnection(_settings);
+            await conn.OpenAsync();
+
+            await conn.ExecuteNonQueryAsync($@"
+                CREATE TABLE {TableName} (
+                    id Int64,
+                    country LowCardinality(String),
+                    amount Float64,
+                    quantity Int32,
+                    optional_code Nullable(Int32),
+                    name String,
+                    created_at DateTime,
+                    active UInt8
+                ) ENGINE = MergeTree() ORDER BY id");
+
+            var rows = BuildRows();
+            Rows = rows;
+
+            await using var inserter = conn.CreateBulkInserter<LinqFactRow>(TableName);
+            await inserter.InitAsync();
+            await inserter.AddRangeAsync(rows);
+            await inserter.CompleteAsync();
+
+            _seeded = true;
+        }
+        finally
+        {
+            _seedLock.Release();
+        }
     }
+
+    public Task InitializeAsync() => Task.CompletedTask;
 
     public async Task DisposeAsync()
     {
+        if (!_seeded || _settings is null)
+            return;
+
         try
         {
-            await using var conn = new ClickHouseConnection(_node.BuildSettings());
+            await using var conn = new ClickHouseConnection(_settings);
             await conn.OpenAsync();
             await conn.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {TableName}");
         }

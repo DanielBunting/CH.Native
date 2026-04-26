@@ -14,6 +14,7 @@ namespace CH.Native.SystemTests.BulkInsertFailures;
 /// data, and the inserter must surface them without silently mangling state.
 /// </summary>
 [Collection("SingleNode")]
+[Trait(Categories.Name, Categories.Stress)]
 public class BulkInsertExtractionFailureTests
 {
     private readonly SingleNodeFixture _fixture;
@@ -356,6 +357,44 @@ public class BulkInsertExtractionFailureTests
         await Assert.ThrowsAnyAsync<Exception>(async () =>
         {
             await inserter.AddAsync(new StandardRow { Id = 1, Payload = null! });
+            await inserter.CompleteAsync();
+        });
+
+        try { await inserter.DisposeAsync(); } catch { /* tolerate */ }
+    }
+
+    [Fact]
+    public async Task Extraction_NullForNonNullableMapColumn_FallbackPath_ThrowsCleanly()
+    {
+        // Phase 2 of the strict-null redesign: MapColumnWriter must reject a
+        // null Dictionary in all four interface paths (typed/non-generic ×
+        // WriteColumn/WriteValue). Without the fix, the boxed/fallback path
+        // silently wrote a 0-length offset for the null row — indistinguishable
+        // from a real empty Map and an exact analogue of the Phase 1 String/
+        // FixedString/Array failure mode.
+        //
+        // The Tags property (Array(Int32)) forces _useDirectPath = false in
+        // BulkInserter, so the per-row null arrives at MapColumnWriter's
+        // non-generic WriteColumn — the path that previously had the silent
+        // `else { count = 0; }` branch.
+        await using var harness = await BulkInsertTableHarness.CreateAsync(
+            () => _fixture.BuildSettings(),
+            columnDdl: "id Int32, tags Array(Int32), mapping Map(String, Int32)");
+
+        await using var conn = new ClickHouseConnection(_fixture.BuildSettings());
+        await conn.OpenAsync();
+        var inserter = conn.CreateBulkInserter<RowWithArrayAndMap>(harness.TableName,
+            new BulkInsertOptions { BatchSize = 10 });
+        await inserter.InitAsync();
+
+        await Assert.ThrowsAnyAsync<Exception>(async () =>
+        {
+            await inserter.AddAsync(new RowWithArrayAndMap
+            {
+                Id = 1,
+                Tags = new[] { 1, 2 },
+                Mapping = null,
+            });
             await inserter.CompleteAsync();
         });
 

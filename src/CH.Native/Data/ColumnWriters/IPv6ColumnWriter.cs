@@ -21,6 +21,8 @@ public sealed class IPv6ColumnWriter : IColumnWriter<IPAddress>
     {
         for (int i = 0; i < values.Length; i++)
         {
+            if (values[i] is null)
+                throw NullAt(i);
             WriteValue(ref writer, values[i]);
         }
     }
@@ -28,6 +30,9 @@ public sealed class IPv6ColumnWriter : IColumnWriter<IPAddress>
     /// <inheritdoc />
     public void WriteValue(ref ProtocolWriter writer, IPAddress value)
     {
+        if (value is null)
+            throw NullAt(rowIndex: -1);
+
         byte[] ipBytes;
 
         if (value.AddressFamily == AddressFamily.InterNetworkV6)
@@ -56,12 +61,25 @@ public sealed class IPv6ColumnWriter : IColumnWriter<IPAddress>
     {
         for (int i = 0; i < values.Length; i++)
         {
+            if (values[i] is null)
+                throw NullAt(i);
             WriteValue(ref writer, (IPAddress)values[i]!);
         }
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)
     {
-        WriteValue(ref writer, (IPAddress)value!);
+        if (value is null)
+            throw NullAt(rowIndex: -1);
+        WriteValue(ref writer, (IPAddress)value);
+    }
+
+    private static InvalidOperationException NullAt(int rowIndex)
+    {
+        var where = rowIndex >= 0 ? $" at row {rowIndex}" : string.Empty;
+        return new InvalidOperationException(
+            $"IPv6ColumnWriter received null{where}. The IPv6 column type is non-nullable; " +
+            $"declare the column as Nullable(IPv6) and wrap this writer with NullableRefColumnWriter, " +
+            $"or ensure source values are non-null.");
     }
 }
