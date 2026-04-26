@@ -5,6 +5,7 @@ using Xunit;
 
 namespace CH.Native.Tests.Unit.Logging;
 
+[Collection("MeterTests")]
 public class RetryPolicyLoggingTests
 {
     [Fact]

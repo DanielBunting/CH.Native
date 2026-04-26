@@ -6,6 +6,7 @@ using Xunit;
 
 namespace CH.Native.Tests.Unit.Resilience;
 
+[Collection("MeterTests")]
 public class RetryPolicyTests
 {
     [Fact]

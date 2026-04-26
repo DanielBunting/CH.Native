@@ -12,6 +12,7 @@ namespace CH.Native.Tests.Unit.Resilience;
 /// the Closed branch (because state has already flipped to Open) and may emit Open→Open
 /// same-state events. These tests characterize the current behavior.
 /// </summary>
+[Collection("MeterTests")]
 public class CircuitBreakerEventAtomicityTests
 {
     [Fact]

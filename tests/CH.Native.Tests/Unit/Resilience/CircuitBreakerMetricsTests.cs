@@ -13,6 +13,7 @@ namespace CH.Native.Tests.Unit.Resilience;
 /// Uses a MeterListener so the unit test project doesn't need the OpenTelemetry
 /// SDK packages — we observe the counter at the source.
 /// </summary>
+[Collection("MeterTests")]
 public class CircuitBreakerMetricsTests
 {
     private const string CounterName = "ch_native_circuit_breaker_state_changes_total";
@@ -204,16 +205,21 @@ public class CircuitBreakerMetricsTests
         // _state == Open and must not emit a second event.
         using var rec = new Recorder();
         var time = new FakeTimeProvider();
+        // Process-unique server tag — the meter is static, so tests running in
+        // parallel (other classes that exercise CircuitBreaker) leak events into
+        // every Recorder. Filtering by this tag isolates our breaker's samples.
+        var server = $"race-loser-{Guid.NewGuid():N}";
         var breaker = new CircuitBreaker(
             new CircuitBreakerOptions { FailureThreshold = 1, OpenDuration = TimeSpan.FromSeconds(30) },
             logger: null,
-            timeProvider: time);
+            timeProvider: time)
+        {
+            ServerAddress = server,
+        };
 
         breaker.RecordFailure();
         time.Advance(TimeSpan.FromSeconds(31));
         _ = breaker.State; // Open→HalfOpen
-
-        var samplesBefore = rec.Samples.Count;
 
         var barrier = new Barrier(2);
         var t1 = Task.Run(() => { barrier.SignalAndWait(); breaker.RecordFailure(); });
@@ -221,8 +227,7 @@ public class CircuitBreakerMetricsTests
         await Task.WhenAll(t1, t2);
 
         var halfToOpen = rec.Samples
-            .Skip(samplesBefore)
-            .Count(s => s.From == "halfopen" && s.To == "open");
+            .Count(s => s.Server == server && s.From == "halfopen" && s.To == "open");
         Assert.Equal(1, halfToOpen);
     }
 }

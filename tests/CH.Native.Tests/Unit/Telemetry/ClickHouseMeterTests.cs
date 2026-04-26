@@ -12,6 +12,7 @@ namespace CH.Native.Tests.Unit.Telemetry;
 /// the present behaviour so a future bucketed implementation has a clear
 /// before/after baseline.
 /// </summary>
+[Collection("MeterTests")]
 public class ClickHouseMeterTests : IDisposable
 {
     private readonly MeterListener _listener;
