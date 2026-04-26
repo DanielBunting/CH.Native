@@ -17,6 +17,11 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
     private readonly SqlBuilder _sql;
     private readonly StringBuilder _currentExpression = new();
 
+    // GroupBy key tracking: lets a post-GroupBy projection (e.g. g.Key, g.Key.Country)
+    // map back to the original column SQL recorded by VisitGroupBy.
+    private string? _groupBySingleKeyColumn;
+    private Dictionary<string, string>? _groupByCompoundKeyColumns;
+
     public ClickHouseExpressionVisitor(ClickHouseQueryContext context)
     {
         _context = context;
@@ -239,8 +244,26 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
     private Expression VisitGroupBy(MethodCallExpression node)
     {
         var lambda = GetLambda(node.Arguments[1]);
-        var columnSql = TranslateExpression(lambda.Body);
-        _sql.GroupBy(columnSql);
+
+        if (lambda.Body is NewExpression newExpr && newExpr.Members is { Count: > 0 })
+        {
+            // Compound key: new { x.Country, x.Active } — record per-property column SQL
+            // so VisitMemberPredicate can resolve g.Key.Country / g.Key.Active later.
+            _groupByCompoundKeyColumns = new Dictionary<string, string>(newExpr.Members.Count);
+            for (int i = 0; i < newExpr.Arguments.Count; i++)
+            {
+                var argSql = TranslateExpression(newExpr.Arguments[i]);
+                _groupByCompoundKeyColumns[newExpr.Members[i].Name] = argSql;
+                _sql.GroupBy(argSql);
+            }
+        }
+        else
+        {
+            var columnSql = TranslateExpression(lambda.Body);
+            _groupBySingleKeyColumn = columnSql;
+            _sql.GroupBy(columnSql);
+        }
+
         return node;
     }
 
@@ -382,6 +405,29 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
             return;
         }
 
+        // g.Key on a grouping parameter: emit the single-column key recorded by VisitGroupBy.
+        if (member.Member.Name == "Key"
+            && member.Expression is ParameterExpression keyParam
+            && IsGroupingType(keyParam.Type)
+            && _groupBySingleKeyColumn is not null)
+        {
+            _currentExpression.Append(_groupBySingleKeyColumn);
+            return;
+        }
+
+        // g.Key.X on a grouping parameter with a compound (anonymous-type) key:
+        // map the property name back to the column recorded by VisitGroupBy.
+        if (member.Expression is MemberExpression keyMember
+            && keyMember.Member.Name == "Key"
+            && keyMember.Expression is ParameterExpression compoundKeyParam
+            && IsGroupingType(compoundKeyParam.Type)
+            && _groupByCompoundKeyColumns is not null
+            && _groupByCompoundKeyColumns.TryGetValue(member.Member.Name, out var columnSql))
+        {
+            _currentExpression.Append(columnSql);
+            return;
+        }
+
         // Check if this is a property on the entity type (lambda parameter)
         if (member.Expression is ParameterExpression)
         {
@@ -474,6 +520,18 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
         if (method.Object?.Type == typeof(string))
         {
             VisitStringMethod(method);
+            return;
+        }
+
+        // Grouped aggregates inside a post-GroupBy projection lambda: g.Count(),
+        // g.Sum(x => x.Amount), etc. The C# compiler binds these to Enumerable.*
+        // (instance-style on IGrouping<,>), not Queryable.*, so the top-level
+        // VisitMethodCall dispatcher never sees them — they arrive here.
+        if (method.Method.DeclaringType == typeof(Enumerable)
+            && method.Arguments.Count >= 1
+            && IsGroupingType(method.Arguments[0].Type))
+        {
+            EmitGroupingAggregate(method);
             return;
         }
 
@@ -973,6 +1031,67 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
     private static bool IsNullableType(Type? type)
     {
         return type != null && Nullable.GetUnderlyingType(type) != null;
+    }
+
+    private static bool IsGroupingType(Type type)
+    {
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IGrouping<,>))
+            return true;
+
+        foreach (var iface in type.GetInterfaces())
+        {
+            if (iface.IsGenericType && iface.GetGenericTypeDefinition() == typeof(IGrouping<,>))
+                return true;
+        }
+
+        return false;
+    }
+
+    private void EmitGroupingAggregate(MethodCallExpression method)
+    {
+        switch (method.Method.Name)
+        {
+            case nameof(Enumerable.Count):
+            case nameof(Enumerable.LongCount):
+                _currentExpression.Append("count()");
+                return;
+
+            case nameof(Enumerable.Sum):
+                EmitGroupingSelectorAggregate(method, "sum");
+                return;
+
+            case nameof(Enumerable.Min):
+                EmitGroupingSelectorAggregate(method, "min");
+                return;
+
+            case nameof(Enumerable.Max):
+                EmitGroupingSelectorAggregate(method, "max");
+                return;
+
+            case nameof(Enumerable.Average):
+                EmitGroupingSelectorAggregate(method, "avg");
+                return;
+
+            default:
+                throw new NotSupportedException(
+                    $"Grouped aggregate '{method.Method.Name}' is not supported");
+        }
+    }
+
+    private void EmitGroupingSelectorAggregate(MethodCallExpression method, string clickHouseFunction)
+    {
+        if (method.Arguments.Count < 2)
+            throw new NotSupportedException(
+                $"Grouped {method.Method.Name} requires a selector lambda");
+
+        // Append directly into _currentExpression; calling TranslateExpression here
+        // would clear it and lose any in-progress parent expression (e.g. the leading
+        // '(' from a binary predicate that wraps this aggregate).
+        var selector = GetLambda(method.Arguments[1]);
+        _currentExpression.Append(clickHouseFunction);
+        _currentExpression.Append('(');
+        VisitPredicate(selector.Body);
+        _currentExpression.Append(')');
     }
 
     #endregion

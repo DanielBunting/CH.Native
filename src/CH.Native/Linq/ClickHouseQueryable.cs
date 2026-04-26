@@ -2,6 +2,7 @@ using System.Collections;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using CH.Native.Connection;
+using CH.Native.Numerics;
 
 namespace CH.Native.Linq;
 
@@ -12,6 +13,13 @@ namespace CH.Native.Linq;
 /// <typeparam name="T">The element type of the query results.</typeparam>
 public sealed class ClickHouseQueryable<T> : IQueryable<T>, IOrderedQueryable<T>, IAsyncEnumerable<T>
 {
+    // Closed generics fix typeof(T) at JIT time, so this static decision is correct
+    // per concrete element type. Scalar projections (string, primitives, decimal, DateTime,
+    // Guid, ClickHouseDecimal, and Nullable<T> wrappers) bypass the typed row mapper —
+    // the mapper's `where T : new()` constraint excludes string and silently returns
+    // default(T) for primitives because they have no settable properties.
+    private static readonly bool _isScalarProjection = IsScalarProjectionType(typeof(T));
+
     private readonly ClickHouseQueryProvider _provider;
     private readonly Expression _expression;
 
@@ -83,7 +91,22 @@ public sealed class ClickHouseQueryable<T> : IQueryable<T>, IOrderedQueryable<T>
         var connection = _provider.Context.Connection;
         var queryId = _provider.Context.QueryId;
 
-        // Use reflection to call QueryAsync<T> to avoid requiring new() constraint on the class
+        if (_isScalarProjection)
+        {
+            // Scalar projection: read column 0 directly via the data reader's typed accessor,
+            // which handles null → default(T), exact-type fast path, and Convert.ChangeType
+            // for numeric widening. No reflection, no `where T : new()` constraint.
+            await foreach (var row in connection.QueryAsync(sql, cancellationToken, queryId)
+                .WithCancellation(cancellationToken)
+                .ConfigureAwait(false))
+            {
+                yield return row.GetFieldValue<T>(0);
+            }
+            yield break;
+        }
+
+        // Entity projection: reflect into the helper to satisfy its `where T : new()`
+        // constraint (the mapper needs a parameterless ctor to materialise rows).
         var queryAsyncMethod = typeof(ClickHouseQueryableHelper)
             .GetMethod(nameof(ClickHouseQueryableHelper.QueryAsync))!
             .MakeGenericMethod(typeof(T));
@@ -94,6 +117,32 @@ public sealed class ClickHouseQueryable<T> : IQueryable<T>, IOrderedQueryable<T>
         {
             yield return item;
         }
+    }
+
+    private static bool IsScalarProjectionType(Type type)
+    {
+        var underlying = Nullable.GetUnderlyingType(type) ?? type;
+
+        return underlying == typeof(bool)
+            || underlying == typeof(byte)
+            || underlying == typeof(sbyte)
+            || underlying == typeof(short)
+            || underlying == typeof(ushort)
+            || underlying == typeof(int)
+            || underlying == typeof(uint)
+            || underlying == typeof(long)
+            || underlying == typeof(ulong)
+            || underlying == typeof(float)
+            || underlying == typeof(double)
+            || underlying == typeof(decimal)
+            || underlying == typeof(DateTime)
+            || underlying == typeof(DateTimeOffset)
+            || underlying == typeof(DateOnly)
+            || underlying == typeof(TimeOnly)
+            || underlying == typeof(Guid)
+            || underlying == typeof(string)
+            || underlying == typeof(byte[])
+            || underlying == typeof(ClickHouseDecimal);
     }
 
     /// <summary>

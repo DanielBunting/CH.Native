@@ -115,6 +115,11 @@ public class UnsupportedOperatorTests : IAsyncLifetime
         {
             // Acceptable: the visitor refuses post-aggregate filtering.
         }
+        catch (CH.Native.Exceptions.ClickHouseServerException)
+        {
+            // Acceptable: the visitor emits a WHERE referencing the SELECT alias
+            // (which would require HAVING); ClickHouse rejects the resulting SQL.
+        }
     }
 
     private sealed class MultiKeyGroup

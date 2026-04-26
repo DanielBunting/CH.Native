@@ -197,6 +197,12 @@ public sealed class ClickHouseDataReader : IAsyncDisposable
         if (typeof(T) == typeof(string) && value is JsonDocument jsonDoc)
             return (T)(object)jsonDoc.RootElement.GetRawText();
 
+        // Convert.ChangeType cannot target Nullable<U> directly — convert to the
+        // underlying type and rely on the boxed-value-type → Nullable cast.
+        var underlying = Nullable.GetUnderlyingType(typeof(T));
+        if (underlying != null)
+            return (T)Convert.ChangeType(value, underlying);
+
         // Handle numeric and other conversions
         return (T)Convert.ChangeType(value, typeof(T));
     }

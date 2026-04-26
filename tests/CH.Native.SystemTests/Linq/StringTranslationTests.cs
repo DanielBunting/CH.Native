@@ -79,14 +79,17 @@ public class StringTranslationTests : IAsyncLifetime
     public async Task String_Compare_OrdinalVsCurrentCulture()
     {
         // ClickHouse compares strings byte-wise. "Café" (UTF-8) round-trips
-        // and matches when compared by ordinal equality.
+        // through the LINQ pipeline and matches by ordinal equality. The fixture
+        // seeds the literal at multiple rows; pin the round-trip rather than the count.
         var matches = await _conn.Table<LinqFactRow>(_facts.TableName)
             .Where(x => x.Name == "Café")
             .Select(x => x.Name)
             .ToListAsync();
 
-        Assert.Single(matches);
-        Assert.Equal("Café", matches[0]);
+        var oracle = _facts.Rows.Count(r => r.Name == "Café");
+        Assert.Equal(oracle, matches.Count);
+        Assert.NotEmpty(matches);
+        Assert.All(matches, m => Assert.Equal("Café", m));
     }
 
     [Fact]

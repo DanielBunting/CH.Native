@@ -349,7 +349,7 @@ public static class AsyncQueryableExtensions
             var sumExpression = Expression.Call(
                 typeof(Queryable),
                 nameof(Queryable.Sum),
-                new[] { typeof(T), typeof(TResult) },
+                new[] { typeof(T) },
                 source.Expression,
                 selector);
 
