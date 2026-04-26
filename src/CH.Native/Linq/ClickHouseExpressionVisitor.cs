@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
+using CH.Native.Commands;
 using CH.Native.Parameters;
 
 namespace CH.Native.Linq;
@@ -16,6 +17,7 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
     private readonly ClickHouseQueryContext _context;
     private readonly SqlBuilder _sql;
     private readonly StringBuilder _currentExpression = new();
+    private readonly ClickHouseParameterCollection _parameters = new();
 
     // GroupBy key tracking: lets a post-GroupBy projection (e.g. g.Key, g.Key.Country)
     // map back to the original column SQL recorded by VisitGroupBy.
@@ -37,6 +39,13 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
         Visit(expression);
         return _sql.Build();
     }
+
+    /// <summary>
+    /// Captured scalar values are routed through ClickHouse query parameters
+    /// (emitted as {p1:Type} placeholders); this exposes them so the executor
+    /// can pass them to ExecuteReaderWithParametersAsync / ExecuteScalarWithParametersAsync.
+    /// </summary>
+    public ClickHouseParameterCollection Parameters => _parameters;
 
     protected override Expression VisitMethodCall(MethodCallExpression node)
     {
@@ -866,46 +875,33 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
 
     private void AppendConstant(object? value)
     {
+        // SQL NULL has no clean parameterised representation in ClickHouse's
+        // {name:Type} substitution; emit the SQL literal directly.
         if (value is null)
         {
             _currentExpression.Append("NULL");
             return;
         }
 
-        switch (value)
+        // Booleans are emitted as 0/1 — they're rarely worth parameterising and
+        // the existing inline form is what every comparison/aggregate already expects.
+        if (value is bool b)
         {
-            case string s:
-                _currentExpression.Append(ParameterSerializer.EscapeString(s));
-                break;
-
-            case bool b:
-                _currentExpression.Append(b ? "1" : "0");
-                break;
-
-            case DateTime dt:
-                _currentExpression.Append($"toDateTime('{dt:yyyy-MM-dd HH:mm:ss}')");
-                break;
-
-            case DateTimeOffset dto:
-                _currentExpression.Append($"toDateTime('{dto.UtcDateTime:yyyy-MM-dd HH:mm:ss}')");
-                break;
-
-            case DateOnly d:
-                _currentExpression.Append($"toDate('{d:yyyy-MM-dd}')");
-                break;
-
-            case Guid g:
-                _currentExpression.Append($"toUUID('{g:D}')");
-                break;
-
-            case IFormattable f:
-                _currentExpression.Append(f.ToString(null, CultureInfo.InvariantCulture));
-                break;
-
-            default:
-                _currentExpression.Append(value.ToString());
-                break;
+            _currentExpression.Append(b ? "1" : "0");
+            return;
         }
+
+        // Everything else: register a query parameter and emit a {p<n>:Type} placeholder.
+        // ClickHouseTypeMapper.InferType handles all primitives, strings, DateTime,
+        // DateTimeOffset, DateOnly, Guid, decimal/ClickHouseDecimal, IPAddress, JsonDocument.
+        var name = $"p{_parameters.Count + 1}";
+        var typeName = ClickHouseTypeMapper.InferType(value);
+        _parameters.Add(new ClickHouseParameter(name, value, typeName));
+        _currentExpression.Append('{');
+        _currentExpression.Append(name);
+        _currentExpression.Append(':');
+        _currentExpression.Append(typeName);
+        _currentExpression.Append('}');
     }
 
     /// <summary>

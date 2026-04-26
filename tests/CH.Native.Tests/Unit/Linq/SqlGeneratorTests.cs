@@ -83,7 +83,8 @@ public class SqlGeneratorTests
         var sql = GenerateSql<TestOrder>(q => q.Where(o => o.Id == 42));
 
         Assert.Contains("WHERE", sql);
-        Assert.Contains("`id` = 42", sql);
+        Assert.Contains("`id` = {", sql);
+        Assert.DoesNotContain(" 42", sql);
     }
 
     [Fact]
@@ -91,7 +92,8 @@ public class SqlGeneratorTests
     {
         var sql = GenerateSql<TestOrder>(q => q.Where(o => o.CustomerName == "John"));
 
-        Assert.Contains("`customer_name` = 'John'", sql);
+        Assert.Contains("`customer_name` = {", sql);
+        Assert.DoesNotContain("'John'", sql);
     }
 
     [Fact]
@@ -99,7 +101,8 @@ public class SqlGeneratorTests
     {
         var sql = GenerateSql<TestOrder>(q => q.Where(o => o.Amount > 100));
 
-        Assert.Contains("`amount` > 100", sql);
+        Assert.Contains("`amount` > {", sql);
+        Assert.DoesNotContain(" 100", sql);
     }
 
     [Fact]
@@ -107,7 +110,8 @@ public class SqlGeneratorTests
     {
         var sql = GenerateSql<TestOrder>(q => q.Where(o => o.Quantity <= 10));
 
-        Assert.Contains("`quantity` <= 10", sql);
+        Assert.Contains("`quantity` <= {", sql);
+        Assert.DoesNotContain(" 10", sql);
     }
 
     [Fact]
@@ -118,7 +122,7 @@ public class SqlGeneratorTests
 
         Assert.Contains("AND", sql);
         Assert.Contains("`is_active`", sql);
-        Assert.Contains("`amount` > 0", sql);
+        Assert.Contains("`amount` > {", sql);
     }
 
     [Fact]
@@ -162,8 +166,8 @@ public class SqlGeneratorTests
              .Where(o => o.Status == "Active"));
 
         Assert.Contains("AND", sql);
-        Assert.Contains("`amount` > 100", sql);
-        Assert.Contains("`status` = 'Active'", sql);
+        Assert.Contains("`amount` > {", sql);
+        Assert.Contains("`status` = {", sql);
     }
 
     #endregion
@@ -234,7 +238,9 @@ public class SqlGeneratorTests
         var ids = new List<int> { 1, 2, 3, 4, 5 };
         var sql = GenerateSql<TestOrder>(q => q.Where(o => ids.Contains(o.Id)));
 
-        Assert.Contains("`id` IN (1, 2, 3, 4, 5)", sql);
+        // Each element is parameterised; the SQL contains five placeholders.
+        Assert.Contains("`id` IN ({", sql);
+        Assert.DoesNotContain("(1, 2, 3, 4, 5)", sql);
     }
 
     [Fact]
@@ -243,7 +249,8 @@ public class SqlGeneratorTests
         var statuses = new[] { "Pending", "Processing" };
         var sql = GenerateSql<TestOrder>(q => q.Where(o => statuses.Contains(o.Status)));
 
-        Assert.Contains("`status` IN ('Pending', 'Processing')", sql);
+        Assert.Contains("`status` IN ({", sql);
+        Assert.DoesNotContain("'Pending'", sql);
     }
 
     [Fact]
@@ -460,12 +467,14 @@ public class SqlGeneratorTests
     }
 
     [Fact]
-    public void Query_WithCapturedVariable_InlinesValue()
+    public void Query_WithCapturedVariable_BindsAsParameter()
     {
         var minAmount = 50.0m;
         var sql = GenerateSql<TestOrder>(q => q.Where(o => o.Amount > minAmount));
 
-        Assert.Contains("`amount` > 50", sql);
+        // Captured scalar is emitted as a {pN:Type} placeholder, not inlined.
+        Assert.Contains("`amount` > {", sql);
+        Assert.DoesNotContain(" 50", sql);
     }
 
     #endregion
@@ -568,19 +577,25 @@ public class SqlGeneratorTests
     #region Special Character Tests
 
     [Fact]
-    public void Where_StringWithSingleQuote_EscapesQuote()
+    public void Where_StringWithSingleQuote_BindsAsParameter()
     {
+        // Special characters no longer need SQL-string escaping because the value
+        // is bound through ClickHouse's {name:Type} parameter mechanism rather than
+        // inlined into the SQL text.
         var sql = GenerateSql<TestOrder>(q => q.Where(o => o.CustomerName == "O'Brien"));
 
-        Assert.Contains("O\\'Brien", sql);
+        Assert.Contains("`customer_name` = {", sql);
+        Assert.DoesNotContain("O'Brien", sql);
+        Assert.DoesNotContain("O\\'Brien", sql);
     }
 
     [Fact]
-    public void Where_StringWithBackslash_EscapesBackslash()
+    public void Where_StringWithBackslash_BindsAsParameter()
     {
         var sql = GenerateSql<TestOrder>(q => q.Where(o => o.CustomerName == "C:\\Path"));
 
-        Assert.Contains("C:\\\\Path", sql);
+        Assert.Contains("`customer_name` = {", sql);
+        Assert.DoesNotContain("C:\\Path", sql);
     }
 
     #endregion

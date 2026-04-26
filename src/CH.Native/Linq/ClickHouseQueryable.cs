@@ -3,6 +3,7 @@ using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using CH.Native.Connection;
 using CH.Native.Numerics;
+using CH.Native.Results;
 
 namespace CH.Native.Linq;
 
@@ -87,32 +88,36 @@ public sealed class ClickHouseQueryable<T> : IQueryable<T>, IOrderedQueryable<T>
     /// <returns>An async enumerator for the query results.</returns>
     public async IAsyncEnumerator<T> GetAsyncEnumerator(CancellationToken cancellationToken = default)
     {
-        var sql = _provider.TranslateToSql(_expression);
+        var (sql, parameters) = _provider.TranslateToSqlWithParameters(_expression);
         var connection = _provider.Context.Connection;
         var queryId = _provider.Context.QueryId;
+
+        await using var reader = await connection
+            .ExecuteReaderWithParametersAsync(sql, parameters, cancellationToken, queryId: queryId)
+            .ConfigureAwait(false);
 
         if (_isScalarProjection)
         {
             // Scalar projection: read column 0 directly via the data reader's typed accessor,
             // which handles null → default(T), exact-type fast path, and Convert.ChangeType
             // for numeric widening. No reflection, no `where T : new()` constraint.
-            await foreach (var row in connection.QueryAsync(sql, cancellationToken, queryId)
-                .WithCancellation(cancellationToken)
-                .ConfigureAwait(false))
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                yield return row.GetFieldValue<T>(0);
+                yield return reader.GetFieldValue<T>(0);
             }
             yield break;
         }
 
         // Entity projection: reflect into the helper to satisfy its `where T : new()`
         // constraint (the mapper needs a parameterless ctor to materialise rows).
-        var queryAsyncMethod = typeof(ClickHouseQueryableHelper)
-            .GetMethod(nameof(ClickHouseQueryableHelper.QueryAsync))!
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            yield break;
+
+        var mapMethod = typeof(ClickHouseQueryableHelper)
+            .GetMethod(nameof(ClickHouseQueryableHelper.MapAll))!
             .MakeGenericMethod(typeof(T));
 
-        var enumerable = (IAsyncEnumerable<T>)queryAsyncMethod.Invoke(null, new object?[] { connection, sql, queryId, cancellationToken })!;
-
+        var enumerable = (IAsyncEnumerable<T>)mapMethod.Invoke(null, new object?[] { reader, cancellationToken })!;
         await foreach (var item in enumerable.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
             yield return item;
@@ -157,13 +162,24 @@ public sealed class ClickHouseQueryable<T> : IQueryable<T>, IOrderedQueryable<T>
 }
 
 /// <summary>
-/// Helper class to invoke QueryAsync with the new() constraint.
+/// Reflection helper to satisfy the typed mapper's `where T : new()` constraint.
+/// The data reader has already been advanced to the first row by the caller.
 /// </summary>
 internal static class ClickHouseQueryableHelper
 {
-    public static IAsyncEnumerable<T> QueryAsync<T>(ClickHouseConnection connection, string sql, string? queryId, CancellationToken cancellationToken)
+    public static async IAsyncEnumerable<T> MapAll<T>(
+        ClickHouseDataReader reader,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
         where T : new()
     {
-        return connection.QueryAsync<T>(sql, cancellationToken, queryId);
+        var mapper = new CH.Native.Results.TypeMapper<T>(reader);
+
+        // Caller has already advanced to the first row; map it before pulling the rest.
+        yield return mapper.Map(reader);
+
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            yield return mapper.Map(reader);
+        }
     }
 }

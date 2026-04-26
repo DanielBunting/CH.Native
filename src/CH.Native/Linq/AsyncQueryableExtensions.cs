@@ -214,10 +214,10 @@ public static class AsyncQueryableExtensions
                 new[] { typeof(T) },
                 source.Expression);
 
-            var sql = provider.TranslateToSql(countExpression);
+            var (sql, parameters) = provider.TranslateToSqlWithParameters(countExpression);
 
             var result = await provider.Context.Connection
-                .ExecuteScalarAsync<long>(sql, cancellationToken: cancellationToken)
+                .ExecuteScalarWithParametersAsync<long>(sql, parameters, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
             return (int)result;
@@ -261,10 +261,10 @@ public static class AsyncQueryableExtensions
                 new[] { typeof(T) },
                 source.Expression);
 
-            var sql = provider.TranslateToSql(countExpression);
+            var (sql, parameters) = provider.TranslateToSqlWithParameters(countExpression);
 
             return await provider.Context.Connection
-                .ExecuteScalarAsync<long>(sql, cancellationToken: cancellationToken)
+                .ExecuteScalarWithParametersAsync<long>(sql, parameters, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -353,10 +353,10 @@ public static class AsyncQueryableExtensions
                 source.Expression,
                 selector);
 
-            var sql = provider.TranslateToSql(sumExpression);
+            var (sql, parameters) = provider.TranslateToSqlWithParameters(sumExpression);
 
             var result = await provider.Context.Connection
-                .ExecuteScalarAsync<TResult>(sql, cancellationToken: cancellationToken)
+                .ExecuteScalarWithParametersAsync<TResult>(sql, parameters, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
             // For struct types, the result is directly usable (default if null)
@@ -383,10 +383,10 @@ public static class AsyncQueryableExtensions
                 source.Expression,
                 selector);
 
-            var sql = provider.TranslateToSql(avgExpression);
+            var (sql, parameters) = provider.TranslateToSqlWithParameters(avgExpression);
 
             return await provider.Context.Connection
-                .ExecuteScalarAsync<double>(sql, cancellationToken: cancellationToken)
+                .ExecuteScalarWithParametersAsync<double>(sql, parameters, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -410,10 +410,10 @@ public static class AsyncQueryableExtensions
                 source.Expression,
                 selector);
 
-            var sql = provider.TranslateToSql(avgExpression);
+            var (sql, parameters) = provider.TranslateToSqlWithParameters(avgExpression);
 
             return await provider.Context.Connection
-                .ExecuteScalarAsync<double>(sql, cancellationToken: cancellationToken)
+                .ExecuteScalarWithParametersAsync<double>(sql, parameters, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -437,10 +437,10 @@ public static class AsyncQueryableExtensions
                 source.Expression,
                 selector);
 
-            var sql = provider.TranslateToSql(minExpression);
+            var (sql, parameters) = provider.TranslateToSqlWithParameters(minExpression);
 
             return await provider.Context.Connection
-                .ExecuteScalarAsync<TResult>(sql, cancellationToken: cancellationToken)
+                .ExecuteScalarWithParametersAsync<TResult>(sql, parameters, cancellationToken: cancellationToken)
                 .ConfigureAwait(false) ?? default!;
         }
 
@@ -464,10 +464,10 @@ public static class AsyncQueryableExtensions
                 source.Expression,
                 selector);
 
-            var sql = provider.TranslateToSql(maxExpression);
+            var (sql, parameters) = provider.TranslateToSqlWithParameters(maxExpression);
 
             return await provider.Context.Connection
-                .ExecuteScalarAsync<TResult>(sql, cancellationToken: cancellationToken)
+                .ExecuteScalarWithParametersAsync<TResult>(sql, parameters, cancellationToken: cancellationToken)
                 .ConfigureAwait(false) ?? default!;
         }
 
