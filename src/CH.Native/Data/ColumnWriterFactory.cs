@@ -177,14 +177,7 @@ public sealed class ColumnWriterFactory
             throw new FormatException($"Variant requires at least one arm, got: {type.OriginalTypeName}");
 
         foreach (var arm in type.TypeArguments)
-        {
-            if (arm.IsNullable)
-                throw new FormatException(
-                    $"Nullable is not allowed inside Variant (arm: {arm.OriginalTypeName}). ClickHouse represents NULL via the Variant discriminator.");
-            if (arm.IsLowCardinality)
-                throw new FormatException(
-                    $"LowCardinality is not allowed inside Variant (arm: {arm.OriginalTypeName}).");
-        }
+            VariantArmValidator.EnsureAllowedAsVariantArm(arm);
 
         var innerWriters = type.TypeArguments
             .Select(CreateWriterForType)

@@ -601,6 +601,97 @@ public class BulkInsertCompositeTypeTests
 
     #endregion
 
+    #region LowCardinality Composite Schema Guards
+
+    // ClickHouse rejects every container type inside LowCardinality at schema level
+    // (ILLEGAL_TYPE_OF_ARGUMENT, code 43). Allowed forms are scalars and the canonical
+    // LowCardinality(Nullable(<scalar>)) wrapper. The library's factories now centralise
+    // this rule in LowCardinalityInnerValidator, fail fast with FormatException, and
+    // never construct broken wrapper compositions whose wire bytes no real schema can
+    // consume.
+    //
+    // Same shape as Schema_NullableComposite_IsRejectedByServer — if any of these
+    // start passing CREATE in a future ClickHouse version, the validator's forbidden
+    // list needs revisiting and round-trip integration tests must be added.
+
+    [Theory]
+    [InlineData("LowCardinality(Array(String))", "Array(String)")]
+    [InlineData("LowCardinality(Array(Int32))", "Array(Int32)")]
+    [InlineData("LowCardinality(Map(String, Int32))", "Map(String, Int32)")]
+    [InlineData("LowCardinality(Tuple(Int32, String))", "Tuple(Int32, String)")]
+    [InlineData("LowCardinality(Nested(a Int32))", "Nested(a Int32)")]
+    [InlineData("LowCardinality(LowCardinality(String))", "LowCardinality(String)")]
+    [InlineData("LowCardinality(JSON)", "JSON")]
+    public async Task Schema_LowCardinalityComposite_IsRejectedByServer(string lowCardinalityType, string innerType)
+    {
+        var tableName = $"test_guard_lc_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        Exception? caught = null;
+        try
+        {
+            await connection.ExecuteNonQueryAsync(
+                $"CREATE TABLE {tableName} (id Int32, x {lowCardinalityType}) ENGINE = Memory");
+            // If we get here, the server accepted the schema — drop and surface a failure.
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+        catch (Exception ex)
+        {
+            caught = ex;
+        }
+
+        Assert.NotNull(caught);
+        Assert.Contains(innerType, caught!.Message);
+        Assert.Contains("LowCardinality", caught.Message);
+    }
+
+    #endregion
+
+    #region Variant Arm Schema Guards
+
+    // ClickHouse 26.2 rejects four arm shapes inside Variant: nested Variant,
+    // Nullable, LowCardinality(Nullable(...)), and Dynamic. Other compositions
+    // including Array, Map, Tuple, Nested, JSON, and LowCardinality(<scalar>)
+    // are accepted. The library's VariantArmValidator centralises this rule.
+    //
+    // Same shape as the other Schema_*_IsRejectedByServer probes — if any of these
+    // start passing CREATE in a future ClickHouse version, the validator's forbidden
+    // list needs revisiting.
+
+    [Theory]
+    [InlineData("Variant(Variant(Int32, String), Float64)", "Nested Variant")]
+    [InlineData("Variant(Nullable(Int32), String)", "Nullable")]
+    [InlineData("Variant(LowCardinality(Nullable(String)), Int32)", "Nullable")]
+    [InlineData("Variant(Dynamic, Int32)", "Dynamic")]
+    public async Task Schema_VariantArm_IsRejectedByServer(string variantType, string expectedFragment)
+    {
+        var tableName = $"test_guard_var_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        // Variant requires the experimental flag in some builds; set it just in case.
+        try { await connection.ExecuteNonQueryAsync("SET allow_experimental_variant_type = 1"); }
+        catch { /* ignore on builds where the setting is absent */ }
+
+        Exception? caught = null;
+        try
+        {
+            await connection.ExecuteNonQueryAsync(
+                $"CREATE TABLE {tableName} (id Int32, x {variantType}) ENGINE = Memory");
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+        catch (Exception ex)
+        {
+            caught = ex;
+        }
+
+        Assert.NotNull(caught);
+        Assert.Contains(expectedFragment, caught!.Message);
+    }
+
+    #endregion
+
     #region Test POCOs
 
     private class ArrayOfArrayRow

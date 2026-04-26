@@ -443,12 +443,24 @@ public class ClickHouseTypeParserTests
     }
 
     [Fact]
-    public void CreateReader_VariantWithLowCardinalityArm_RejectsAtFactory()
+    public void CreateReader_VariantWithLowCardinalityNullableArm_RejectsAtFactory()
     {
+        // ClickHouse 26.2 accepts Variant(LowCardinality(<scalar>)) but rejects
+        // Variant(LowCardinality(Nullable(...))) — the dictionary's null entry would
+        // collide with the Variant discriminator. The factory matches that distinction.
         var factory = new CH.Native.Data.ColumnReaderFactory(CH.Native.Data.ColumnReaderRegistry.Default);
 
-        var ex = Assert.Throws<FormatException>(() => factory.CreateReader("Variant(LowCardinality(String), Int64)"));
+        var ex = Assert.Throws<FormatException>(() => factory.CreateReader("Variant(LowCardinality(Nullable(String)), Int64)"));
         Assert.Contains("LowCardinality", ex.Message);
+    }
+
+    [Fact]
+    public void CreateReader_VariantWithLowCardinalityScalarArm_IsAccepted()
+    {
+        // Regression guard: the previous validation rejected ALL LowCardinality arms,
+        // blocking the legitimate Variant(LowCardinality(<scalar>), ...) shape.
+        var factory = new CH.Native.Data.ColumnReaderFactory(CH.Native.Data.ColumnReaderRegistry.Default);
+        Assert.NotNull(factory.CreateReader("Variant(LowCardinality(String), Int64)"));
     }
 
     // Dynamic tests
