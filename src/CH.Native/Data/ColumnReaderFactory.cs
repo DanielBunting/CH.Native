@@ -11,6 +11,10 @@ public sealed class ColumnReaderFactory
 {
     private readonly ColumnReaderRegistry _registry;
 
+    /// <summary>
+    /// Creates a factory backed by the given registry of base-type column readers.
+    /// </summary>
+    /// <param name="registry">The registry of column readers used to resolve base types.</param>
     public ColumnReaderFactory(ColumnReaderRegistry registry)
     {
         _registry = registry;

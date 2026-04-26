@@ -1970,8 +1970,9 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// </summary>
     /// <param name="desired">
     /// The override roles for this call; null means fall back to the connection-level
-    /// <see cref="ClickHouseConnectionSettings.DefaultRoles"/>.
+    /// <see cref="ClickHouseConnectionSettings.Roles"/>.
     /// </param>
+    /// <param name="cancellationToken">Token to cancel the role-resolution round-trip.</param>
     private async Task EnsureRolesResolvedAsync(IReadOnlyList<string>? desired, CancellationToken cancellationToken)
     {
         // Precedence: per-call override > sticky override from ChangeRolesAsync > connection default.
@@ -2442,7 +2443,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             _protocolFatal = true;
             throw;
         }
-        catch (InvalidOperationException ex)
+        catch (InvalidOperationException)
         {
             // Not enough data yet
             return false;

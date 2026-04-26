@@ -106,9 +106,13 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
             return;
         }
 
-        // Build dictionary
+        // Build dictionary. Null keys are rejected before insertion below (either
+        // mapped to slot 0 for nullable T, or thrown via NullAt for non-nullable T),
+        // so the notnull-constraint warning on Dictionary<T, int> is suppressed.
         var dictionary = new List<T>();
+#pragma warning disable CS8714
         var indexMap = new Dictionary<T, int>(EqualityComparer<T>.Default);
+#pragma warning restore CS8714
         var indices = new int[values.Length];
 
         // For Nullable types, reserve dictionary slot 0 for the null/default value.

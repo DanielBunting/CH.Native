@@ -371,7 +371,7 @@ public sealed class ClickHouseConnectionSettingsBuilder
     /// <summary>
     /// Explicitly selects the authentication method. Normally set implicitly by
     /// calling <see cref="WithPassword"/>, <see cref="WithJwt"/>, <see cref="WithSshKey(byte[],string)"/>,
-    /// or pairing <see cref="WithTls"/> with <see cref="WithTlsClientCertificate"/>.
+    /// or pairing <see cref="WithTls"/> with <see cref="WithTlsClientCertificate(X509Certificate2)"/>.
     /// Use this when selecting <see cref="ClickHouseAuthMethod.TlsClientCertificate"/>
     /// to signal that the server-side auth method is cert-based (as opposed to
     /// a password-based user who happens to be connecting over mTLS).

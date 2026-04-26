@@ -11,7 +11,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <para>Wire format per block:</para>
 /// <list type="number">
 /// <item><description><see langword="UInt64"/> discriminator version (currently <c>0</c>).</description></item>
-/// <item><description><paramref name="rowCount"/> discriminator bytes — one per row, each either an arm index in <c>[0, N-1]</c> or <see cref="ClickHouseVariant.NullDiscriminator"/> (255) for NULL.</description></item>
+/// <item><description>One discriminator byte per row, each either an arm index in <c>[0, N-1]</c> or <see cref="ClickHouseVariant.NullDiscriminator"/> (255) for NULL.</description></item>
 /// <item><description>Per arm <c>i</c>, a packed column of only the non-NULL rows whose discriminator equals <c>i</c>, in row order.</description></item>
 /// </list>
 /// <para>The reader returns a <see cref="VariantTypedColumn"/> holding the raw
@@ -27,6 +27,10 @@ public sealed class VariantColumnReader : IColumnReader
     private readonly IColumnReader[] _innerReaders;
     private readonly string _typeName;
 
+    /// <summary>
+    /// Creates a reader for a Variant column with the given per-arm inner readers.
+    /// </summary>
+    /// <param name="innerReaders">Readers for each arm, in declaration order. At least one and at most 254 arms.</param>
     public VariantColumnReader(IColumnReader[] innerReaders)
     {
         if (innerReaders is null || innerReaders.Length == 0)

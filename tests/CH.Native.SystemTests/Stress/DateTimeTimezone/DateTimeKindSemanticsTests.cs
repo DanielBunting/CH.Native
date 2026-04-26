@@ -89,7 +89,6 @@ public class DateTimeKindSemanticsTests
     }
 
     [Fact]
-    [Trait("Status", "PendingFix")]
     public async Task Insert_KindUnspecified_TreatedAsUtc_NotLocal()
     {
         // Pins the desired contract: Unspecified should be written verbatim as UTC,
