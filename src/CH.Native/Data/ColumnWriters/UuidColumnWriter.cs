@@ -67,12 +67,25 @@ public sealed class UuidColumnWriter : IColumnWriter<Guid>
     {
         for (int i = 0; i < values.Length; i++)
         {
+            if (values[i] is null)
+                throw NullAt(i);
             WriteValue(ref writer, (Guid)values[i]!);
         }
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)
     {
-        WriteValue(ref writer, (Guid)value!);
+        if (value is null)
+            throw NullAt(rowIndex: -1);
+        WriteValue(ref writer, (Guid)value);
+    }
+
+    private static InvalidOperationException NullAt(int rowIndex)
+    {
+        var where = rowIndex >= 0 ? $" at row {rowIndex}" : string.Empty;
+        return new InvalidOperationException(
+            $"UuidColumnWriter received null{where}. The UUID column type is non-nullable; " +
+            $"declare the column as Nullable(UUID) and wrap this writer with NullableColumnWriter, " +
+            $"or ensure source values are non-null.");
     }
 }

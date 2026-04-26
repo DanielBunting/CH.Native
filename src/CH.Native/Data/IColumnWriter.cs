@@ -61,4 +61,20 @@ public interface IColumnWriter<T> : IColumnWriter
     /// <param name="writer">The protocol writer.</param>
     /// <param name="value">The typed value to write.</param>
     void WriteValue(ref ProtocolWriter writer, T value);
+
+    /// <summary>
+    /// Placeholder value the Nullable wrapper writes under a "row is null"
+    /// bitmap byte. ClickHouse's wire format requires bytes for every row
+    /// (the bitmap is read separately), so wrapped writers need a benign
+    /// value to emit for null slots — empty string for String, zero-padded
+    /// buffer for FixedString, empty array for Array, etc. Default: throw,
+    /// so writers that don't override (value-type writers, structural
+    /// composites) signal that they don't participate in Nullable-wrap
+    /// substitution and should be wrapped by a different mechanism (the
+    /// struct-T <see cref="ColumnWriters.NullableColumnWriter{T}"/> uses
+    /// <c>default(T)</c> directly).
+    /// </summary>
+    T NullPlaceholder => throw new NotSupportedException(
+        $"{GetType().Name} does not declare a Nullable-bitmap placeholder. " +
+        $"Reference-type writers used inside Nullable(T) must override NullPlaceholder.");
 }

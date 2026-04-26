@@ -3,6 +3,7 @@ using CH.Native.Data;
 using CH.Native.Data.ColumnReaders;
 using CH.Native.Data.ColumnWriters;
 using CH.Native.Data.Dynamic;
+using CH.Native.Exceptions;
 using CH.Native.Protocol;
 using Xunit;
 
@@ -180,5 +181,58 @@ public class DynamicColumnReaderTests
         var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
         Assert.True(s.TrySkipColumn(ref pr, source.Length));
         Assert.Equal(0, pr.Remaining);
+    }
+
+    // Audit finding #26: A VarInt for `numberOfTypes` that exceeds Int32.MaxValue
+    // currently throws raw OverflowException from `checked((int)...)`. The fix
+    // should map this to a typed protocol exception (e.g. ClickHouseException
+    // or a ClickHouseProtocolException subclass) so the caller can recognise
+    // it and tear the connection down. These tests FAIL today because raw
+    // OverflowException is what propagates.
+    [Fact]
+    public void ReadTypedColumn_NumberOfTypesExceedsInt32MaxValue_ThrowsTypedProtocolException()
+    {
+        var reader = (DynamicColumnReader)ReaderFactory.CreateReader("Dynamic");
+
+        using var buffer = new PooledBufferWriter();
+        var writer = new ProtocolWriter(buffer);
+        writer.WriteUInt64(3);
+        // VarInt for (Int32.MaxValue + 1) = 2147483648 — within VarInt range
+        // but not representable as int.
+        writer.WriteVarInt((ulong)int.MaxValue + 1);
+
+        var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        reader.ReadPrefix(ref pr);
+
+        Exception? thrown = null;
+        try { _ = reader.ReadTypedColumn(ref pr, 1); }
+        catch (Exception ex) { thrown = ex; }
+
+        Assert.NotNull(thrown);
+        // Desired post-fix: a ClickHouseException (or subclass) so the
+        // connection-tear-down catch sites can recognise it. Raw
+        // OverflowException slipping through is exactly the bug.
+        Assert.IsAssignableFrom<ClickHouseException>(thrown);
+    }
+
+    [Fact]
+    public void ReadTypedColumn_NumberOfTypesAtUInt64Max_ThrowsTypedProtocolException()
+    {
+        var reader = (DynamicColumnReader)ReaderFactory.CreateReader("Dynamic");
+
+        using var buffer = new PooledBufferWriter();
+        var writer = new ProtocolWriter(buffer);
+        writer.WriteUInt64(3);
+        writer.WriteVarInt(ulong.MaxValue);
+
+        var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        reader.ReadPrefix(ref pr);
+
+        Exception? thrown = null;
+        try { _ = reader.ReadTypedColumn(ref pr, 1); }
+        catch (Exception ex) { thrown = ex; }
+
+        Assert.NotNull(thrown);
+        Assert.IsAssignableFrom<ClickHouseException>(thrown);
     }
 }

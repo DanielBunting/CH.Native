@@ -30,7 +30,7 @@ public enum ClickHouseAuthMethod
 
     /// <summary>
     /// TLS client certificate (mTLS). The certificate supplied via
-    /// <see cref="ClickHouseConnectionSettingsBuilder.WithTlsClientCertificate"/>
+    /// <see cref="ClickHouseConnectionSettingsBuilder.WithTlsClientCertificate(System.Security.Cryptography.X509Certificates.X509Certificate2)"/>
     /// is presented during the TLS handshake; the server matches the certificate
     /// common name against the user's configured <c>ssl_certificates</c> entry.
     /// Requires TLS to be enabled.

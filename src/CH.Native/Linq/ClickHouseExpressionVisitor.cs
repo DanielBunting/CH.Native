@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text;
+using CH.Native.Commands;
 using CH.Native.Parameters;
 
 namespace CH.Native.Linq;
@@ -16,6 +17,12 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
     private readonly ClickHouseQueryContext _context;
     private readonly SqlBuilder _sql;
     private readonly StringBuilder _currentExpression = new();
+    private readonly ClickHouseParameterCollection _parameters = new();
+
+    // GroupBy key tracking: lets a post-GroupBy projection (e.g. g.Key, g.Key.Country)
+    // map back to the original column SQL recorded by VisitGroupBy.
+    private string? _groupBySingleKeyColumn;
+    private Dictionary<string, string>? _groupByCompoundKeyColumns;
 
     public ClickHouseExpressionVisitor(ClickHouseQueryContext context)
     {
@@ -32,6 +39,13 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
         Visit(expression);
         return _sql.Build();
     }
+
+    /// <summary>
+    /// Captured scalar values are routed through ClickHouse query parameters
+    /// (emitted as {p1:Type} placeholders); this exposes them so the executor
+    /// can pass them to ExecuteReaderWithParametersAsync / ExecuteScalarWithParametersAsync.
+    /// </summary>
+    public ClickHouseParameterCollection Parameters => _parameters;
 
     protected override Expression VisitMethodCall(MethodCallExpression node)
     {
@@ -239,8 +253,26 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
     private Expression VisitGroupBy(MethodCallExpression node)
     {
         var lambda = GetLambda(node.Arguments[1]);
-        var columnSql = TranslateExpression(lambda.Body);
-        _sql.GroupBy(columnSql);
+
+        if (lambda.Body is NewExpression newExpr && newExpr.Members is { Count: > 0 })
+        {
+            // Compound key: new { x.Country, x.Active } — record per-property column SQL
+            // so VisitMemberPredicate can resolve g.Key.Country / g.Key.Active later.
+            _groupByCompoundKeyColumns = new Dictionary<string, string>(newExpr.Members.Count);
+            for (int i = 0; i < newExpr.Arguments.Count; i++)
+            {
+                var argSql = TranslateExpression(newExpr.Arguments[i]);
+                _groupByCompoundKeyColumns[newExpr.Members[i].Name] = argSql;
+                _sql.GroupBy(argSql);
+            }
+        }
+        else
+        {
+            var columnSql = TranslateExpression(lambda.Body);
+            _groupBySingleKeyColumn = columnSql;
+            _sql.GroupBy(columnSql);
+        }
+
         return node;
     }
 
@@ -382,11 +414,34 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
             return;
         }
 
+        // g.Key on a grouping parameter: emit the single-column key recorded by VisitGroupBy.
+        if (member.Member.Name == "Key"
+            && member.Expression is ParameterExpression keyParam
+            && IsGroupingType(keyParam.Type)
+            && _groupBySingleKeyColumn is not null)
+        {
+            _currentExpression.Append(_groupBySingleKeyColumn);
+            return;
+        }
+
+        // g.Key.X on a grouping parameter with a compound (anonymous-type) key:
+        // map the property name back to the column recorded by VisitGroupBy.
+        if (member.Expression is MemberExpression keyMember
+            && keyMember.Member.Name == "Key"
+            && keyMember.Expression is ParameterExpression compoundKeyParam
+            && IsGroupingType(compoundKeyParam.Type)
+            && _groupByCompoundKeyColumns is not null
+            && _groupByCompoundKeyColumns.TryGetValue(member.Member.Name, out var columnSql))
+        {
+            _currentExpression.Append(columnSql);
+            return;
+        }
+
         // Check if this is a property on the entity type (lambda parameter)
         if (member.Expression is ParameterExpression)
         {
             var columnName = TableNameResolver.ToSnakeCase(member.Member.Name);
-            _currentExpression.Append(columnName);
+            _currentExpression.Append(SqlBuilder.QuoteIdentifier(columnName));
             return;
         }
 
@@ -477,6 +532,18 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
             return;
         }
 
+        // Grouped aggregates inside a post-GroupBy projection lambda: g.Count(),
+        // g.Sum(x => x.Amount), etc. The C# compiler binds these to Enumerable.*
+        // (instance-style on IGrouping<,>), not Queryable.*, so the top-level
+        // VisitMethodCall dispatcher never sees them — they arrive here.
+        if (method.Method.DeclaringType == typeof(Enumerable)
+            && method.Arguments.Count >= 1
+            && IsGroupingType(method.Arguments[0].Type))
+        {
+            EmitGroupingAggregate(method);
+            return;
+        }
+
         // Collection Contains (list.Contains(x.Id))
         if (method.Method.Name == "Contains" && method.Object != null)
         {
@@ -520,21 +587,21 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
                 VisitPredicate(method.Object!);
                 _currentExpression.Append(" LIKE ");
                 var containsValue = GetConstantValue<string>(method.Arguments[0]);
-                _currentExpression.Append(EscapeLikePattern($"%{containsValue}%"));
+                _currentExpression.Append(BuildLikePattern("%", containsValue, "%"));
                 break;
 
             case nameof(string.StartsWith):
                 VisitPredicate(method.Object!);
                 _currentExpression.Append(" LIKE ");
                 var startsValue = GetConstantValue<string>(method.Arguments[0]);
-                _currentExpression.Append(EscapeLikePattern($"{startsValue}%"));
+                _currentExpression.Append(BuildLikePattern("", startsValue, "%"));
                 break;
 
             case nameof(string.EndsWith):
                 VisitPredicate(method.Object!);
                 _currentExpression.Append(" LIKE ");
                 var endsValue = GetConstantValue<string>(method.Arguments[0]);
-                _currentExpression.Append(EscapeLikePattern($"%{endsValue}"));
+                _currentExpression.Append(BuildLikePattern("%", endsValue, ""));
                 break;
 
             case nameof(string.ToLower):
@@ -808,64 +875,63 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
 
     private void AppendConstant(object? value)
     {
+        // SQL NULL has no clean parameterised representation in ClickHouse's
+        // {name:Type} substitution; emit the SQL literal directly.
         if (value is null)
         {
             _currentExpression.Append("NULL");
             return;
         }
 
-        switch (value)
+        // Booleans are emitted as 0/1 — they're rarely worth parameterising and
+        // the existing inline form is what every comparison/aggregate already expects.
+        if (value is bool b)
         {
-            case string s:
-                _currentExpression.Append(ParameterSerializer.EscapeString(s));
-                break;
-
-            case bool b:
-                _currentExpression.Append(b ? "1" : "0");
-                break;
-
-            case DateTime dt:
-                _currentExpression.Append($"toDateTime('{dt:yyyy-MM-dd HH:mm:ss}')");
-                break;
-
-            case DateTimeOffset dto:
-                _currentExpression.Append($"toDateTime('{dto.UtcDateTime:yyyy-MM-dd HH:mm:ss}')");
-                break;
-
-            case DateOnly d:
-                _currentExpression.Append($"toDate('{d:yyyy-MM-dd}')");
-                break;
-
-            case Guid g:
-                _currentExpression.Append($"toUUID('{g:D}')");
-                break;
-
-            case IFormattable f:
-                _currentExpression.Append(f.ToString(null, CultureInfo.InvariantCulture));
-                break;
-
-            default:
-                _currentExpression.Append(value.ToString());
-                break;
+            _currentExpression.Append(b ? "1" : "0");
+            return;
         }
+
+        // Everything else: register a query parameter and emit a {p<n>:Type} placeholder.
+        // ClickHouseTypeMapper.InferType handles all primitives, strings, DateTime,
+        // DateTimeOffset, DateOnly, Guid, decimal/ClickHouseDecimal, IPAddress, JsonDocument.
+        var name = $"p{_parameters.Count + 1}";
+        var typeName = ClickHouseTypeMapper.InferType(value);
+        _parameters.Add(new ClickHouseParameter(name, value, typeName));
+        _currentExpression.Append('{');
+        _currentExpression.Append(name);
+        _currentExpression.Append(':');
+        _currentExpression.Append(typeName);
+        _currentExpression.Append('}');
     }
 
-    private static string EscapeLikePattern(string pattern)
+    /// <summary>
+    /// Emits a ClickHouse LIKE pattern literal. <paramref name="prefix"/> and
+    /// <paramref name="suffix"/> are written verbatim so wrapper wildcards
+    /// ('%' from Contains/StartsWith/EndsWith) remain active; only the user's
+    /// <paramref name="value"/> is escaped, so literal '%' and '_' in user
+    /// input don't accidentally turn into wildcards.
+    /// </summary>
+    private static string BuildLikePattern(string prefix, string value, string suffix)
     {
-        // Escape ClickHouse LIKE special characters in the search term
-        // Note: The % and _ in the pattern template are intentional wildcards
-        var sb = new StringBuilder(pattern.Length + 10);
+        var sb = new StringBuilder(value.Length + prefix.Length + suffix.Length + 4);
         sb.Append('\'');
+        sb.Append(prefix);
 
-        foreach (var c in pattern)
+        foreach (var c in value)
         {
             switch (c)
             {
-                case '\'':
-                    sb.Append("\\'");
-                    break;
                 case '\\':
-                    sb.Append("\\\\");
+                    sb.Append(@"\\");
+                    break;
+                case '\'':
+                    sb.Append(@"\'");
+                    break;
+                case '%':
+                    sb.Append(@"\%");
+                    break;
+                case '_':
+                    sb.Append(@"\_");
                     break;
                 default:
                     sb.Append(c);
@@ -873,6 +939,7 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
             }
         }
 
+        sb.Append(suffix);
         sb.Append('\'');
         return sb.ToString();
     }
@@ -960,6 +1027,67 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
     private static bool IsNullableType(Type? type)
     {
         return type != null && Nullable.GetUnderlyingType(type) != null;
+    }
+
+    private static bool IsGroupingType(Type type)
+    {
+        if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(IGrouping<,>))
+            return true;
+
+        foreach (var iface in type.GetInterfaces())
+        {
+            if (iface.IsGenericType && iface.GetGenericTypeDefinition() == typeof(IGrouping<,>))
+                return true;
+        }
+
+        return false;
+    }
+
+    private void EmitGroupingAggregate(MethodCallExpression method)
+    {
+        switch (method.Method.Name)
+        {
+            case nameof(Enumerable.Count):
+            case nameof(Enumerable.LongCount):
+                _currentExpression.Append("count()");
+                return;
+
+            case nameof(Enumerable.Sum):
+                EmitGroupingSelectorAggregate(method, "sum");
+                return;
+
+            case nameof(Enumerable.Min):
+                EmitGroupingSelectorAggregate(method, "min");
+                return;
+
+            case nameof(Enumerable.Max):
+                EmitGroupingSelectorAggregate(method, "max");
+                return;
+
+            case nameof(Enumerable.Average):
+                EmitGroupingSelectorAggregate(method, "avg");
+                return;
+
+            default:
+                throw new NotSupportedException(
+                    $"Grouped aggregate '{method.Method.Name}' is not supported");
+        }
+    }
+
+    private void EmitGroupingSelectorAggregate(MethodCallExpression method, string clickHouseFunction)
+    {
+        if (method.Arguments.Count < 2)
+            throw new NotSupportedException(
+                $"Grouped {method.Method.Name} requires a selector lambda");
+
+        // Append directly into _currentExpression; calling TranslateExpression here
+        // would clear it and lose any in-progress parent expression (e.g. the leading
+        // '(' from a binary predicate that wraps this aggregate).
+        var selector = GetLambda(method.Arguments[1]);
+        _currentExpression.Append(clickHouseFunction);
+        _currentExpression.Append('(');
+        VisitPredicate(selector.Body);
+        _currentExpression.Append(')');
     }
 
     #endregion

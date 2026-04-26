@@ -11,6 +11,10 @@ public sealed class ColumnReaderFactory
 {
     private readonly ColumnReaderRegistry _registry;
 
+    /// <summary>
+    /// Creates a factory backed by the given registry of base-type column readers.
+    /// </summary>
+    /// <param name="registry">The registry of column readers used to resolve base types.</param>
     public ColumnReaderFactory(ColumnReaderRegistry registry)
     {
         _registry = registry;
@@ -88,10 +92,7 @@ public sealed class ColumnReaderFactory
             throw new FormatException($"Nullable requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
-        if (innerType.IsDynamic)
-            throw new FormatException("Nullable(Dynamic) is not allowed — Dynamic already represents NULL via its discriminator.");
-        if (innerType.IsVariant)
-            throw new FormatException("Nullable(Variant) is not allowed — Variant already represents NULL via its discriminator.");
+        NullableInnerValidator.EnsureAllowedInsideNullable(innerType);
 
         var innerReader = CreateReaderForType(innerType);
 
@@ -190,10 +191,7 @@ public sealed class ColumnReaderFactory
             throw new FormatException($"LowCardinality requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
-        if (innerType.IsDynamic)
-            throw new FormatException("LowCardinality(Dynamic) is not allowed by ClickHouse.");
-        if (innerType.IsVariant)
-            throw new FormatException("LowCardinality(Variant) is not allowed by ClickHouse.");
+        LowCardinalityInnerValidator.EnsureAllowedInsideLowCardinality(innerType);
 
         var isNullable = innerType.BaseName == "Nullable" && innerType.TypeArguments.Count == 1;
 
@@ -221,14 +219,7 @@ public sealed class ColumnReaderFactory
             throw new FormatException($"Variant requires at least one arm, got: {type.OriginalTypeName}");
 
         foreach (var arm in type.TypeArguments)
-        {
-            if (arm.IsNullable)
-                throw new FormatException(
-                    $"Nullable is not allowed inside Variant (arm: {arm.OriginalTypeName}). ClickHouse represents NULL via the Variant discriminator.");
-            if (arm.IsLowCardinality)
-                throw new FormatException(
-                    $"LowCardinality is not allowed inside Variant (arm: {arm.OriginalTypeName}).");
-        }
+            VariantArmValidator.EnsureAllowedAsVariantArm(arm);
 
         var innerReaders = type.TypeArguments
             .Select(CreateReaderForType)

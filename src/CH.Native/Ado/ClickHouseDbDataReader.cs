@@ -96,6 +96,8 @@ public sealed class ClickHouseDbDataReader : DbDataReader
     /// <inheritdoc />
     public override async Task<bool> ReadAsync(CancellationToken cancellationToken)
     {
+        ThrowIfClosed();
+
         // First ensure we're initialized (gets schema + first row if any)
         await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
@@ -108,6 +110,16 @@ public sealed class ClickHouseDbDataReader : DbDataReader
 
         // Otherwise, read the next row
         return await _inner.ReadAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    // Row-data accessors must fail after the reader has been closed — returning
+    // stale cached values or forwarding to the disposed inner reader violates the
+    // ADO.NET contract and can silently leak the last row's data to code that
+    // only re-reads fields by ordinal.
+    private void ThrowIfClosed()
+    {
+        if (_closed)
+            throw new ObjectDisposedException(nameof(ClickHouseDbDataReader), "The DataReader has been closed.");
     }
 
     /// <inheritdoc />
@@ -136,50 +148,51 @@ public sealed class ClickHouseDbDataReader : DbDataReader
     // Type getters
 
     /// <inheritdoc />
-    public override bool GetBoolean(int ordinal) => _inner.GetFieldValue<bool>(ordinal);
+    public override bool GetBoolean(int ordinal) { ThrowIfClosed(); return _inner.GetFieldValue<bool>(ordinal); }
 
     /// <inheritdoc />
-    public override byte GetByte(int ordinal) => _inner.GetFieldValue<byte>(ordinal);
+    public override byte GetByte(int ordinal) { ThrowIfClosed(); return _inner.GetFieldValue<byte>(ordinal); }
 
     /// <inheritdoc />
-    public override char GetChar(int ordinal) => _inner.GetFieldValue<char>(ordinal);
+    public override char GetChar(int ordinal) { ThrowIfClosed(); return _inner.GetFieldValue<char>(ordinal); }
 
     /// <inheritdoc />
-    public override DateTime GetDateTime(int ordinal) => _inner.GetFieldValue<DateTime>(ordinal);
+    public override DateTime GetDateTime(int ordinal) { ThrowIfClosed(); return _inner.GetFieldValue<DateTime>(ordinal); }
 
     /// <inheritdoc />
-    public override decimal GetDecimal(int ordinal) => _inner.GetFieldValue<decimal>(ordinal);
+    public override decimal GetDecimal(int ordinal) { ThrowIfClosed(); return _inner.GetFieldValue<decimal>(ordinal); }
 
     /// <inheritdoc />
-    public override double GetDouble(int ordinal) => _inner.GetFieldValue<double>(ordinal);
+    public override double GetDouble(int ordinal) { ThrowIfClosed(); return _inner.GetFieldValue<double>(ordinal); }
 
     /// <inheritdoc />
-    public override float GetFloat(int ordinal) => _inner.GetFieldValue<float>(ordinal);
+    public override float GetFloat(int ordinal) { ThrowIfClosed(); return _inner.GetFieldValue<float>(ordinal); }
 
     /// <inheritdoc />
-    public override Guid GetGuid(int ordinal) => _inner.GetFieldValue<Guid>(ordinal);
+    public override Guid GetGuid(int ordinal) { ThrowIfClosed(); return _inner.GetFieldValue<Guid>(ordinal); }
 
     /// <inheritdoc />
-    public override short GetInt16(int ordinal) => _inner.GetFieldValue<short>(ordinal);
+    public override short GetInt16(int ordinal) { ThrowIfClosed(); return _inner.GetFieldValue<short>(ordinal); }
 
     /// <inheritdoc />
-    public override int GetInt32(int ordinal) => _inner.GetFieldValue<int>(ordinal);
+    public override int GetInt32(int ordinal) { ThrowIfClosed(); return _inner.GetFieldValue<int>(ordinal); }
 
     /// <inheritdoc />
-    public override long GetInt64(int ordinal) => _inner.GetFieldValue<long>(ordinal);
+    public override long GetInt64(int ordinal) { ThrowIfClosed(); return _inner.GetFieldValue<long>(ordinal); }
 
     /// <inheritdoc />
-    public override string GetString(int ordinal) => _inner.GetFieldValue<string>(ordinal);
+    public override string GetString(int ordinal) { ThrowIfClosed(); return _inner.GetFieldValue<string>(ordinal); }
 
     /// <inheritdoc />
-    public override T GetFieldValue<T>(int ordinal) => _inner.GetFieldValue<T>(ordinal);
+    public override T GetFieldValue<T>(int ordinal) { ThrowIfClosed(); return _inner.GetFieldValue<T>(ordinal); }
 
     /// <inheritdoc />
-    public override object GetValue(int ordinal) => _inner.GetValue(ordinal) ?? DBNull.Value;
+    public override object GetValue(int ordinal) { ThrowIfClosed(); return _inner.GetValue(ordinal) ?? DBNull.Value; }
 
     /// <inheritdoc />
     public override int GetValues(object[] values)
     {
+        ThrowIfClosed();
         var count = Math.Min(values.Length, FieldCount);
         for (int i = 0; i < count; i++)
             values[i] = GetValue(i);
@@ -187,7 +200,7 @@ public sealed class ClickHouseDbDataReader : DbDataReader
     }
 
     /// <inheritdoc />
-    public override bool IsDBNull(int ordinal) => _inner.IsDBNull(ordinal);
+    public override bool IsDBNull(int ordinal) { ThrowIfClosed(); return _inner.IsDBNull(ordinal); }
 
     /// <inheritdoc />
     public override int GetOrdinal(string name)

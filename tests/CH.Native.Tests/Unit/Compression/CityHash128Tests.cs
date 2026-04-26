@@ -204,4 +204,38 @@ public class CityHash128Tests
         Assert.Equal(low1, low2);
         Assert.Equal(high1, high2);
     }
+
+    // Audit finding #16: Verifies the tail loop for CityHash128WithSeed is OOB-safe
+    // when the post-main-loop `len` is < 32. The tail loop indexes via
+    // `pos + len - tailDone - 32`, which can dip below `pos` but must stay within
+    // the buffer (the algorithm intentionally re-reads bytes already processed by
+    // the main loop). These lengths exercise the entry-to-tail boundary across
+    // `len % 128` ∈ {0, 1, 31, 33, 96, 100, 127}.
+    [Theory]
+    [InlineData(144)]   // main loop runs once, post-loop len = 0 — tail loop skipped
+    [InlineData(145)]   // post-loop len = 1 — single tail iter, indexes back ~31 bytes before pos
+    [InlineData(159)]   // post-loop len = 15
+    [InlineData(175)]   // post-loop len = 31
+    [InlineData(176)]   // post-loop len = 32 — exactly one full chunk
+    [InlineData(177)]   // post-loop len = 33 — one chunk + 1 (back-walk)
+    [InlineData(240)]   // post-loop len = 96 — 3 chunks exactly
+    [InlineData(244)]   // post-loop len = 100 — last iter walks ~28 bytes before pos
+    [InlineData(271)]   // post-loop len = 127
+    [InlineData(272)]   // 2 main loops, post-loop len = 0
+    [InlineData(273)]   // 2 main loops, post-loop len = 1
+    public void Hash_TailLoopBoundaries_DoesNotThrowAndIsDeterministic(int length)
+    {
+        var data = new byte[length];
+        for (int i = 0; i < length; i++) data[i] = (byte)((i * 31) ^ 0x5A);
+
+        var (low1, high1) = CityHash128.Hash(data);
+        var (low2, high2) = CityHash128.Hash(data);
+
+        Assert.Equal(low1, low2);
+        Assert.Equal(high1, high2);
+        // Sanity: changing any tail byte must change the hash.
+        data[length - 1] ^= 0xFF;
+        var (lowMut, highMut) = CityHash128.Hash(data);
+        Assert.True(lowMut != low1 || highMut != high1, $"Tail-byte mutation did not change hash at length {length}");
+    }
 }

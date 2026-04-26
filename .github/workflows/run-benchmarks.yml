@@ -1,0 +1,62 @@
+name: Run Benchmarks
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Benchmark suite to run (e.g. all, compare, simple, insert, large, json, types). Defaults to all.'
+        required: false
+        default: 'all'
+      framework:
+        description: 'Target framework moniker'
+        required: false
+        default: 'net9.0'
+
+jobs:
+  benchmarks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore benchmarks/CH.Native.Benchmarks/CH.Native.Benchmarks.csproj
+
+      - name: Build (Release)
+        run: dotnet build benchmarks/CH.Native.Benchmarks/CH.Native.Benchmarks.csproj --no-restore --configuration Release --framework ${{ inputs.framework }}
+
+      - name: Run benchmark suite (${{ inputs.suite }})
+        run: dotnet run --project benchmarks/CH.Native.Benchmarks --configuration Release --framework ${{ inputs.framework }} --no-build -- ${{ inputs.suite }}
+
+      - name: Collect CSV reports
+        if: always()
+        run: |
+          mkdir -p benchmark-results
+          find . -path '*/BenchmarkDotNet.Artifacts/results/*.csv' -exec cp -v {} benchmark-results/ \;
+          ls -la benchmark-results
+
+      - name: Upload CSV artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-csv-${{ inputs.suite }}-${{ github.run_id }}
+          path: benchmark-results/*.csv
+          if-no-files-found: warn
+
+      - name: Upload full BenchmarkDotNet artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-full-${{ inputs.suite }}-${{ github.run_id }}
+          path: '**/BenchmarkDotNet.Artifacts/**'
+          if-no-files-found: warn

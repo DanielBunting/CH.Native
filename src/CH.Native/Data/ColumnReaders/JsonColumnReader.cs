@@ -30,6 +30,10 @@ public sealed class JsonColumnReader : IColumnReader<JsonDocument>
 
     private readonly ColumnReaderFactory? _factory;
 
+    /// <summary>
+    /// Creates a JSON reader without a factory reference. Only the v1 (JSON-as-string)
+    /// format is supported; v0 and v3 binary formats require the factory-aware overload.
+    /// </summary>
     public JsonColumnReader()
     {
     }

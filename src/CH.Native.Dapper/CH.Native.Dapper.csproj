@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Dapper integration for CH.Native. Registers type handlers for array-typed parameters (int[], string[], long[], Guid[], etc.) so `new { ids = arr }` binds as a ClickHouse Array(T) on the wire instead of being expanded into a Tuple by Dapper's default list-expansion behaviour.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CH.Native\CH.Native.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Dapper" Version="2.1.*" />
+  </ItemGroup>
+
+</Project>

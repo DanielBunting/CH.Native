@@ -801,7 +801,7 @@ public class BulkInsertTypeRoundTripTests
 
     #region Test 18: JSON
 
-    [Fact(Skip = "JSON Object structure serialization version mismatch with ClickHouse 25.10 — pre-existing client incompatibility surfaced when the test image was bumped from 24.1.")]
+    [Fact]
     public async Task BulkInsert_Json_RoundTrips()
     {
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);

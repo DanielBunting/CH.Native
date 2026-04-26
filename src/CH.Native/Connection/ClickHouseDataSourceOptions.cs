@@ -26,34 +26,34 @@ public sealed class ClickHouseDataSourceOptions
     public Func<CancellationToken, ValueTask<ClickHouseConnectionSettings>>? ConnectionFactory { get; init; }
 
     /// <summary>Maximum number of physical connections (idle + busy). Default 100.</summary>
-    public int MaxPoolSize { get; init; } = 100;
+    public int MaxPoolSize { get; set; } = 100;
 
     /// <summary>
     /// Minimum number of physical connections to keep warm. When
     /// <see cref="PrewarmOnStart"/> is true, the pool fires this many
     /// <c>OpenAsync</c> calls on construction. Default 0.
     /// </summary>
-    public int MinPoolSize { get; init; } = 0;
+    public int MinPoolSize { get; set; } = 0;
 
     /// <summary>
     /// Idle duration after which a connection is evicted on the next rent
     /// or background validation pass. Default 5 minutes.
     /// </summary>
-    public TimeSpan ConnectionIdleTimeout { get; init; } = TimeSpan.FromMinutes(5);
+    public TimeSpan ConnectionIdleTimeout { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// Maximum age of a physical connection regardless of activity. Critical
     /// for JWT rotation — set this to match (or undercut) token TTL so the
     /// pool recycles connections before credentials expire. Default 30 min.
     /// </summary>
-    public TimeSpan ConnectionLifetime { get; init; } = TimeSpan.FromMinutes(30);
+    public TimeSpan ConnectionLifetime { get; set; } = TimeSpan.FromMinutes(30);
 
     /// <summary>
     /// Maximum time to wait for a free slot when the pool is at
     /// <see cref="MaxPoolSize"/>. Default 30 seconds. Throws
     /// <see cref="TimeoutException"/> on exhaustion.
     /// </summary>
-    public TimeSpan ConnectionWaitTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    public TimeSpan ConnectionWaitTimeout { get; set; } = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// When true, the pool runs <c>SELECT 1</c> on every rented connection
@@ -61,12 +61,12 @@ public sealed class ClickHouseDataSourceOptions
     /// outweighs the benefit, and consumers generally detect dead sockets on
     /// their own first query.
     /// </summary>
-    public bool ValidateOnRent { get; init; } = false;
+    public bool ValidateOnRent { get; set; } = false;
 
     /// <summary>
     /// When true, the DataSource fires <see cref="MinPoolSize"/> connection
     /// opens in the background on construction. Useful for latency-sensitive
     /// startups. Default false.
     /// </summary>
-    public bool PrewarmOnStart { get; init; } = false;
+    public bool PrewarmOnStart { get; set; } = false;
 }

@@ -208,5 +208,15 @@ public sealed partial class ClickHouseLogger
         Message = "Schema resolved for {TableName} ({ColumnCount} cols, fromCache={FromCache})")]
     public partial void BulkInsertSchemaFetched(string tableName, int columnCount, bool fromCache);
 
+    /// <summary>
+    /// Logs that an implicit CompleteAsync during BulkInserter.DisposeAsync failed.
+    /// The caller skipped an explicit CompleteAsync, so any buffered rows are lost.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 53,
+        Level = LogLevel.Warning,
+        Message = "Implicit CompleteAsync during BulkInserter.DisposeAsync failed for {TableName}; buffered rows were not persisted. Call CompleteAsync explicitly to handle this error.")]
+    public partial void BulkInsertDisposeCompleteFailed(string tableName, Exception exception);
+
     #endregion
 }

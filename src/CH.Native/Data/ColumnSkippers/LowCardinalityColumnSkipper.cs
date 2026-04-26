@@ -47,13 +47,22 @@ public sealed class LowCardinalityColumnSkipper : IColumnSkipper
         // Skip dictionary values
         if (dictSize > 0)
         {
-            if (!_innerSkipper.TrySkipColumn(ref reader, (int)dictSize))
+            if (!_innerSkipper.TrySkipColumn(ref reader, ProtocolGuards.ToInt32(dictSize, "LowCardinality dictionary size")))
                 return false;
         }
 
-        // Read index count (UInt64)
+        // Read index count (UInt64). ClickHouse emits one index per row, so this must
+        // equal rowCount — otherwise the skipper would advance a different number of
+        // bytes than the reader (which uses rowCount), desynchronizing subsequent
+        // columns in the block.
         if (!reader.TryReadUInt64(out var indexCount))
             return false;
+
+        if (indexCount != (ulong)rowCount)
+        {
+            throw new InvalidDataException(
+                $"LowCardinality indexCount ({indexCount}) does not match rowCount ({rowCount}).");
+        }
 
         // Skip indices based on index type
         int indexByteSize = indexType switch

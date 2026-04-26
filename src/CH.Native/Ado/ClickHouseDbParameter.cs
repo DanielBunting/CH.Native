@@ -1,5 +1,6 @@
 using System.Data;
 using System.Data.Common;
+using CH.Native.Data.Types;
 
 namespace CH.Native.Ado;
 
@@ -56,7 +57,40 @@ public sealed class ClickHouseDbParameter : DbParameter
     /// Gets or sets the explicit ClickHouse type (e.g., "Int32", "String", "DateTime64(3)").
     /// If not set, the type is inferred from <see cref="Value"/> via ClickHouseTypeMapper.
     /// </summary>
-    public string? ClickHouseType { get; set; }
+    /// <remarks>
+    /// The setter validates the type string through <see cref="ClickHouseTypeParser.Parse"/>
+    /// to prevent SQL injection through the wire {name:Type} placeholder. Surrounding
+    /// whitespace is trimmed.
+    /// </remarks>
+    /// <exception cref="ArgumentException">Thrown when the type name is malformed.</exception>
+    public string? ClickHouseType
+    {
+        get => _clickHouseType;
+        set
+        {
+            if (value is null)
+            {
+                _clickHouseType = null;
+                return;
+            }
+
+            var trimmed = value.Trim();
+            try
+            {
+                ClickHouseTypeParser.Parse(trimmed);
+            }
+            catch (FormatException ex)
+            {
+                throw new ArgumentException(
+                    $"Invalid ClickHouse type name '{value}': {ex.Message}",
+                    nameof(value),
+                    ex);
+            }
+
+            _clickHouseType = trimmed;
+        }
+    }
+    private string? _clickHouseType;
 
     /// <inheritdoc />
     public override void ResetDbType()

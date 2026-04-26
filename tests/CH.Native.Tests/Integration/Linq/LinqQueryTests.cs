@@ -599,7 +599,7 @@ public class LinqQueryTests : IAsyncLifetime
         var sql = query.ToSql();
 
         Assert.Contains("SELECT", sql);
-        Assert.Contains($"FROM {_tableName}", sql);
+        Assert.Contains($"FROM `{_tableName}`", sql);
         Assert.Contains("WHERE", sql);
         Assert.Contains("ORDER BY", sql);
         Assert.Contains("DESC", sql);

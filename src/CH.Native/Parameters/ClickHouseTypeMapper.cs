@@ -6,6 +6,15 @@ namespace CH.Native.Parameters;
 /// <summary>
 /// Maps .NET types to ClickHouse type names.
 /// </summary>
+/// <remarks>
+/// Security invariant: every value emitted by this class is a constant baked into
+/// <see cref="TypeMappings"/> or recursively composed via <c>Array(...)</c>. Strings
+/// from external input must not be substituted in. If a future overload accepts a
+/// type name from user input, route it through <see cref="Data.Types.ClickHouseTypeParser.Parse"/>
+/// (the same gate used by <c>ClickHouseParameter.ClickHouseType</c>) before storing
+/// or emitting it — otherwise the wire {name:Type} placeholder becomes a SQL-injection
+/// vector.
+/// </remarks>
 public static class ClickHouseTypeMapper
 {
     private static readonly Dictionary<Type, string> TypeMappings = new()

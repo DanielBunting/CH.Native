@@ -751,7 +751,7 @@ public class BulkInsertTests
         }
     }
 
-    [Fact(Skip = "Array column bulk insert not yet implemented - requires ColumnWriterRegistry integration")]
+    [Fact]
     public async Task BulkInsert_ArrayColumn_RoundTrips()
     {
         var tableName = $"test_bulk_{Guid.NewGuid():N}";
@@ -789,7 +789,7 @@ public class BulkInsertTests
         }
     }
 
-    [Fact(Skip = "Map column bulk insert not yet implemented - requires ColumnWriterRegistry integration")]
+    [Fact]
     public async Task BulkInsert_MapColumn_RoundTrips()
     {
         var tableName = $"test_bulk_{Guid.NewGuid():N}";

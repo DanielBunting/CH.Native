@@ -15,9 +15,9 @@ namespace CH.Native.Data.Json;
 /// </para>
 /// <para>
 /// <b>Experimental:</b> the binary formats are under active evolution in ClickHouse. The
-/// interpretation used here follows the spec in <c>.tmp/06-json-enhancements.md</c>. Wire
-/// format details should be confirmed against <c>SerializationObject.cpp</c> and
-/// <c>SerializationJSON.cpp</c> before relying on production round-trips.
+/// interpretation used here is intentionally conservative. Wire format details should be
+/// confirmed against <c>SerializationObject.cpp</c> and <c>SerializationJSON.cpp</c>
+/// before relying on production round-trips.
 /// </para>
 /// </remarks>
 public static class JsonBinaryDecoder
@@ -31,7 +31,7 @@ public static class JsonBinaryDecoder
     /// <param name="factory">Column-reader factory used to resolve typed-path readers.</param>
     public static JsonDocument[] DecodeVersion0(ref ProtocolReader reader, int rowCount, ColumnReaderFactory factory)
     {
-        var pathCount = checked((int)reader.ReadUInt64());
+        var pathCount = reader.ReadUInt64AsInt32("JSON path count");
 
         var pathNames = new string[pathCount];
         for (int i = 0; i < pathCount; i++)

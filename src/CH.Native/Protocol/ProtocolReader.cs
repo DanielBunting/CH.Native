@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Text;
+using CH.Native.Exceptions;
 
 namespace CH.Native.Protocol;
 
@@ -45,13 +46,16 @@ public readonly struct PooledBytes : IDisposable
     public int Length => Memory.Length;
 
     /// <summary>
-    /// Returns the pooled array if one was used.
+    /// Returns the pooled array to the pool after clearing its contents.
+    /// Wire data (column payloads, strings, potentially auth text during the hello
+    /// handshake) must not linger in a buffer that returns to <see cref="ArrayPool{T}.Shared"/>,
+    /// which is shared process-wide.
     /// </summary>
     public void Dispose()
     {
         if (_pool != null && _array != null)
         {
-            _pool.Return(_array);
+            _pool.Return(_array, clearArray: true);
         }
     }
 }
@@ -59,10 +63,38 @@ public readonly struct PooledBytes : IDisposable
 /// <summary>
 /// High-performance binary reader for the ClickHouse native protocol.
 /// Wraps a <see cref="SequenceReader{T}"/> for efficient parsing of fragmented network buffers.
+///
+/// <para><b>Try* contract</b> (TryReadVarInt, TryReadString, TryReadByte, TrySkip*, etc.):</para>
+/// <list type="bullet">
+///   <item><b>Returns true</b> — value successfully read; the reader has advanced exactly past the consumed bytes.</item>
+///   <item><b>Returns false</b> — the stream is incomplete (not enough bytes). The reader's
+///     position is unspecified and may have advanced partway through the value. Callers must
+///     treat the reader as poisoned on false: pull more bytes from the pipe and rebuild a
+///     fresh <see cref="ProtocolReader"/> from the original buffer's start position. This is
+///     what the connection's pump loop does, and it is the only safe usage pattern.</item>
+///   <item><b>Throws</b> — the bytes are structurally malformed (e.g., a 10-byte VarInt with
+///     the continuation bit still set, or a string length exceeding configured caps). The
+///     reader is in an unspecified state and the connection must be torn down — re-reading
+///     with more bytes will never recover.</item>
+/// </list>
+/// <para>The split between "false" (incomplete) and "throw" (malformed) is the boundary that
+/// keeps the connection robust under network fragmentation while refusing to retry-loop on
+/// hostile input. Do not soften this distinction without thinking carefully about both sides.</para>
 /// </summary>
 public ref struct ProtocolReader
 {
     private SequenceReader<byte> _reader;
+
+    /// <summary>
+    /// Maximum number of bytes a single VarInt-prefixed string is allowed to declare.
+    /// A length larger than this throws <see cref="ClickHouseProtocolException"/> at the
+    /// length-prefix check, before any allocation. Default is <see cref="int.MaxValue"/>
+    /// (effectively uncapped) — the connection layer overrides this with the
+    /// per-connection setting. The cap is what stops a malformed or hostile server
+    /// from sending a 2 GiB string-length prefix and forcing the client to allocate
+    /// before noticing the wire is bad.
+    /// </summary>
+    public int MaxStringLengthBytes { get; set; } = int.MaxValue;
 
     /// <summary>
     /// Creates a new ProtocolReader for the specified sequence.
@@ -86,22 +118,28 @@ public ref struct ProtocolReader
     /// <summary>
     /// Reads a variable-length encoded unsigned integer.
     /// </summary>
+    /// <exception cref="InvalidOperationException">Not enough bytes available.</exception>
+    /// <exception cref="InvalidDataException">
+    /// The encoding exceeds <see cref="VarInt.MaxLength"/> bytes (malformed wire data).
+    /// </exception>
     public ulong ReadVarInt()
     {
         ulong result = 0;
         int shift = 0;
 
-        byte b;
-        do
+        for (int i = 0; i < VarInt.MaxLength; i++)
         {
-            if (!_reader.TryRead(out b))
+            if (!_reader.TryRead(out byte b))
                 throw new InvalidOperationException("Unexpected end of data while reading VarInt.");
 
             result |= (ulong)(b & 0x7F) << shift;
+            if ((b & 0x80) == 0)
+                return result;
             shift += 7;
-        } while ((b & 0x80) != 0);
+        }
 
-        return result;
+        throw new InvalidDataException(
+            $"Malformed VarInt: continuation bit set on byte {VarInt.MaxLength} (maximum encoding length).");
     }
 
     /// <summary>
@@ -237,13 +275,47 @@ public ref struct ProtocolReader
     }
 
     /// <summary>
+    /// Reads a VarInt length/count and converts it to <see cref="int"/>, raising
+    /// a typed <see cref="ClickHouseProtocolException"/> if the value exceeds
+    /// <see cref="int.MaxValue"/>. Use this in preference to
+    /// <c>checked((int)ReadVarInt())</c> so that wire-supplied overflows are
+    /// caught as protocol errors rather than as raw <see cref="OverflowException"/>s,
+    /// letting the connection layer tear down a corrupt stream cleanly.
+    /// </summary>
+    /// <param name="fieldName">A short label naming the field being read (for diagnostics).</param>
+    public int ReadVarIntAsInt32(string fieldName)
+        => ProtocolGuards.ToInt32(ReadVarInt(), fieldName);
+
+    /// <summary>
+    /// Reads a little-endian UInt32 and converts it to <see cref="int"/>, throwing
+    /// <see cref="ClickHouseProtocolException"/> if the value exceeds Int32.MaxValue.
+    /// </summary>
+    public int ReadUInt32AsInt32(string fieldName)
+        => ProtocolGuards.ToInt32(ReadUInt32(), fieldName);
+
+    /// <summary>
+    /// Reads a little-endian UInt64 and converts it to <see cref="int"/>, throwing
+    /// <see cref="ClickHouseProtocolException"/> if the value exceeds Int32.MaxValue.
+    /// </summary>
+    public int ReadUInt64AsInt32(string fieldName)
+        => ProtocolGuards.ToInt32(ReadUInt64(), fieldName);
+
+    /// <summary>
     /// Reads a string with VarInt length prefix and UTF-8 encoding.
     /// </summary>
     public string ReadString()
     {
-        var length = (int)ReadVarInt();
+        var length = ReadVarIntAsInt32("string length");
         if (length == 0)
             return string.Empty;
+
+        // Cap-check before allocation. ReadVarIntAsInt32 already rejects length >
+        // Int32.MaxValue; this is a tighter, configurable defence against a hostile
+        // server sending e.g. a 2 GiB string-length prefix that would force the
+        // client to allocate before noticing the wire is bad.
+        if (length > MaxStringLengthBytes)
+            throw new ClickHouseProtocolException(
+                $"Wire string length {length} exceeds configured MaxStringLengthBytes ({MaxStringLengthBytes}); protocol stream is malformed or hostile.");
 
         using var bytes = ReadPooledBytes(length);
         return Encoding.UTF8.GetString(bytes.Span);
@@ -323,39 +395,51 @@ public ref struct ProtocolReader
     /// Used for validating data completeness before parsing.
     /// </summary>
     /// <returns>True if successfully skipped; false if not enough data available.</returns>
+    /// <exception cref="InvalidDataException">
+    /// The encoding exceeds <see cref="VarInt.MaxLength"/> bytes (malformed wire data).
+    /// </exception>
     public bool TrySkipVarInt()
     {
-        byte b;
-        do
+        for (int i = 0; i < VarInt.MaxLength; i++)
         {
-            if (!_reader.TryRead(out b))
+            if (!_reader.TryRead(out byte b))
                 return false;
-        } while ((b & 0x80) != 0);
+            if ((b & 0x80) == 0)
+                return true;
+        }
 
-        return true;
+        throw new InvalidDataException(
+            $"Malformed VarInt: continuation bit set on byte {VarInt.MaxLength} (maximum encoding length).");
     }
 
     /// <summary>
-    /// Tries to read a variable-length encoded unsigned integer without throwing.
+    /// Tries to read a variable-length encoded unsigned integer without throwing on short reads.
     /// </summary>
     /// <param name="value">The value read, or 0 if not enough data.</param>
     /// <returns>True if successfully read; false if not enough data available.</returns>
+    /// <exception cref="InvalidDataException">
+    /// The encoding exceeds <see cref="VarInt.MaxLength"/> bytes (malformed wire data).
+    /// Malformed data is a different failure mode from an incomplete stream and
+    /// surfaces eagerly so callers can't retry-loop on corrupt input.
+    /// </exception>
     public bool TryReadVarInt(out ulong value)
     {
         value = 0;
         int shift = 0;
 
-        byte b;
-        do
+        for (int i = 0; i < VarInt.MaxLength; i++)
         {
-            if (!_reader.TryRead(out b))
+            if (!_reader.TryRead(out byte b))
                 return false;
 
             value |= (ulong)(b & 0x7F) << shift;
+            if ((b & 0x80) == 0)
+                return true;
             shift += 7;
-        } while ((b & 0x80) != 0);
+        }
 
-        return true;
+        throw new InvalidDataException(
+            $"Malformed VarInt: continuation bit set on byte {VarInt.MaxLength} (maximum encoding length).");
     }
 
     /// <summary>
@@ -388,6 +472,13 @@ public ref struct ProtocolReader
 
         if (length == 0)
             return true;
+
+        // Cap check mirrors ReadString — even though TrySkipString doesn't allocate,
+        // a bogus length means the stream is malformed and we want to fail fast
+        // rather than skip-and-resync past a multi-gigabyte phantom payload.
+        if (length > (ulong)MaxStringLengthBytes)
+            throw new ClickHouseProtocolException(
+                $"Wire string length {length} exceeds configured MaxStringLengthBytes ({MaxStringLengthBytes}); protocol stream is malformed or hostile.");
 
         return TrySkipBytes((long)length);
     }

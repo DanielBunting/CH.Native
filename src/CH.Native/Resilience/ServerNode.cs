@@ -68,6 +68,12 @@ public sealed class ServerNode
     /// Marks the server as having experienced a failure.
     /// After 3 consecutive failures, the server is marked as unhealthy.
     /// </summary>
+    /// <remarks>
+    /// Intended for background probes, where a single transient blip should not
+    /// flip the node out of rotation. Caller-observed failures (an actual query
+    /// that just failed against this server) carry stronger signal — those go
+    /// through <see cref="MarkUnhealthyImmediate"/> instead.
+    /// </remarks>
     public void MarkUnhealthy()
     {
         lock (_lock)
@@ -78,6 +84,24 @@ public sealed class ServerNode
             {
                 _isHealthy = false;
             }
+        }
+    }
+
+    /// <summary>
+    /// Marks the server as unhealthy immediately, on the first failure.
+    /// </summary>
+    /// <remarks>
+    /// Used when the failure is observed by an in-flight operation (not a probe).
+    /// One real failed query is enough evidence to take the node out of rotation;
+    /// the background health checker will restore it on the next successful probe.
+    /// </remarks>
+    public void MarkUnhealthyImmediate()
+    {
+        lock (_lock)
+        {
+            _consecutiveFailures++;
+            _lastCheck = DateTime.UtcNow;
+            _isHealthy = false;
         }
     }
 

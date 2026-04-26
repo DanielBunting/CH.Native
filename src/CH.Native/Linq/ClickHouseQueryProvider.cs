@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using System.Reflection;
+using CH.Native.Commands;
 
 namespace CH.Native.Linq;
 
@@ -75,6 +76,18 @@ public sealed class ClickHouseQueryProvider : IQueryProvider
     {
         var visitor = new ClickHouseExpressionVisitor(_context);
         return visitor.Translate(expression);
+    }
+
+    /// <summary>
+    /// Translates the expression tree to SQL together with the captured parameter
+    /// collection (constants and closure-captured scalars are emitted as
+    /// {name:Type} placeholders rather than inline literals).
+    /// </summary>
+    internal (string Sql, ClickHouseParameterCollection Parameters) TranslateToSqlWithParameters(Expression expression)
+    {
+        var visitor = new ClickHouseExpressionVisitor(_context);
+        var sql = visitor.Translate(expression);
+        return (sql, visitor.Parameters);
     }
 
     /// <summary>

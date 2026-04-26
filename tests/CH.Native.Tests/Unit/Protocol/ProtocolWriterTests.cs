@@ -141,4 +141,38 @@ public class ProtocolWriterTests
         // 300 = 0b100101100 -> [0xAC, 0x02]
         Assert.Equal([0xAC, 0x02], buffer.WrittenSpan.ToArray());
     }
+
+    // Bug #11 in audit 05-protocol-buffers-compression.md:
+    // WriteVarInt(int) silently casts a negative int to a huge ulong (e.g. -1 →
+    // 0xFFFFFFFFFFFFFFFF), producing a 10-byte encoding that the server will
+    // parse as a garbage length/count. VarInt on the wire is always an unsigned
+    // length/count in this protocol; a negative argument is always a bug in the
+    // caller and should fail fast rather than silently corrupt the wire format.
+    //
+    // This test encodes the desired contract — reject negatives — so it fails
+    // today (the method returns silently) and passes once the cast is guarded.
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(int.MinValue)]
+    public void WriteVarInt_NegativeInt_ShouldThrow(int value)
+    {
+        // ProtocolWriter is a ref struct, so the call can't be inside a lambda.
+        // Invoke directly via a helper and assert the exception escapes.
+        var buffer = new ArrayBufferWriter<byte>();
+        var threw = false;
+        try
+        {
+            var writer = new ProtocolWriter(buffer);
+            writer.WriteVarInt(value);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            threw = true;
+        }
+
+        Assert.True(threw,
+            $"WriteVarInt({value}) should throw ArgumentOutOfRangeException rather than silently casting to a huge ulong.");
+        // And no partial output on the wire.
+        Assert.Equal(0, buffer.WrittenCount);
+    }
 }

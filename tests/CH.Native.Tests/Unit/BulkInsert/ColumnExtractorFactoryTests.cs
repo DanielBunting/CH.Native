@@ -201,6 +201,146 @@ public class ColumnExtractorFactoryTests
 
     #endregion
 
+    #region String / FixedString null handling (non-nullable column rejects null; nullable accepts)
+
+    [Fact]
+    public void StringExtractor_NonNullable_NullValue_Throws()
+    {
+        // Regression guard: writing null into a non-nullable String column
+        // used to silently coerce to "" via `?? string.Empty`. The fix
+        // surfaces a clear InvalidOperationException naming the offending
+        // column and row index — analytics-quality data depends on it.
+        var property = typeof(StringRow).GetProperty(nameof(StringRow.Value))!;
+        var extractor = ColumnExtractorFactory.Create<StringRow>(property, "value", "String");
+
+        var rows = new List<StringRow>
+        {
+            new() { Value = "first" },
+            new() { Value = null! },
+        };
+
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+
+        InvalidOperationException? caught = null;
+        try
+        {
+            extractor.ExtractAndWrite(ref writer, rows, 2);
+        }
+        catch (InvalidOperationException ex)
+        {
+            caught = ex;
+        }
+
+        Assert.NotNull(caught);
+        Assert.Contains("'value'", caught!.Message);
+        Assert.Contains("non-nullable", caught.Message);
+        Assert.Contains("row 1", caught.Message);
+    }
+
+    [Fact]
+    public void StringExtractor_Nullable_NullValue_WritesBitmapAndEmptyPlaceholder()
+    {
+        // The nullable branch writes the bitmap byte (1 for null) followed
+        // by an empty-string placeholder for the value. This is the wire
+        // format ClickHouse expects for Nullable(String). Pin the bytes so
+        // a future "collapse both branches" refactor cannot silently change
+        // how nulls are encoded.
+        var property = typeof(StringRow).GetProperty(nameof(StringRow.Value))!;
+        var extractor = ColumnExtractorFactory.Create<StringRow>(property, "value", "Nullable(String)");
+
+        var rows = new List<StringRow>
+        {
+            new() { Value = "hi" },
+            new() { Value = null! },
+        };
+
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+        extractor.ExtractAndWrite(ref writer, rows, 2);
+
+        var span = buffer.WrittenSpan;
+        // Layout: 2 bitmap bytes, then 2 length-prefixed strings ("hi", "").
+        // "hi" = VarInt(2) + 'h' + 'i' = 3 bytes; "" = VarInt(0) = 1 byte.
+        Assert.Equal(2 + 3 + 1, span.Length);
+        Assert.Equal(0x00, span[0]); // not null
+        Assert.Equal(0x01, span[1]); // null
+        Assert.Equal(0x02, span[2]); // length 2
+        Assert.Equal((byte)'h', span[3]);
+        Assert.Equal((byte)'i', span[4]);
+        Assert.Equal(0x00, span[5]); // length 0 (empty placeholder)
+    }
+
+    [Fact]
+    public void FixedStringExtractor_NonNullable_NullValue_Throws()
+    {
+        // Same fix as StringExtractor: silent zero-padding looks like a
+        // valid all-zero payload and is indistinguishable from real data.
+        var property = typeof(StringRow).GetProperty(nameof(StringRow.Value))!;
+        var extractor = ColumnExtractorFactory.Create<StringRow>(property, "value", "FixedString(8)");
+
+        var rows = new List<StringRow>
+        {
+            new() { Value = null! },
+        };
+
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+
+        InvalidOperationException? caught = null;
+        try
+        {
+            extractor.ExtractAndWrite(ref writer, rows, 1);
+        }
+        catch (InvalidOperationException ex)
+        {
+            caught = ex;
+        }
+
+        Assert.NotNull(caught);
+        Assert.Contains("'value'", caught!.Message);
+        Assert.Contains("FixedString", caught.Message);
+        Assert.Contains("row 0", caught.Message);
+    }
+
+    [Fact]
+    public void FixedStringExtractor_Nullable_NullValue_WritesBitmapAndZeroPaddedPlaceholder()
+    {
+        // Mirror of StringExtractor_Nullable: pin the wire format for
+        // Nullable(FixedString(N)). The placeholder is a zero-padded buffer
+        // of exactly N bytes (not an empty buffer).
+        var property = typeof(StringRow).GetProperty(nameof(StringRow.Value))!;
+        var extractor = ColumnExtractorFactory.Create<StringRow>(property, "value", "Nullable(FixedString(4))");
+
+        var rows = new List<StringRow>
+        {
+            new() { Value = "ab" },
+            new() { Value = null! },
+        };
+
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+        extractor.ExtractAndWrite(ref writer, rows, 2);
+
+        var span = buffer.WrittenSpan;
+        // Layout: 2 bitmap bytes, then 2 × FixedString(4) = 8 bytes.
+        Assert.Equal(2 + 2 * 4, span.Length);
+        Assert.Equal(0x00, span[0]); // not null
+        Assert.Equal(0x01, span[1]); // null
+        // "ab" zero-padded to 4 bytes
+        Assert.Equal((byte)'a', span[2]);
+        Assert.Equal((byte)'b', span[3]);
+        Assert.Equal(0x00, span[4]);
+        Assert.Equal(0x00, span[5]);
+        // null placeholder: all zero
+        Assert.Equal(0x00, span[6]);
+        Assert.Equal(0x00, span[7]);
+        Assert.Equal(0x00, span[8]);
+        Assert.Equal(0x00, span[9]);
+    }
+
+    #endregion
+
     #region Test POCOs
 
     private class ArrayRow
@@ -237,6 +377,11 @@ public class ColumnExtractorFactoryTests
     private class NullableDecimalRow
     {
         public decimal? Value { get; set; }
+    }
+
+    private class StringRow
+    {
+        public string? Value { get; set; }
     }
 
     #endregion

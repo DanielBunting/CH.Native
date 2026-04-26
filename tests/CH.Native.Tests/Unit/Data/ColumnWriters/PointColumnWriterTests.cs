@@ -85,7 +85,6 @@ public class PointColumnWriterTests
         yield return new object?[] { new Point(3, 4), new Point(3, 4) };
         yield return new object?[] { (3.0, 4.0), new Point(3, 4) };
         yield return new object?[] { Tuple.Create(3.0, 4.0), new Point(3, 4) };
-        yield return new object?[] { null, Point.Zero };
     }
 
     [Fact]

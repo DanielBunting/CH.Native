@@ -6,6 +6,7 @@ using Xunit;
 
 namespace CH.Native.Tests.Unit.Resilience;
 
+[Collection("MeterTests")]
 public class RetryPolicyTests
 {
     [Fact]
@@ -139,6 +140,58 @@ public class RetryPolicyTests
 
         var notTransient = new AggregateException(new InvalidOperationException());
         Assert.False(RetryPolicy.IsTransientException(notTransient));
+    }
+
+    [Theory]
+    [InlineData(typeof(SocketException), true)]
+    [InlineData(typeof(IOException), true)]
+    [InlineData(typeof(TimeoutException), false)]            // transient but wire is fine
+    [InlineData(typeof(InvalidOperationException), false)]
+    public void IsConnectionPoisoning_ClassifiesCommonTypes(Type exceptionType, bool expected)
+    {
+        var ex = (Exception)Activator.CreateInstance(exceptionType)!;
+        Assert.Equal(expected, RetryPolicy.IsConnectionPoisoning(ex));
+    }
+
+    [Fact]
+    public void IsConnectionPoisoning_ClickHouseConnectionException_IsPoisoning()
+    {
+        var ex = new ClickHouseConnectionException("Connection failed");
+        Assert.True(RetryPolicy.IsConnectionPoisoning(ex));
+    }
+
+    [Fact]
+    public void IsConnectionPoisoning_ServerException_IsNotPoisoning()
+    {
+        // code 241 MEMORY_LIMIT_EXCEEDED is transient per the retry policy, but the
+        // wire is fine — the server emits Exception then EndOfStream cleanly.
+        var ex = new ClickHouseServerException(241, "DB::Exception", "OOM", "");
+        Assert.False(RetryPolicy.IsConnectionPoisoning(ex));
+
+        // code 159 TIMEOUT_EXCEEDED — same logic.
+        var timeout = new ClickHouseServerException(159, "DB::Exception", "Timeout", "");
+        Assert.False(RetryPolicy.IsConnectionPoisoning(timeout));
+    }
+
+    [Fact]
+    public void IsConnectionPoisoning_AggregateUnwrapsToAnyPoisoningInner()
+    {
+        var ex = new AggregateException(
+            new InvalidOperationException(),
+            new SocketException());
+        Assert.True(RetryPolicy.IsConnectionPoisoning(ex));
+
+        var none = new AggregateException(
+            new InvalidOperationException(),
+            new TimeoutException());
+        Assert.False(RetryPolicy.IsConnectionPoisoning(none));
+    }
+
+    [Fact]
+    public void IsConnectionPoisoning_UnwrapsInnerException()
+    {
+        var ex = new InvalidOperationException("wrapper", new IOException("Broken pipe"));
+        Assert.True(RetryPolicy.IsConnectionPoisoning(ex));
     }
 
     [Fact]
@@ -370,5 +423,70 @@ public class RetryPolicyTests
         });
 
         Assert.Equal(0, retryCount);
+    }
+
+    // Audit finding #23: A custom ShouldRetry that misclassifies a permanent
+    // failure as transient must NOT loop forever — MaxRetries is the hard cap.
+    // These tests prove the cap holds against an aggressive "always retry"
+    // delegate.
+    [Fact]
+    public async Task ExecuteAsync_AlwaysRetryDelegate_StillBoundedByMaxRetries()
+    {
+        var options = new RetryOptions
+        {
+            MaxRetries = 3,
+            BaseDelay = TimeSpan.FromMilliseconds(1),
+            ShouldRetry = _ => true, // claim every exception is transient
+        };
+        var policy = new RetryPolicy(options);
+        var callCount = 0;
+
+        await Assert.ThrowsAsync<AggregateException>(async () =>
+        {
+            await policy.ExecuteAsync(async _ =>
+            {
+                callCount++;
+                await Task.Yield();
+                throw new InvalidOperationException("permanent failure");
+#pragma warning disable CS0162
+                return 0;
+#pragma warning restore CS0162
+            });
+        });
+
+        // 1 initial attempt + MaxRetries(3) retries = 4 total
+        Assert.Equal(4, callCount);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(5)]
+    [InlineData(10)]
+    public async Task ExecuteAsync_AlwaysRetryDelegate_AttemptsEqualsMaxRetriesPlusOne(int maxRetries)
+    {
+        var options = new RetryOptions
+        {
+            MaxRetries = maxRetries,
+            BaseDelay = TimeSpan.FromMilliseconds(1),
+            ShouldRetry = _ => true,
+        };
+        var policy = new RetryPolicy(options);
+        var callCount = 0;
+
+        await Assert.ThrowsAsync(maxRetries == 0 ? typeof(InvalidOperationException) : typeof(AggregateException), async () =>
+        {
+            await policy.ExecuteAsync(async _ =>
+            {
+                callCount++;
+                await Task.Yield();
+                throw new InvalidOperationException();
+#pragma warning disable CS0162
+                return 0;
+#pragma warning restore CS0162
+            });
+        });
+
+        Assert.Equal(maxRetries + 1, callCount);
     }
 }

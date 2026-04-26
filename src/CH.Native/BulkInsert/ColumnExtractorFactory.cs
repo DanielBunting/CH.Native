@@ -667,11 +667,18 @@ public static class ColumnExtractorFactory
             }
             else
             {
-                // Write values directly
+                // Write values directly. Null into a non-nullable column is a
+                // type-system violation — surface it loudly rather than coerce
+                // to "" and silently land an empty row in the database.
                 for (int i = 0; i < rowCount; i++)
                 {
                     var value = _getter(rows[i]);
-                    writer.WriteString(value ?? string.Empty);
+                    if (value is null)
+                        throw new InvalidOperationException(
+                            $"Column '{ColumnName}' is non-nullable {TypeName} but row {i} has a null value. " +
+                            $"Either declare the column as Nullable({TypeName}), or ensure the source " +
+                            $"property is non-null before AddAsync.");
+                    writer.WriteString(value);
                 }
             }
         }
@@ -715,9 +722,16 @@ public static class ColumnExtractorFactory
             }
             else
             {
+                // Non-nullable: surface null loudly rather than write a
+                // zero-padded buffer that looks like a valid empty value.
                 for (int i = 0; i < rowCount; i++)
                 {
                     var value = _getter(rows[i]);
+                    if (value is null)
+                        throw new InvalidOperationException(
+                            $"Column '{ColumnName}' is non-nullable {TypeName} but row {i} has a null value. " +
+                            $"Either declare the column as Nullable({TypeName}), or ensure the source " +
+                            $"property is non-null before AddAsync.");
                     WriteFixedString(ref writer, value);
                 }
             }
@@ -766,9 +780,13 @@ public static class ColumnExtractorFactory
             for (int i = 0; i < rowCount; i++)
             {
                 var value = _getter(rows[i]);
-                var utcValue = value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
-                var unixSeconds = (uint)((utcValue - UnixEpoch).TotalSeconds);
-                writer.WriteUInt32(unixSeconds);
+                var utcValue = value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : value;
+                var seconds = (long)(utcValue - UnixEpoch).TotalSeconds;
+                if (seconds < 0 || seconds > uint.MaxValue)
+                    throw new ArgumentOutOfRangeException(nameof(rows),
+                        $"DateTime {value:O} is outside the legacy DateTime range " +
+                        $"[1970-01-01, 2106-02-07 UTC]. Use DateTime64 for wider ranges.");
+                writer.WriteUInt32((uint)seconds);
             }
         }
     }
@@ -806,9 +824,13 @@ public static class ColumnExtractorFactory
                 var value = _getter(rows[i]);
                 if (value.HasValue)
                 {
-                    var utcValue = value.Value.Kind == DateTimeKind.Utc ? value.Value : value.Value.ToUniversalTime();
-                    var unixSeconds = (uint)((utcValue - UnixEpoch).TotalSeconds);
-                    writer.WriteUInt32(unixSeconds);
+                    var utcValue = value.Value.Kind == DateTimeKind.Local ? value.Value.ToUniversalTime() : value.Value;
+                    var seconds = (long)(utcValue - UnixEpoch).TotalSeconds;
+                    if (seconds < 0 || seconds > uint.MaxValue)
+                        throw new ArgumentOutOfRangeException(nameof(rows),
+                            $"DateTime {value.Value:O} is outside the legacy DateTime range " +
+                            $"[1970-01-01, 2106-02-07 UTC]. Use DateTime64 for wider ranges.");
+                    writer.WriteUInt32((uint)seconds);
                 }
                 else
                 {
@@ -822,7 +844,8 @@ public static class ColumnExtractorFactory
     {
         private readonly Func<TRow, DateTime> _getter;
         private readonly int _precision;
-        private readonly long _ticksMultiplier;
+        private readonly long _ticksPerUnit;
+        private readonly long _highPrecisionMultiplier;
         private readonly bool _isClickHouseNullable;
         private static readonly DateTime UnixEpoch = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
@@ -835,7 +858,9 @@ public static class ColumnExtractorFactory
             ColumnName = columnName;
             TypeName = typeName;
             _precision = precision;
-            _ticksMultiplier = (long)Math.Pow(10, precision);
+            var unitsPerSecond = (long)Math.Pow(10, precision);
+            _ticksPerUnit = precision <= 7 ? TimeSpan.TicksPerSecond / unitsPerSecond : 0;
+            _highPrecisionMultiplier = precision > 7 ? (long)Math.Pow(10, precision - 7) : 0;
             _isClickHouseNullable = isClickHouseNullable;
         }
 
@@ -849,12 +874,17 @@ public static class ColumnExtractorFactory
 
             for (int i = 0; i < rowCount; i++)
             {
-                var value = _getter(rows[i]);
-                var utcValue = value.Kind == DateTimeKind.Utc ? value : value.ToUniversalTime();
-                var totalSeconds = (utcValue - UnixEpoch).TotalSeconds;
-                var scaledValue = (long)(totalSeconds * _ticksMultiplier);
-                writer.WriteInt64(scaledValue);
+                writer.WriteInt64(Encode(_getter(rows[i])));
             }
+        }
+
+        private long Encode(DateTime value)
+        {
+            var utcValue = value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : value;
+            var ticks = (utcValue - UnixEpoch).Ticks;
+            return _precision > 7
+                ? ticks * _highPrecisionMultiplier
+                : ticks / _ticksPerUnit;
         }
     }
 
@@ -862,7 +892,8 @@ public static class ColumnExtractorFactory
     {
         private readonly Func<TRow, DateTime?> _getter;
         private readonly int _precision;
-        private readonly long _ticksMultiplier;
+        private readonly long _ticksPerUnit;
+        private readonly long _highPrecisionMultiplier;
         private readonly bool _isClickHouseNullable;
         private static readonly DateTime UnixEpoch = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
@@ -875,7 +906,9 @@ public static class ColumnExtractorFactory
             ColumnName = columnName;
             TypeName = typeName;
             _precision = precision;
-            _ticksMultiplier = (long)Math.Pow(10, precision);
+            var unitsPerSecond = (long)Math.Pow(10, precision);
+            _ticksPerUnit = precision <= 7 ? TimeSpan.TicksPerSecond / unitsPerSecond : 0;
+            _highPrecisionMultiplier = precision > 7 ? (long)Math.Pow(10, precision - 7) : 0;
             _isClickHouseNullable = isClickHouseNullable;
         }
 
@@ -893,18 +926,17 @@ public static class ColumnExtractorFactory
             for (int i = 0; i < rowCount; i++)
             {
                 var value = _getter(rows[i]);
-                if (value.HasValue)
-                {
-                    var utcValue = value.Value.Kind == DateTimeKind.Utc ? value.Value : value.Value.ToUniversalTime();
-                    var totalSeconds = (utcValue - UnixEpoch).TotalSeconds;
-                    var scaledValue = (long)(totalSeconds * _ticksMultiplier);
-                    writer.WriteInt64(scaledValue);
-                }
-                else
-                {
-                    writer.WriteInt64(0);
-                }
+                writer.WriteInt64(value.HasValue ? Encode(value.Value) : 0);
             }
+        }
+
+        private long Encode(DateTime value)
+        {
+            var utcValue = value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : value;
+            var ticks = (utcValue - UnixEpoch).Ticks;
+            return _precision > 7
+                ? ticks * _highPrecisionMultiplier
+                : ticks / _ticksPerUnit;
         }
     }
 
@@ -1180,7 +1212,9 @@ public static class ColumnExtractorFactory
     private sealed class DateTimeOffsetExtractor<TRow> : IColumnExtractor<TRow>
     {
         private readonly Func<TRow, DateTimeOffset> _getter;
-        private readonly long _ticksMultiplier;
+        private readonly int _precision;
+        private readonly long _ticksPerUnit;
+        private readonly long _highPrecisionMultiplier;
         private readonly bool _isDateTime64;
         private readonly bool _isClickHouseNullable;
         private static readonly DateTimeOffset UnixEpoch = new(1970, 1, 1, 0, 0, 0, TimeSpan.Zero);
@@ -1193,7 +1227,10 @@ public static class ColumnExtractorFactory
             _getter = getter;
             ColumnName = columnName;
             TypeName = typeName;
-            _ticksMultiplier = (long)Math.Pow(10, precision);
+            _precision = precision;
+            var unitsPerSecond = (long)Math.Pow(10, precision);
+            _ticksPerUnit = precision <= 7 ? TimeSpan.TicksPerSecond / unitsPerSecond : 0;
+            _highPrecisionMultiplier = precision > 7 ? (long)Math.Pow(10, precision - 7) : 0;
             _isDateTime64 = isDateTime64;
             _isClickHouseNullable = isClickHouseNullable;
         }
@@ -1209,23 +1246,37 @@ public static class ColumnExtractorFactory
             for (int i = 0; i < rowCount; i++)
             {
                 var value = _getter(rows[i]);
-                var totalSeconds = (value.UtcDateTime - UnixEpoch.UtcDateTime).TotalSeconds;
                 if (_isDateTime64)
                 {
-                    writer.WriteInt64((long)(totalSeconds * _ticksMultiplier));
+                    writer.WriteInt64(EncodeDateTime64(value));
                 }
                 else
                 {
-                    writer.WriteUInt32((uint)Math.Max(0, Math.Min(totalSeconds, uint.MaxValue)));
+                    var seconds = (long)(value.UtcDateTime - UnixEpoch.UtcDateTime).TotalSeconds;
+                    if (seconds < 0 || seconds > uint.MaxValue)
+                        throw new ArgumentOutOfRangeException(nameof(rows),
+                            $"DateTimeOffset {value:O} is outside the legacy DateTime range " +
+                            $"[1970-01-01, 2106-02-07 UTC]. Use DateTime64 for wider ranges.");
+                    writer.WriteUInt32((uint)seconds);
                 }
             }
+        }
+
+        private long EncodeDateTime64(DateTimeOffset value)
+        {
+            var ticks = (value.UtcDateTime - UnixEpoch.UtcDateTime).Ticks;
+            return _precision > 7
+                ? ticks * _highPrecisionMultiplier
+                : ticks / _ticksPerUnit;
         }
     }
 
     private sealed class NullableDateTimeOffsetExtractor<TRow> : IColumnExtractor<TRow>
     {
         private readonly Func<TRow, DateTimeOffset?> _getter;
-        private readonly long _ticksMultiplier;
+        private readonly int _precision;
+        private readonly long _ticksPerUnit;
+        private readonly long _highPrecisionMultiplier;
         private readonly bool _isDateTime64;
         private readonly bool _isClickHouseNullable;
         private static readonly DateTimeOffset UnixEpoch = new(1970, 1, 1, 0, 0, 0, TimeSpan.Zero);
@@ -1238,7 +1289,10 @@ public static class ColumnExtractorFactory
             _getter = getter;
             ColumnName = columnName;
             TypeName = typeName;
-            _ticksMultiplier = (long)Math.Pow(10, precision);
+            _precision = precision;
+            var unitsPerSecond = (long)Math.Pow(10, precision);
+            _ticksPerUnit = precision <= 7 ? TimeSpan.TicksPerSecond / unitsPerSecond : 0;
+            _highPrecisionMultiplier = precision > 7 ? (long)Math.Pow(10, precision - 7) : 0;
             _isDateTime64 = isDateTime64;
             _isClickHouseNullable = isClickHouseNullable;
         }
@@ -1259,22 +1313,18 @@ public static class ColumnExtractorFactory
                 var value = _getter(rows[i]);
                 if (_isDateTime64)
                 {
-                    if (value.HasValue)
-                    {
-                        var totalSeconds = (value.Value.UtcDateTime - UnixEpoch.UtcDateTime).TotalSeconds;
-                        writer.WriteInt64((long)(totalSeconds * _ticksMultiplier));
-                    }
-                    else
-                    {
-                        writer.WriteInt64(0);
-                    }
+                    writer.WriteInt64(value.HasValue ? EncodeDateTime64(value.Value) : 0);
                 }
                 else
                 {
                     if (value.HasValue)
                     {
-                        var totalSeconds = (value.Value.UtcDateTime - UnixEpoch.UtcDateTime).TotalSeconds;
-                        writer.WriteUInt32((uint)Math.Max(0, Math.Min(totalSeconds, uint.MaxValue)));
+                        var seconds = (long)(value.Value.UtcDateTime - UnixEpoch.UtcDateTime).TotalSeconds;
+                        if (seconds < 0 || seconds > uint.MaxValue)
+                            throw new ArgumentOutOfRangeException(nameof(rows),
+                                $"DateTimeOffset {value.Value:O} is outside the legacy DateTime range " +
+                                $"[1970-01-01, 2106-02-07 UTC]. Use DateTime64 for wider ranges.");
+                        writer.WriteUInt32((uint)seconds);
                     }
                     else
                     {
@@ -1282,6 +1332,14 @@ public static class ColumnExtractorFactory
                     }
                 }
             }
+        }
+
+        private long EncodeDateTime64(DateTimeOffset value)
+        {
+            var ticks = (value.UtcDateTime - UnixEpoch.UtcDateTime).Ticks;
+            return _precision > 7
+                ? ticks * _highPrecisionMultiplier
+                : ticks / _ticksPerUnit;
         }
     }
 

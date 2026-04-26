@@ -87,10 +87,7 @@ public sealed class ColumnSkipperFactory
             throw new FormatException($"Nullable requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
-        if (innerType.IsDynamic)
-            throw new FormatException("Nullable(Dynamic) is not allowed.");
-        if (innerType.IsVariant)
-            throw new FormatException("Nullable(Variant) is not allowed.");
+        NullableInnerValidator.EnsureAllowedInsideNullable(innerType);
 
         var innerSkipper = CreateSkipperForType(innerType);
 
@@ -163,10 +160,7 @@ public sealed class ColumnSkipperFactory
             throw new FormatException($"LowCardinality requires exactly one type argument, got: {type.OriginalTypeName}");
 
         var innerType = type.TypeArguments[0];
-        if (innerType.IsDynamic)
-            throw new FormatException("LowCardinality(Dynamic) is not allowed by ClickHouse.");
-        if (innerType.IsVariant)
-            throw new FormatException("LowCardinality(Variant) is not allowed by ClickHouse.");
+        LowCardinalityInnerValidator.EnsureAllowedInsideLowCardinality(innerType);
 
         // For Nullable inner types, ClickHouse serializes the LowCardinality dictionary
         // using the base type (without the Nullable wrapper). Strip it for correct skipping.
@@ -187,14 +181,7 @@ public sealed class ColumnSkipperFactory
             throw new FormatException($"Variant requires at least one arm, got: {type.OriginalTypeName}");
 
         foreach (var arm in type.TypeArguments)
-        {
-            if (arm.IsNullable)
-                throw new FormatException(
-                    $"Nullable is not allowed inside Variant (arm: {arm.OriginalTypeName}).");
-            if (arm.IsLowCardinality)
-                throw new FormatException(
-                    $"LowCardinality is not allowed inside Variant (arm: {arm.OriginalTypeName}).");
-        }
+            VariantArmValidator.EnsureAllowedAsVariantArm(arm);
 
         var innerSkippers = type.TypeArguments
             .Select(CreateSkipperForType)

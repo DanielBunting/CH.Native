@@ -78,7 +78,7 @@ public sealed class ResilientConnection : IAsyncDisposable
                 settings.Servers,
                 settings,
                 settings.Resilience?.HealthCheckInterval,
-                healthCheckTimeout: null,
+                settings.Resilience?.HealthCheckTimeout,
                 logger);
             _loadBalancer = new LoadBalancer(_healthChecker, settings.LoadBalancing);
         }
@@ -256,9 +256,18 @@ public sealed class ResilientConnection : IAsyncDisposable
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Resilience features are applied to connection establishment and the overall operation.
-    /// However, once streaming begins from the async enumerable, partial data may have been
-    /// sent before a failure occurs. Consider using transactional semantics if atomicity is required.
+    /// A single <c>BulkInsertAsync</c> call corresponds to one ClickHouse native-protocol
+    /// INSERT statement. The server only commits an INSERT when it receives the empty
+    /// terminator block (sent internally by <c>BulkInserter.CompleteAsync</c>); blocks
+    /// streamed beforehand are held server-side as uncommitted temporary parts. If the
+    /// connection or the source enumerable fails mid-stream, the server cancels the
+    /// in-progress sink and <strong>no rows are committed for that call</strong>.
+    /// </para>
+    /// <para>
+    /// Resilience covers connection establishment only. Once enumeration begins, no
+    /// retry is attempted, because rows already pulled from the <see cref="IAsyncEnumerable{T}"/>
+    /// cannot be re-yielded. If you need partial-commit semantics, split the source
+    /// into smaller chunks and issue a separate <c>BulkInsertAsync</c> call for each.
     /// </para>
     /// </remarks>
     /// <typeparam name="T">The POCO type representing a row.</typeparam>
@@ -330,13 +339,24 @@ public sealed class ResilientConnection : IAsyncDisposable
             }
 
             ClickHouseConnection connection;
-            if (circuitBreaker != null)
+            try
             {
-                connection = await circuitBreaker.ExecuteAsync(DoConnect, ct).ConfigureAwait(false);
+                if (circuitBreaker != null)
+                {
+                    connection = await circuitBreaker.ExecuteAsync(DoConnect, ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    connection = await DoConnect(ct).ConfigureAwait(false);
+                }
             }
-            else
+            catch (Exception ex) when (RetryPolicy.IsTransientException(ex))
             {
-                connection = await DoConnect(ct).ConfigureAwait(false);
+                // Connect attempts that hit a transient failure are real, in-flight
+                // observations of a bad server — take it out of rotation so the next
+                // retry picks a different one. The background probe will restore it.
+                _loadBalancer?.MarkServerFailed(server.Value);
+                throw;
             }
 
             _currentConnection = connection;
@@ -364,13 +384,46 @@ public sealed class ResilientConnection : IAsyncDisposable
     {
         ThrowIfDisposed();
 
+        // Track the previous attempt's exception so retries can decide whether the
+        // wire is poisoned. ClickHouseConnection.IsOpen does not reflect peer-side
+        // resets — _isOpen is only flipped to false in DisposeAsync — so we have
+        // to evict the connection explicitly here. EnsureConnectedAsync (called
+        // inside `operation`) then sees a null _currentConnection and reopens.
+        Exception? lastException = null;
+
+        async Task<T> WrappedOperation(CancellationToken ct)
+        {
+            if (lastException is not null && RetryPolicy.IsConnectionPoisoning(lastException))
+            {
+                await CloseCurrentConnectionAsync().ConfigureAwait(false);
+            }
+
+            try
+            {
+                return await operation(ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Tag the current server as failed each time we observe a transient
+                // exception against it, not only when retries are exhausted. Without
+                // this, a mid-flight failure that succeeds on retry would never
+                // surface to the LB, leaving the dead server in rotation.
+                if (_currentServer.HasValue && RetryPolicy.IsTransientException(ex))
+                {
+                    _loadBalancer?.MarkServerFailed(_currentServer.Value);
+                }
+                lastException = ex;
+                throw;
+            }
+        }
+
         try
         {
             if (_retryPolicy != null)
             {
-                return await _retryPolicy.ExecuteAsync(operation, cancellationToken).ConfigureAwait(false);
+                return await _retryPolicy.ExecuteAsync(WrappedOperation, cancellationToken).ConfigureAwait(false);
             }
-            return await operation(cancellationToken).ConfigureAwait(false);
+            return await WrappedOperation(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (RetryPolicy.IsTransientException(ex) && _currentServer.HasValue)
         {

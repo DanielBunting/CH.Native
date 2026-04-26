@@ -52,6 +52,12 @@ public sealed class TupleColumnWriter : IColumnWriter<object[]>
     /// <inheritdoc />
     public Type ClrType => typeof(object[]);
 
+    /// <inheritdoc />
+    // Nullable(Tuple(...)) wrapper substitutes this empty arity-sized array
+    // under a null-bitmap byte. Each inner element writer sees a default
+    // slot; the bitmap tells the server to ignore the row.
+    public object[] NullPlaceholder => new object[_elementWriters.Length];
+
     /// <summary>
     /// Gets the number of elements in the tuple.
     /// </summary>
@@ -76,13 +82,23 @@ public sealed class TupleColumnWriter : IColumnWriter<object[]>
     /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, object[][] values)
     {
+        // Reject null rows up-front — Tuple(...) is non-nullable; Nullable(Tuple(...))
+        // wraps with NullableRefColumnWriter which substitutes an arity-sized array
+        // before delegating here. Without this check, inner element writers see null
+        // and silently default (zero bytes for numerics — data corruption).
+        for (int row = 0; row < values.Length; row++)
+        {
+            if (values[row] is null)
+                throw NullAt(row);
+        }
+
         // Write in columnar layout: all first elements, then all second elements, etc.
         for (int e = 0; e < _elementWriters.Length; e++)
         {
             var elementValues = new object?[values.Length];
             for (int row = 0; row < values.Length; row++)
             {
-                elementValues[row] = values[row]?[e];
+                elementValues[row] = values[row][e];
             }
             _elementWriters[e].WriteColumn(ref writer, elementValues);
         }
@@ -91,6 +107,9 @@ public sealed class TupleColumnWriter : IColumnWriter<object[]>
     /// <inheritdoc />
     public void WriteValue(ref ProtocolWriter writer, object[] value)
     {
+        if (value is null)
+            throw NullAt(rowIndex: -1);
+
         // Write each element in order
         for (int i = 0; i < _elementWriters.Length; i++)
         {
@@ -103,17 +122,21 @@ public sealed class TupleColumnWriter : IColumnWriter<object[]>
         var tuples = new object[values.Length][];
         for (int i = 0; i < values.Length; i++)
         {
-            tuples[i] = ExtractElements(values[i]);
+            if (values[i] is null)
+                throw NullAt(i);
+            tuples[i] = ExtractElements(values[i], rowIndex: i);
         }
         WriteColumn(ref writer, tuples);
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)
     {
-        WriteValue(ref writer, ExtractElements(value));
+        if (value is null)
+            throw NullAt(rowIndex: -1);
+        WriteValue(ref writer, ExtractElements(value, rowIndex: -1));
     }
 
-    private static object[] ExtractElements(object? value)
+    private static object[] ExtractElements(object? value, int rowIndex)
     {
         if (value is object[] array)
             return array;
@@ -126,6 +149,18 @@ public sealed class TupleColumnWriter : IColumnWriter<object[]>
             return elements;
         }
 
-        return Array.Empty<object>();
+        var where = rowIndex >= 0 ? $" at row {rowIndex}" : string.Empty;
+        throw new InvalidOperationException(
+            $"TupleColumnWriter received unsupported value type {value!.GetType().Name}{where}. " +
+            $"Expected object[] or ITuple.");
+    }
+
+    private static InvalidOperationException NullAt(int rowIndex)
+    {
+        var where = rowIndex >= 0 ? $" at row {rowIndex}" : string.Empty;
+        return new InvalidOperationException(
+            $"TupleColumnWriter received null{where}. The Tuple column type " +
+            $"is non-nullable; declare the column as Nullable(Tuple(...)) and wrap " +
+            $"this writer with NullableRefColumnWriter, or ensure source values are non-null.");
     }
 }

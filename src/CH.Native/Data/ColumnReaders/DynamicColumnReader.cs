@@ -30,6 +30,12 @@ public sealed class DynamicColumnReader : IColumnReader
     private readonly int _configuredMaxTypes;
     private readonly string _typeName;
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DynamicColumnReader"/> class.
+    /// </summary>
+    /// <param name="factory">Factory used to resolve readers for each concrete arm type.</param>
+    /// <param name="configuredMaxTypes">Maximum number of concrete types declared on the column
+    /// (matches <c>Dynamic(max_types=N)</c>; defaults to 32).</param>
     public DynamicColumnReader(ColumnReaderFactory factory, int configuredMaxTypes = 32)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
@@ -57,7 +63,7 @@ public sealed class DynamicColumnReader : IColumnReader
     /// <inheritdoc />
     public ITypedColumn ReadTypedColumn(ref ProtocolReader reader, int rowCount)
     {
-        var numberOfTypes = checked((int)reader.ReadVarInt());
+        var numberOfTypes = reader.ReadVarIntAsInt32("Dynamic numberOfTypes");
 
         var typeNames = new string[numberOfTypes];
         var innerReaders = new IColumnReader[numberOfTypes];
@@ -159,7 +165,7 @@ public sealed class DynamicColumnReader : IColumnReader
         else
         {
             for (int i = 0; i < indexes.Length; i++)
-                indexes[i] = checked((int)reader.ReadUInt32());
+                indexes[i] = reader.ReadUInt32AsInt32("Dynamic index");
         }
     }
 

@@ -26,11 +26,13 @@ internal sealed class SqlBuilder
     private string? _aggregateColumn;
 
     /// <summary>
-    /// Sets the table name.
+    /// Sets the table name. The name is quoted via <see cref="ClickHouseIdentifier.Quote"/>
+    /// at this boundary so callers always supply raw identifiers and the FROM clause is
+    /// safe by construction against table-name injection.
     /// </summary>
     public SqlBuilder Table(string tableName)
     {
-        _tableName = tableName;
+        _tableName = Sql.ClickHouseIdentifier.Quote(tableName);
         return this;
     }
 

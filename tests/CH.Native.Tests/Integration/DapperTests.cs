@@ -249,14 +249,17 @@ public class DapperTests
     //        "SELECT count() FROM t WHERE hasAny([id], @ids)",
     //        new ClickHouseParameterCollection { { "ids", new[] { 1, 2, 3 } } });
 
-    [Fact(Skip = "Dapper inline expands arrays to tuples - use direct ADO.NET for array params (see workarounds above)")]
+    [Fact]
     public async Task Query_WithArrayParameter_FiltersCorrectly()
     {
         await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
-        // Use hasAny to check if value is in array parameter
-        var ids = new int[] { 2, 4, 6, 8 };
+        // Use hasAny to check if value is in array parameter. `number` from
+        // `numbers(10)` is UInt64, so bind the array as `ulong[]` to match —
+        // `hasAny(Array(UInt64), Array(Int32))` has no common supertype and
+        // would fail at the server.
+        var ids = new ulong[] { 2, 4, 6, 8 };
         var results = await connection.QueryAsync<NumberResult>(
             "SELECT toUInt64(number) as Value FROM numbers(10) WHERE hasAny([number], @ids)",
             new { ids });
@@ -266,7 +269,7 @@ public class DapperTests
         Assert.Equal(new ulong[] { 2, 4, 6, 8 }, list.Select(r => r.Value).OrderBy(x => x).ToArray());
     }
 
-    [Fact(Skip = "Dapper inline expands arrays to tuples - use direct ADO.NET for array params (see workarounds above)")]
+    [Fact]
     public async Task Query_WithStringArrayParameter_WorksCorrectly()
     {
         await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
@@ -278,6 +281,147 @@ public class DapperTests
             new { names });
 
         Assert.Equal(3, result.Value);
+    }
+
+    #endregion
+
+    #region Array Parameter Matrix
+
+    // Theory-based coverage of every CLR array type registered by
+    // ClickHouseDapperIntegration.Register(). The body round-trips the array via
+    // `length(@arr)` so the server definitively sees an Array(T) rather than a
+    // tuple — if Dapper's list-expansion re-emerges for any of these, the query
+    // fails at the server with an `Illegal type Tuple(...)` error. Guards against
+    // silent regressions where a handler is dropped from the registration list.
+
+    // Note: `bool[]` is not covered by this matrix. The CH.Native parameter
+    // serializer renders Bool as `0`/`1` (matching scalar Bool), but ClickHouse's
+    // Array(Bool) text parser expects `true`/`false` and rejects digits inside
+    // the brackets. The Dapper handler for `bool[]` is still registered — direct
+    // ADO.NET users who need Array(Bool) parameters hit the same serializer
+    // limitation regardless of Dapper; it is tracked as a separate concern.
+
+    [Fact]
+    public async Task ArrayParam_ByteArray_Works()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        var r = await connection.QueryFirstAsync<ScalarResult>(
+            "SELECT toInt32(length(@arr)) as Value", new { arr = new byte[] { 1, 2, 3, 4 } });
+        Assert.Equal(4, r.Value);
+    }
+
+    [Fact]
+    public async Task ArrayParam_ShortArray_Works()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        var r = await connection.QueryFirstAsync<ScalarResult>(
+            "SELECT toInt32(length(@arr)) as Value", new { arr = new short[] { 10, 20, 30 } });
+        Assert.Equal(3, r.Value);
+    }
+
+    [Fact]
+    public async Task ArrayParam_UShortArray_Works()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        var r = await connection.QueryFirstAsync<ScalarResult>(
+            "SELECT toInt32(length(@arr)) as Value", new { arr = new ushort[] { 1, 2 } });
+        Assert.Equal(2, r.Value);
+    }
+
+    [Fact]
+    public async Task ArrayParam_UIntArray_Works()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        var r = await connection.QueryFirstAsync<ScalarResult>(
+            "SELECT toInt32(length(@arr)) as Value", new { arr = new uint[] { 100U, 200U } });
+        Assert.Equal(2, r.Value);
+    }
+
+    [Fact]
+    public async Task ArrayParam_LongArray_Works()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        var r = await connection.QueryFirstAsync<ScalarResult>(
+            "SELECT toInt32(length(@arr)) as Value", new { arr = new long[] { 1L, 2L, 3L, 4L, 5L } });
+        Assert.Equal(5, r.Value);
+    }
+
+    [Fact]
+    public async Task ArrayParam_ULongArray_Works()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        var r = await connection.QueryFirstAsync<ScalarResult>(
+            "SELECT toInt32(length(@arr)) as Value", new { arr = new ulong[] { 1UL, 2UL } });
+        Assert.Equal(2, r.Value);
+    }
+
+    [Fact]
+    public async Task ArrayParam_FloatArray_Works()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        var r = await connection.QueryFirstAsync<ScalarResult>(
+            "SELECT toInt32(length(@arr)) as Value", new { arr = new[] { 1.1f, 2.2f, 3.3f } });
+        Assert.Equal(3, r.Value);
+    }
+
+    [Fact]
+    public async Task ArrayParam_DoubleArray_Works()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        var r = await connection.QueryFirstAsync<ScalarResult>(
+            "SELECT toInt32(length(@arr)) as Value", new { arr = new[] { 1.1, 2.2, 3.3, 4.4 } });
+        Assert.Equal(4, r.Value);
+    }
+
+    [Fact]
+    public async Task ArrayParam_DecimalArray_Works()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        var r = await connection.QueryFirstAsync<ScalarResult>(
+            "SELECT toInt32(length(@arr)) as Value", new { arr = new[] { 1.5m, 2.5m } });
+        Assert.Equal(2, r.Value);
+    }
+
+    [Fact]
+    public async Task ArrayParam_GuidArray_Works()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        var r = await connection.QueryFirstAsync<ScalarResult>(
+            "SELECT toInt32(length(@arr)) as Value",
+            new { arr = new[] { Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid() } });
+        Assert.Equal(3, r.Value);
+    }
+
+    [Fact]
+    public async Task ArrayParam_DateTimeArray_Works()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        var r = await connection.QueryFirstAsync<ScalarResult>(
+            "SELECT toInt32(length(@arr)) as Value",
+            new { arr = new[] { new DateTime(2024, 1, 1), new DateTime(2024, 2, 1) } });
+        Assert.Equal(2, r.Value);
+    }
+
+    [Fact]
+    public async Task ArrayParam_DateOnlyArray_Works()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        var r = await connection.QueryFirstAsync<ScalarResult>(
+            "SELECT toInt32(length(@arr)) as Value",
+            new { arr = new[] { new DateOnly(2024, 1, 1), new DateOnly(2024, 2, 1), new DateOnly(2024, 3, 1) } });
+        Assert.Equal(3, r.Value);
     }
 
     #endregion

@@ -1,9 +1,11 @@
 using CH.Native.Resilience;
 using CH.Native.Telemetry;
+using Microsoft.Extensions.Time.Testing;
 using Xunit;
 
 namespace CH.Native.Tests.Unit.Logging;
 
+[Collection("MeterTests")]
 public class CircuitBreakerLoggingTests
 {
     [Fact]
@@ -30,19 +32,18 @@ public class CircuitBreakerLoggingTests
     }
 
     [Fact]
-    public async Task RecoveryToClosed_LogsEventId22Information()
+    public void RecoveryToClosed_LogsEventId22Information()
     {
         var capture = new CaptureLoggerProvider();
         var logger = new ClickHouseLogger(capture);
+        var time = new FakeTimeProvider();
         var options = new CircuitBreakerOptions
         {
             FailureThreshold = 1,
-            // Longer duration so `breaker.State` right after RecordFailure reliably
-            // reads Open on slow runners, without yet auto-transitioning to HalfOpen.
-            OpenDuration = TimeSpan.FromMilliseconds(500),
+            OpenDuration = TimeSpan.FromSeconds(30),
             FailureWindow = TimeSpan.FromMinutes(1)
         };
-        var breaker = new CircuitBreaker(options, logger)
+        var breaker = new CircuitBreaker(options, logger, time)
         {
             ServerAddress = "host:9000"
         };
@@ -50,7 +51,7 @@ public class CircuitBreakerLoggingTests
         breaker.RecordFailure();
         Assert.Equal(CircuitBreakerState.Open, breaker.State);
 
-        await Task.Delay(600);
+        time.Advance(TimeSpan.FromSeconds(31));
         _ = breaker.State; // triggers Open -> HalfOpen transition
         breaker.RecordSuccess(); // HalfOpen -> Closed
 

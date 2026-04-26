@@ -25,40 +25,70 @@ public class ParameterSerializerTests
     [Fact]
     public void EscapeString_StringWithBackslash_EscapesBackslash()
     {
+        // SQL-literal form (LINQ inline): single-level SQL-style escape.
         var result = ParameterSerializer.EscapeString(@"path\to\file");
         Assert.Equal(@"'path\\to\\file'", result);
     }
 
     [Fact]
-    public void EscapeString_StringWithTab_PassesThrough()
+    public void EscapeString_StringWithTab_EscapesAsBackslashT()
     {
-        // Control characters are passed through as-is in Field dump format
         var result = ParameterSerializer.EscapeString("col1\tcol2");
-        Assert.Equal("'col1\tcol2'", result);
+        Assert.Equal(@"'col1\tcol2'", result);
     }
 
     [Fact]
-    public void EscapeString_StringWithNewline_PassesThrough()
+    public void EscapeString_StringWithNewline_EscapesAsBackslashN()
     {
-        // Control characters are passed through as-is in Field dump format
         var result = ParameterSerializer.EscapeString("line1\nline2");
-        Assert.Equal("'line1\nline2'", result);
+        Assert.Equal(@"'line1\nline2'", result);
     }
 
     [Fact]
-    public void EscapeString_StringWithCarriageReturn_PassesThrough()
+    public void EscapeString_StringWithCarriageReturn_EscapesAsBackslashR()
     {
-        // Control characters are passed through as-is in Field dump format
         var result = ParameterSerializer.EscapeString("line1\rline2");
-        Assert.Equal("'line1\rline2'", result);
+        Assert.Equal(@"'line1\rline2'", result);
     }
 
     [Fact]
-    public void EscapeString_StringWithNullChar_PassesThrough()
+    public void EscapeString_StringWithNullChar_EscapesAsBackslashZero()
     {
-        // Control characters are passed through as-is in Field dump format
         var result = ParameterSerializer.EscapeString("before\0after");
-        Assert.Equal("'before\0after'", result);
+        Assert.Equal(@"'before\0after'", result);
+    }
+
+    // --- EscapeStringForParameter covers the wire path, which requires
+    // double-escape to survive ClickHouse's two-pass parameter decode
+    // (readQuotedString → deserializeTextEscaped).
+
+    [Fact]
+    public void EscapeStringForParameter_StringWithBackslash_DoubleEscapes()
+    {
+        var result = ParameterSerializer.EscapeStringForParameter(@"path\to\file");
+        Assert.Equal(@"'path\\\\to\\\\file'", result);
+    }
+
+    [Fact]
+    public void EscapeStringForParameter_StringWithTab_DoubleEscapesTab()
+    {
+        var result = ParameterSerializer.EscapeStringForParameter("col1\tcol2");
+        Assert.Equal(@"'col1\\tcol2'", result);
+    }
+
+    [Fact]
+    public void EscapeStringForParameter_StringWithNewline_DoubleEscapesNewline()
+    {
+        var result = ParameterSerializer.EscapeStringForParameter("line1\nline2");
+        Assert.Equal(@"'line1\\nline2'", result);
+    }
+
+    [Fact]
+    public void EscapeStringForParameter_StringWithSingleQuote_SingleEscapes()
+    {
+        // Pass (b) treats `'` as literal, so single-escape is sufficient.
+        var result = ParameterSerializer.EscapeStringForParameter("O'Brien");
+        Assert.Equal(@"'O\'Brien'", result);
     }
 
     [Fact]
@@ -128,7 +158,6 @@ public class ParameterSerializerTests
     public void Serialize_Float_ReturnsQuotedString()
     {
         var result = ParameterSerializer.Serialize(3.14f, "Float32");
-        // Float precision may vary, just check it starts with expected digits
         Assert.StartsWith("'3.14", result);
         Assert.EndsWith("'", result);
     }
@@ -251,10 +280,12 @@ public class ParameterSerializerTests
     public void Serialize_StringArray_ReturnsQuotedBracketedListWithEscapedStrings()
     {
         var result = ParameterSerializer.Serialize(new[] { "a", "b's", "c" }, "Array(String)");
-        // Array elements use EscapeStringForArray which quotes with single quotes
-        // The whole array is then wrapped in EscapeString which escapes those single quotes
-        // Result: '[\'a\', \'b\\\'s\', \'c\']'
-        Assert.Equal("'[\\'a\\', \\'b\\\\\\'s\\', \\'c\\']'", result);
+        // Inner EscapeStringForArray produces pass-(a) form with single-level escapes:
+        //   "b's"  →  'b\'s'
+        // Outer EscapeString then wraps and double-escapes backslash for the wire's
+        // two-pass decode. The lone `\` inside `b\'s` becomes `\\\\` on the wire,
+        // and each inner `'` becomes `\'`.
+        Assert.Equal(@"'[\'a\', \'b\\\\\'s\', \'c\']'", result);
     }
 
     [Fact]

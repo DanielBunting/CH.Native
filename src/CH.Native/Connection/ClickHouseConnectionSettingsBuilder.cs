@@ -35,6 +35,7 @@ public sealed class ClickHouseConnectionSettingsBuilder
     private TelemetrySettings? _telemetry;
     private StringMaterialization _stringMaterialization = StringMaterialization.Eager;
     private bool _useSchemaCache = false;
+    private int _maxStringLengthBytes = 256 * 1024 * 1024; // 256 MiB — see WithMaxStringLength
     private ClickHouseAuthMethod? _authMethod;
     private bool _passwordExplicitlySet;
     private string? _jwtToken;
@@ -357,14 +358,20 @@ public sealed class ClickHouseConnectionSettingsBuilder
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("Certificate path must be non-empty.", nameof(path));
+#if NET9_0_OR_GREATER
+        _tlsClientCertificate = string.IsNullOrEmpty(password)
+            ? X509CertificateLoader.LoadPkcs12FromFile(path, password: null)
+            : X509CertificateLoader.LoadPkcs12FromFile(path, password);
+#else
         _tlsClientCertificate = new X509Certificate2(path, password);
+#endif
         return this;
     }
 
     /// <summary>
     /// Explicitly selects the authentication method. Normally set implicitly by
     /// calling <see cref="WithPassword"/>, <see cref="WithJwt"/>, <see cref="WithSshKey(byte[],string)"/>,
-    /// or pairing <see cref="WithTls"/> with <see cref="WithTlsClientCertificate"/>.
+    /// or pairing <see cref="WithTls"/> with <see cref="WithTlsClientCertificate(X509Certificate2)"/>.
     /// Use this when selecting <see cref="ClickHouseAuthMethod.TlsClientCertificate"/>
     /// to signal that the server-side auth method is cert-based (as opposed to
     /// a password-based user who happens to be connecting over mTLS).
@@ -513,6 +520,26 @@ public sealed class ClickHouseConnectionSettingsBuilder
     }
 
     /// <summary>
+    /// Sets the maximum number of bytes a single VarInt-prefixed string read from the
+    /// server is allowed to declare. A length larger than this throws
+    /// <see cref="Exceptions.ClickHouseProtocolException"/> at the length-prefix check,
+    /// before any allocation, and tears the connection down. Default is 256 MiB.
+    ///
+    /// <para>Raise this only if you genuinely expect strings larger than 256 MiB on the
+    /// wire — leaving it low is what stops a malformed or hostile server from forcing
+    /// the client to allocate a multi-gigabyte buffer before noticing the wire is bad.</para>
+    /// </summary>
+    /// <param name="bytes">Maximum allowed string length in bytes. Must be positive.</param>
+    /// <returns>This builder for chaining.</returns>
+    public ClickHouseConnectionSettingsBuilder WithMaxStringLength(int bytes)
+    {
+        if (bytes <= 0)
+            throw new ArgumentOutOfRangeException(nameof(bytes), "MaxStringLength must be positive.");
+        _maxStringLengthBytes = bytes;
+        return this;
+    }
+
+    /// <summary>
     /// Builds the connection settings.
     /// </summary>
     /// <returns>The built settings.</returns>
@@ -548,6 +575,7 @@ public sealed class ClickHouseConnectionSettingsBuilder
             _telemetry,
             _stringMaterialization,
             _useSchemaCache,
+            _maxStringLengthBytes,
             authMethod,
             _jwtToken,
             _sshPrivateKey,
@@ -598,6 +626,7 @@ public sealed class ResilienceOptionsBuilder
     private RetryOptions? _retry;
     private CircuitBreakerOptions? _circuitBreaker;
     private TimeSpan _healthCheckInterval = TimeSpan.FromSeconds(10);
+    private TimeSpan _healthCheckTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Enables retry with the specified options.
@@ -653,6 +682,17 @@ public sealed class ResilienceOptionsBuilder
     }
 
     /// <summary>
+    /// Sets the timeout for an individual health-check probe.
+    /// </summary>
+    /// <param name="timeout">The probe timeout.</param>
+    /// <returns>This builder for chaining.</returns>
+    public ResilienceOptionsBuilder WithHealthCheckTimeout(TimeSpan timeout)
+    {
+        _healthCheckTimeout = timeout;
+        return this;
+    }
+
+    /// <summary>
     /// Builds the resilience options.
     /// </summary>
     /// <returns>The built resilience options.</returns>
@@ -662,7 +702,8 @@ public sealed class ResilienceOptionsBuilder
         {
             Retry = _retry,
             CircuitBreaker = _circuitBreaker,
-            HealthCheckInterval = _healthCheckInterval
+            HealthCheckInterval = _healthCheckInterval,
+            HealthCheckTimeout = _healthCheckTimeout
         };
     }
 }

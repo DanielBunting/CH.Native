@@ -31,6 +31,13 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     internal ClickHouseLogger Logger => _logger;
     private readonly SchemaCache _schemaCache = new();
     private readonly object _queryLock = new();
+    // Serializes every _pipeWriter.WriteAsync+FlushAsync pair. PipeWriter is not
+    // thread-safe, and SendCancelAsync fires from CancellationToken.Register on
+    // a detached task that can race with the in-flight query write. Without
+    // this gate, concurrent writes can interleave bytes on the wire and
+    // poison the connection — a pooled connection would then hand the
+    // corruption to the next caller.
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
     private TcpClient? _tcpClient;
     private Stream? _networkStream;
     private SslStream? _sslStream;
@@ -39,9 +46,30 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private bool _isOpen;
     private bool _disposed;
     private bool _compressionEnabled;
+    // True between the moment a public Execute path (or OpenAsync handshake) is
+    // entered and the moment it returns or releases the slot. Read under
+    // _queryLock by EnterBusy to reject overlapping operations on the same
+    // connection. This is the busy-state authority — _currentQueryId tracks
+    // the in-flight query id for cancellation/pool-safety, but it transiently
+    // flips during role-sync recursion, so it is unsafe to use as the busy
+    // gate on its own. See ClickHouseConnectionBusyException.
+    private bool _busy;
+    // The query id reported in ClickHouseConnectionBusyException. Set by
+    // EnterBusy, cleared by ExitBusy. Distinct from _currentQueryId because
+    // _currentQueryId is owned by SendQueryAsync/ReadServerMessagesAsync and
+    // gets temporarily clobbered/cleared by role-sync recursion. This field
+    // tracks the *outermost* caller's id and stays stable for the busy
+    // window, so a concurrent caller's exception message always names the
+    // real owner — never the inner SET ROLE id and never <handshake> just
+    // because the inner role-sync finally cleared the slot a microsecond ago.
+    private string? _busyOwnerQueryId;
     private string? _currentQueryId;
     private string? _lastQueryId;
     private volatile bool _cancellationRequested;
+    // Set when a ClickHouseProtocolException escapes the read path. The protocol
+    // stream is at an unknown offset, so the connection must be discarded — not
+    // returned to the pool, not reused for the next query. Read by CanBePooled.
+    private volatile bool _protocolFatal;
     private X509Certificate2? _customCaCertificate;
 
     // Role-sync state: tracks what we last sent via SET ROLE on this session.
@@ -83,15 +111,119 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     {
         get
         {
-            if (_disposed || !_isOpen) return false;
+            // All four fields must be read under _queryLock to get a
+            // consistent snapshot. Reading _isOpen/_disposed outside the lock
+            // could latch a stale "true" after a concurrent close has already
+            // committed its flip under the lock, leading the pool to accept a
+            // dead connection.
             lock (_queryLock)
             {
+                if (_disposed || !_isOpen) return false;
+                if (_protocolFatal) return false;
+                if (_busy) return false;
                 if (_currentQueryId is not null) return false;
                 if (_pinnedRolesSet || _rolesExplicitlySet) return false;
                 return true;
             }
         }
     }
+
+    /// <summary>
+    /// Atomically rejects a second concurrent operation on this connection. Throws
+    /// <see cref="ClickHouseConnectionBusyException"/> if a public Execute path
+    /// (or the OpenAsync handshake) is already in flight; otherwise sets
+    /// <see cref="_busy"/> = true and records the owner's query id for the
+    /// exception message that any subsequent concurrent caller would see.
+    /// Pair every successful call with <see cref="ExitBusy"/> in a finally.
+    /// </summary>
+    /// <param name="queryIdForOwner">
+    /// The query id (or <see cref="ClickHouseConnectionBusyException.HandshakeSentinel"/>)
+    /// of the caller claiming the slot. Stored verbatim in
+    /// <see cref="_busyOwnerQueryId"/> and surfaced to any rejected concurrent
+    /// caller. Pre-resolve via <c>ResolveQueryId</c> at the public-method
+    /// boundary so the message names the same id the server logs.
+    /// </param>
+    private void EnterBusy(string queryIdForOwner)
+    {
+        lock (_queryLock)
+        {
+            if (_protocolFatal)
+            {
+                throw new InvalidOperationException(
+                    "Connection is broken: a previous operation left the wire in an indeterminate state. " +
+                    "Open a new ClickHouseConnection to continue.");
+            }
+            if (_busy)
+            {
+                throw new ClickHouseConnectionBusyException(_busyOwnerQueryId ?? queryIdForOwner);
+            }
+            _busy = true;
+            _busyOwnerQueryId = queryIdForOwner;
+        }
+    }
+
+    /// <summary>
+    /// Marks the connection as protocol-fatal: subsequent <see cref="EnterBusy"/>
+    /// gates throw <see cref="InvalidOperationException"/>, and the pool
+    /// (<see cref="CanBePooled"/>) refuses to hand it back out. Called by
+    /// <see cref="BulkInsert.BulkInserter{T}"/> when a bulk-insert write
+    /// fails after the wire has been put into INSERT state and Dispose's
+    /// recovery path has been disabled by <c>_completeStarted</c>.
+    /// </summary>
+    internal void MarkProtocolFatal() => _protocolFatal = true;
+
+    /// <summary>
+    /// Releases the busy slot acquired by <see cref="EnterBusy"/>. Idempotent —
+    /// calling on a non-busy connection is a no-op so reader paths can call it
+    /// from both natural-completion and Dispose without risk of double-release.
+    /// Internal so <see cref="Results.ClickHouseDataReader"/> can release the
+    /// slot when its enumerator naturally completes.
+    /// </summary>
+    internal void ExitBusy()
+    {
+        lock (_queryLock)
+        {
+            _busy = false;
+            _busyOwnerQueryId = null;
+        }
+    }
+
+    /// <summary>
+    /// Bulk-insert variant of <see cref="EnterBusy"/>. The bulk-insert path holds
+    /// the wire from <c>InitAsync</c> through <c>CompleteAsync</c>/<c>DisposeAsync</c>,
+    /// so the slot must persist across the inserter's lifetime. Internal so
+    /// <see cref="BulkInsert.BulkInserter{T}"/> can call it; semantics identical
+    /// to <see cref="EnterBusy"/>.
+    /// </summary>
+    internal void EnterBusyForBulkInsert(string queryIdForOwner) => EnterBusy(queryIdForOwner);
+
+    /// <summary>
+    /// Internal accessor for <see cref="ResolveQueryId"/>. Lets
+    /// <see cref="BulkInsert.BulkInserter{T}"/> resolve the effective query id
+    /// once at <c>InitAsync</c> entry — both for <see cref="EnterBusyForBulkInsert"/>
+    /// reporting and for the eventual <c>SendInsertQueryAsync</c> call — without
+    /// duplicating the GUID-vs-supplied logic.
+    /// </summary>
+    internal static string ResolveQueryIdInternal(string? supplied) => ResolveQueryId(supplied);
+
+    /// <summary>
+    /// Constructs a <see cref="ProtocolReader"/> bound to this connection's configured
+    /// <see cref="ClickHouseConnectionSettings.MaxStringLengthBytes"/> cap. Use this in
+    /// place of <c>new ProtocolReader(buffer)</c> for any reader that will parse server
+    /// bytes — the cap is the only thing standing between a hostile / malformed
+    /// length-prefix and a multi-gigabyte allocation.
+    /// </summary>
+    private ProtocolReader CreateProtocolReader(System.Buffers.ReadOnlySequence<byte> buffer)
+        => new(buffer) { MaxStringLengthBytes = _settings.MaxStringLengthBytes };
+
+    /// <summary>
+    /// True between the moment <see cref="SendCancelAsync"/> writes a Cancel packet
+    /// and the next query (which resets the flag). Bulk-insert / read-path catch
+    /// blocks read this to gate the post-OCE drain — without the gate, an OCE
+    /// thrown synchronously before any Cancel was sent would trigger a drain
+    /// against a server that has nothing to drain, hanging until the 5s timeout.
+    /// </summary>
+    internal bool WasCancellationRequested => _cancellationRequested;
 
     /// <summary>
     /// Gets the server information received during handshake.
@@ -136,6 +268,27 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     }
 
     /// <summary>
+    /// Single funnel for all pipe writes. PipeWriter is not thread-safe, so
+    /// every WriteAsync+FlushAsync pair routes through here under
+    /// <see cref="_writeLock"/>. Prevents SendCancelAsync — which fires from a
+    /// detached cancellation callback — from racing with an in-flight query or
+    /// bulk-insert write and corrupting the wire.
+    /// </summary>
+    private async Task WriteAndFlushAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
+    {
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _pipeWriter!.WriteAsync(data, cancellationToken).ConfigureAwait(false);
+            await _pipeWriter.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <summary>
     /// Opens the connection and performs the handshake.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -146,6 +299,18 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         if (_isOpen)
             throw new InvalidOperationException("Connection is already open.");
 
+        // Claim the busy slot for the duration of the handshake. Today _isOpen
+        // is set strictly after PerformHandshakeAsync completes, so a concurrent
+        // Execute call during handshake would already throw "Connection is not
+        // open". The sentinel closes the fire-and-forget hole where a future
+        // refactor could move the _isOpen flip earlier, and it gives the busy
+        // check a precise id ("<handshake>") to surface to the caller.
+        EnterBusy(ClickHouseConnectionBusyException.HandshakeSentinel);
+        lock (_queryLock)
+        {
+            _currentQueryId = ClickHouseConnectionBusyException.HandshakeSentinel;
+        }
+
         using var activity = ClickHouseActivitySource.StartConnect(
             _settings.Host, _settings.EffectivePort, _settings.Telemetry);
         var stopwatch = Stopwatch.StartNew();
@@ -154,7 +319,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         {
             await ConnectTcpAsync(cancellationToken);
             await PerformHandshakeAsync(cancellationToken);
-            _isOpen = true;
+            lock (_queryLock) { _isOpen = true; }
 
             // Record telemetry on success
             stopwatch.Stop();
@@ -170,6 +335,15 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             _logger.ConnectionFailed(_settings.Host, _settings.EffectivePort, ex.Message);
             await CloseInternalAsync();
             throw;
+        }
+        finally
+        {
+            lock (_queryLock)
+            {
+                if (_currentQueryId == ClickHouseConnectionBusyException.HandshakeSentinel)
+                    _currentQueryId = null;
+            }
+            ExitBusy();
         }
     }
 
@@ -209,6 +383,11 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             _networkStream = await EstablishTlsAsync(_networkStream, timeoutCts.Token);
         }
 
+        // Wrap with MeteredNetworkStream so BytesSentTotal/BytesReceivedTotal
+        // capture every byte that crosses the wire, including post-TLS framing
+        // and ClickHouse-level compression headers.
+        _networkStream = new MeteredNetworkStream(_networkStream, leaveOpen: false);
+
         // Use larger buffer sizes to reduce fragmentation and improve IsSingleSegment hit rate
         var pipeReaderOptions = new StreamPipeReaderOptions(
             bufferSize: _settings.PipeBufferSize,
@@ -222,7 +401,11 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         // Load custom CA certificate if specified
         if (!string.IsNullOrEmpty(_settings.TlsCaCertificatePath))
         {
+#if NET9_0_OR_GREATER
+            _customCaCertificate = X509CertificateLoader.LoadCertificateFromFile(_settings.TlsCaCertificatePath);
+#else
             _customCaCertificate = new X509Certificate2(_settings.TlsCaCertificatePath);
+#endif
         }
 
         _sslStream = new SslStream(
@@ -277,7 +460,11 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             customChain.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
             customChain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
 
+#if NET9_0_OR_GREATER
+            var cert2 = certificate as X509Certificate2 ?? X509CertificateLoader.LoadCertificate(certificate.Export(X509ContentType.Cert));
+#else
             var cert2 = certificate as X509Certificate2 ?? new X509Certificate2(certificate);
+#endif
             if (customChain.Build(cert2))
             {
                 // Verify the chain ends with our custom CA
@@ -315,8 +502,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         var requestBuffer = new ArrayBufferWriter<byte>();
         var requestWriter = new ProtocolWriter(requestBuffer);
         requestWriter.WriteVarInt((ulong)ClientMessageType.SSHChallengeRequest);
-        await _pipeWriter!.WriteAsync(requestBuffer.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(requestBuffer.WrittenMemory, cancellationToken);
 
         // 2. Read server reply — must be SSHChallenge (18). An Exception (2) typically
         //    means the server is older than 23.9 or the user's SSH key isn't configured.
@@ -337,8 +523,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         responseWriter.WriteVarInt((ulong)ClientMessageType.SSHChallengeResponse);
         responseWriter.WriteVarInt((ulong)signature.Length);
         responseWriter.WriteBytes(signature);
-        await _pipeWriter.WriteAsync(responseBuffer.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(responseBuffer.WrittenMemory, cancellationToken);
     }
 
     private async Task<byte[]> ReceiveSshChallengeAsync(CancellationToken cancellationToken)
@@ -358,7 +543,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
             try
             {
-                var reader = new ProtocolReader(buffer);
+                var reader = CreateProtocolReader(buffer);
                 var packetType = reader.ReadVarInt();
 
                 if (packetType == (ulong)ServerMessageType.Exception)
@@ -371,7 +556,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     throw new ClickHouseConnectionException(
                         $"Unexpected packet type {packetType} during SSH challenge; expected SSHChallenge ({(int)ServerMessageType.SSHChallenge}) or Exception.");
 
-                var challengeLength = (int)reader.ReadVarInt();
+                var challengeLength = reader.ReadVarIntAsInt32("SSH challenge length");
                 var challenge = reader.ReadBytes(challengeLength).ToArray();
                 _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
                 return challenge;
@@ -409,8 +594,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         var writer = new ProtocolWriter(bufferWriter);
         clientHello.Write(ref writer);
 
-        await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
 
     // ClickHouse wire markers for non-password auth, from src/Core/Protocol.h.
@@ -445,7 +629,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
             try
             {
-                var reader = new ProtocolReader(buffer);
+                var reader = CreateProtocolReader(buffer);
                 var serverHello = ServerHello.Read(ref reader);
                 _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
                 return serverHello;
@@ -480,8 +664,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             writer.WriteVarInt(0); // we do not initiate parallel-replicas reads
         }
 
-        await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
 
     /// <summary>
@@ -765,6 +948,23 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             throw new InvalidOperationException("Connection is not open.");
 
         var effectiveQueryId = ResolveQueryId(queryId);
+        EnterBusy(effectiveQueryId);
+        try
+        {
+            return await ExecuteScalarCoreAsync<T>(sql, progress, cancellationToken, effectiveQueryId);
+        }
+        finally
+        {
+            ExitBusy();
+        }
+    }
+
+    private async Task<T?> ExecuteScalarCoreAsync<T>(
+        string sql,
+        IProgress<QueryProgress>? progress,
+        CancellationToken cancellationToken,
+        string effectiveQueryId)
+    {
         using var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
         var stopwatch = Stopwatch.StartNew();
         long rowsRead = 0;
@@ -821,6 +1021,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             ClickHouseActivitySource.SetError(activity, ex);
             ClickHouseMeter.ErrorsTotal.Add(1);
             _logger.QueryFailed(effectiveQueryId, ex.Message);
+            if (ex is ClickHouseProtocolException) await CloseInternalAsync();
             throw;
         }
         finally
@@ -851,6 +1052,29 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             throw new InvalidOperationException("Connection is not open.");
 
         var effectiveQueryId = ResolveQueryId(queryId);
+        EnterBusy(effectiveQueryId);
+        try
+        {
+            return await ExecuteNonQueryCoreAsync(sql, progress, cancellationToken, effectiveQueryId);
+        }
+        finally
+        {
+            ExitBusy();
+        }
+    }
+
+    /// <summary>
+    /// Body of <see cref="ExecuteNonQueryAsync"/> without the busy gate. Called
+    /// directly by <see cref="EnsureRolesResolvedAsync"/> for the SET ROLE
+    /// subquery — that path runs inside an outer EnterBusy and must not
+    /// re-enter the gate.
+    /// </summary>
+    private async Task<long> ExecuteNonQueryCoreAsync(
+        string sql,
+        IProgress<QueryProgress>? progress,
+        CancellationToken cancellationToken,
+        string effectiveQueryId)
+    {
         using var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
         var stopwatch = Stopwatch.StartNew();
         long totalRows = 0;
@@ -899,6 +1123,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             ClickHouseActivitySource.SetError(activity, ex);
             ClickHouseMeter.ErrorsTotal.Add(1);
             _logger.QueryFailed(effectiveQueryId, ex.Message);
+            if (ex is ClickHouseProtocolException) await CloseInternalAsync();
             throw;
         }
         finally
@@ -927,27 +1152,43 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             throw new InvalidOperationException("Connection is not open.");
 
         var effectiveQueryId = ResolveQueryId(queryId);
-        // Note: Activity is started here but will continue throughout the reader's lifetime.
-        // For full duration tracking, the ClickHouseDataReader would need to record when disposed.
-        var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
-        _logger.LogQueryStarted(effectiveQueryId, sql);
-
+        EnterBusy(effectiveQueryId);
+        var slotReleased = false;
         try
         {
-            await SendQueryAsync(sql, cancellationToken, effectiveQueryId);
+            // Activity, stopwatch, and rows-read counter all live for the reader's
+            // lifetime — the reader records the query metric on disposal.
+            var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+            var stopwatch = Stopwatch.StartNew();
+            _logger.LogQueryStarted(effectiveQueryId, sql);
 
-            var enumerator = ReadServerMessagesAsync(cancellationToken)
-                .GetAsyncEnumerator(cancellationToken);
+            try
+            {
+                await SendQueryAsync(sql, cancellationToken, effectiveQueryId);
 
-            return new ClickHouseDataReader(enumerator, this, activity, effectiveQueryId);
+                var enumerator = ReadServerMessagesAsync(cancellationToken)
+                    .GetAsyncEnumerator(cancellationToken);
+
+                // Slot is owned by the returned reader from this point on — it
+                // releases via ExitBusy on natural completion or DisposeAsync.
+                slotReleased = true;
+                return new ClickHouseDataReader(enumerator, this, activity, effectiveQueryId, stopwatch);
+            }
+            catch (Exception ex)
+            {
+                stopwatch.Stop();
+                ClickHouseActivitySource.SetError(activity, ex);
+                activity?.Dispose();
+                ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, 0, success: false);
+                ClickHouseMeter.ErrorsTotal.Add(1);
+                _logger.QueryFailed(effectiveQueryId, ex.Message);
+                if (ex is ClickHouseProtocolException) await CloseInternalAsync();
+                throw;
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            activity?.Dispose();
-            ClickHouseActivitySource.SetError(activity, ex);
-            ClickHouseMeter.ErrorsTotal.Add(1);
-            _logger.QueryFailed(effectiveQueryId, ex.Message);
-            throw;
+            if (!slotReleased) ExitBusy();
         }
     }
 
@@ -1024,52 +1265,60 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             throw new InvalidOperationException("Connection is not open.");
 
         var effectiveQueryId = ResolveQueryId(queryId);
-        using var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
-        var stopwatch = Stopwatch.StartNew();
-        long totalRows = 0;
-        var success = false;
-
-        _logger.LogQueryStarted(effectiveQueryId, sql);
-
-        Mapping.ITypedRowMapper<T>? mapper = null;
-
+        EnterBusy(effectiveQueryId);
         try
         {
-            await SendQueryAsync(sql, cancellationToken, effectiveQueryId);
+            using var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+            var stopwatch = Stopwatch.StartNew();
+            long totalRows = 0;
+            var success = false;
 
-            // Register cancellation callback to send Cancel message to server
-            await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
+            _logger.LogQueryStarted(effectiveQueryId, sql);
 
-            await foreach (var block in ReadTypedBlocksAsync(cancellationToken))
+            Mapping.ITypedRowMapper<T>? mapper = null;
+
+            try
             {
-                using (block)
+                await SendQueryAsync(sql, cancellationToken, effectiveQueryId);
+
+                // Register cancellation callback to send Cancel message to server
+                await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
+
+                await foreach (var block in ReadTypedBlocksAsync(cancellationToken))
                 {
-                    if (block.RowCount == 0)
-                        continue;
-
-                    // Create mapper on first non-empty block
-                    mapper ??= Mapping.TypedRowMapperFactory.GetMapper<T>(block.ColumnNames);
-
-                    // Map all rows in this block
-                    for (int i = 0; i < block.RowCount; i++)
+                    using (block)
                     {
-                        totalRows++;
-                        yield return mapper.MapRow(block.Columns, i);
+                        if (block.RowCount == 0)
+                            continue;
+
+                        // Create mapper on first non-empty block
+                        mapper ??= Mapping.TypedRowMapperFactory.GetMapper<T>(block.ColumnNames);
+
+                        // Map all rows in this block
+                        for (int i = 0; i < block.RowCount; i++)
+                        {
+                            totalRows++;
+                            yield return mapper.MapRow(block.Columns, i);
+                        }
                     }
                 }
-            }
 
-            success = true;
-            ClickHouseActivitySource.SetQueryResults(activity, totalRows, 0);
+                success = true;
+                ClickHouseActivitySource.SetQueryResults(activity, totalRows, 0);
+            }
+            finally
+            {
+                stopwatch.Stop();
+                ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, totalRows, success);
+                if (success)
+                    _logger.QueryCompleted(effectiveQueryId, totalRows, stopwatch.Elapsed.TotalMilliseconds);
+                else
+                    ClickHouseMeter.ErrorsTotal.Add(1);
+            }
         }
         finally
         {
-            stopwatch.Stop();
-            ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, totalRows, success);
-            if (success)
-                _logger.QueryCompleted(effectiveQueryId, totalRows, stopwatch.Elapsed.TotalMilliseconds);
-            else
-                ClickHouseMeter.ErrorsTotal.Add(1);
+            ExitBusy();
         }
     }
 
@@ -1146,7 +1395,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
         try
         {
-            var reader = new ProtocolReader(buffer);
+            var reader = CreateProtocolReader(buffer);
             var messageType = (ServerMessageType)reader.ReadVarInt();
 
             switch (messageType)
@@ -1174,7 +1423,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                             {
                                 scanBuffer.Slice(0, messageLength).CopyTo(contiguous);
                                 var contiguousSeq = new ReadOnlySequence<byte>(contiguous, 0, (int)messageLength);
-                                var contiguousReader = new ProtocolReader(contiguousSeq);
+                                var contiguousReader = CreateProtocolReader(contiguousSeq);
 
                                 // Read table name and block from contiguous buffer
                                 var tableName = contiguousReader.ReadString();
@@ -1202,16 +1451,33 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     return true;
 
                 case ServerMessageType.Exception:
-                    var exceptionMessage = ExceptionMessage.Read(ref reader);
-                    buffer = buffer.Slice(reader.Consumed);
+                {
+                    // Scan-then-parse — see TryReadMessage for the full rationale.
+                    var bodyBuffer = buffer.Slice(reader.Consumed);
+                    var scanReader = CreateProtocolReader(bodyBuffer);
+                    if (!ExceptionMessage.TryScan(ref scanReader))
+                        return false;
+
+                    var parseReader = CreateProtocolReader(bodyBuffer);
+                    var exceptionMessage = ExceptionMessage.Read(ref parseReader);
+                    buffer = bodyBuffer.Slice(parseReader.Consumed);
                     _pipeReader!.AdvanceTo(buffer.Start);
                     throw ClickHouseServerException.FromExceptionMessage(exceptionMessage);
+                }
 
                 case ServerMessageType.Progress:
-                    var progressMessage = ProgressMessage.Read(ref reader, NegotiatedProtocolVersion);
-                    buffer = buffer.Slice(reader.Consumed);
+                {
+                    var bodyBuffer = buffer.Slice(reader.Consumed);
+                    var scanReader = CreateProtocolReader(bodyBuffer);
+                    if (!ProgressMessage.TryScan(ref scanReader, NegotiatedProtocolVersion))
+                        return false;
+
+                    var parseReader = CreateProtocolReader(bodyBuffer);
+                    var progressMessage = ProgressMessage.Read(ref parseReader, NegotiatedProtocolVersion);
+                    buffer = bodyBuffer.Slice(parseReader.Consumed);
                     message = progressMessage;
                     return true;
+                }
 
                 case ServerMessageType.EndOfStream:
                     buffer = buffer.Slice(reader.Consumed);
@@ -1219,9 +1485,19 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     return true;
 
                 case ServerMessageType.ProfileInfo:
-                    SkipProfileInfo(ref reader);
-                    buffer = buffer.Slice(reader.Consumed);
+                {
+                    // Scan-then-skip: lets a partial ProfileInfo return false
+                    // cleanly instead of relying on the catch-IOException backstop.
+                    var bodyBuffer = buffer.Slice(reader.Consumed);
+                    var scanReader = CreateProtocolReader(bodyBuffer);
+                    if (!TrySkipProfileInfo(ref scanReader))
+                        return false;
+
+                    var parseReader = CreateProtocolReader(bodyBuffer);
+                    SkipProfileInfo(ref parseReader);
+                    buffer = bodyBuffer.Slice(parseReader.Consumed);
                     return TryReadTypedMessage(ref buffer, registry, out message, out typedBlock);
+                }
 
                 case ServerMessageType.ProfileEvents:
                     // ProfileEvents - read and discard using regular block (not typed)
@@ -1262,7 +1538,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                             {
                                 scanBuffer.Slice(0, totalsMessageLength).CopyTo(contiguous);
                                 var contiguousSeq = new ReadOnlySequence<byte>(contiguous, 0, (int)totalsMessageLength);
-                                var contiguousReader = new ProtocolReader(contiguousSeq);
+                                var contiguousReader = CreateProtocolReader(contiguousSeq);
 
                                 var tableName = contiguousReader.ReadString();
                                 typedBlock = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion);
@@ -1290,6 +1566,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     throw new ClickHouseException($"Unexpected server message type: {messageType}");
             }
         }
+        catch (ClickHouseProtocolException)
+        {
+            // Wire bytes were malformed; the protocol stream is now at an
+            // unknown offset. Mark the connection as poison so the pool
+            // discards it on return — see CanBePooled.
+            _protocolFatal = true;
+            throw;
+        }
         catch (InvalidOperationException)
         {
             // Not enough data yet
@@ -1307,7 +1591,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private bool TryScanUncompressedDataMessage(ReadOnlySequence<byte> buffer, out long messageLength)
     {
         messageLength = 0;
-        var scanner = new ProtocolReader(buffer);
+        var scanner = CreateProtocolReader(buffer);
 
         // Skip table name
         if (!scanner.TrySkipString())
@@ -1334,9 +1618,9 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// </summary>
     /// <param name="buffer">The buffer positioned after the message type.</param>
     /// <returns>True if the entire compressed block is available; false if not enough data.</returns>
-    private static bool TryScanCompressedDataMessage(ReadOnlySequence<byte> buffer)
+    private bool TryScanCompressedDataMessage(ReadOnlySequence<byte> buffer)
     {
-        var scanner = new ProtocolReader(buffer);
+        var scanner = CreateProtocolReader(buffer);
 
         // Skip table name (VarInt length prefix + bytes)
         if (!scanner.TrySkipString())
@@ -1401,7 +1685,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             try
             {
                 var seq = new ReadOnlySequence<byte>(accumulator.WrittenMemory);
-                var blockReader = new ProtocolReader(seq);
+                var blockReader = CreateProtocolReader(seq);
                 return Block.ReadTypedBlockWithTableName(ref blockReader, registry, tableNameFromCompressed, NegotiatedProtocolVersion);
             }
             catch (InvalidOperationException)
@@ -1431,46 +1715,54 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             throw new InvalidOperationException("Connection is not open.");
 
         var effectiveQueryId = ResolveQueryId(queryId);
-        var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-        await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
-
-        // Register cancellation callback to send Cancel message to server
-        await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
-
-        object? result = null;
-        bool hasResult = false;
-
+        EnterBusy(effectiveQueryId);
         try
         {
-            await foreach (var message in ReadServerMessagesAsync(cancellationToken))
+            var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
+            await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
+
+            // Register cancellation callback to send Cancel message to server
+            await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
+
+            object? result = null;
+            bool hasResult = false;
+
+            try
             {
-                switch (message)
+                await foreach (var message in ReadServerMessagesAsync(cancellationToken))
                 {
-                    case ProgressMessage progressMessage:
-                        progress?.Report(progressMessage.ToQueryProgress());
-                        break;
+                    switch (message)
+                    {
+                        case ProgressMessage progressMessage:
+                            progress?.Report(progressMessage.ToQueryProgress());
+                            break;
 
-                    case DataMessage dataMessage:
-                        if (!hasResult && dataMessage.Block.RowCount > 0 && dataMessage.Block.ColumnCount > 0)
-                        {
-                            result = dataMessage.Block.GetValue(0, 0);
-                            hasResult = true;
-                        }
-                        dataMessage.Block.Dispose();
-                        break;
+                        case DataMessage dataMessage:
+                            if (!hasResult && dataMessage.Block.RowCount > 0 && dataMessage.Block.ColumnCount > 0)
+                            {
+                                result = dataMessage.Block.GetValue(0, 0);
+                                hasResult = true;
+                            }
+                            dataMessage.Block.Dispose();
+                            break;
 
-                    case EndOfStreamMessage:
-                        return ConvertResult<T>(result);
+                        case EndOfStreamMessage:
+                            return ConvertResult<T>(result);
+                    }
                 }
             }
-        }
-        catch (OperationCanceledException) when (_cancellationRequested)
-        {
-            await DrainAfterCancellationAsync();
-            throw;
-        }
+            catch (OperationCanceledException) when (_cancellationRequested)
+            {
+                await DrainAfterCancellationAsync();
+                throw;
+            }
 
-        return default;
+            return default;
+        }
+        finally
+        {
+            ExitBusy();
+        }
     }
 
     /// <summary>
@@ -1490,41 +1782,49 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             throw new InvalidOperationException("Connection is not open.");
 
         var effectiveQueryId = ResolveQueryId(queryId);
-        var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-        await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
-
-        // Register cancellation callback to send Cancel message to server
-        await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
-
-        long totalRows = 0;
-
+        EnterBusy(effectiveQueryId);
         try
         {
-            await foreach (var message in ReadServerMessagesAsync(cancellationToken))
+            var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
+            await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
+
+            // Register cancellation callback to send Cancel message to server
+            await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
+
+            long totalRows = 0;
+
+            try
             {
-                switch (message)
+                await foreach (var message in ReadServerMessagesAsync(cancellationToken))
                 {
-                    case ProgressMessage progressMessage:
-                        progress?.Report(progressMessage.ToQueryProgress());
-                        totalRows = (long)progressMessage.Rows;
-                        break;
+                    switch (message)
+                    {
+                        case ProgressMessage progressMessage:
+                            progress?.Report(progressMessage.ToQueryProgress());
+                            totalRows = (long)progressMessage.Rows;
+                            break;
 
-                    case DataMessage nonQueryParamDataMessage:
-                        nonQueryParamDataMessage.Block.Dispose();
-                        break;
+                        case DataMessage nonQueryParamDataMessage:
+                            nonQueryParamDataMessage.Block.Dispose();
+                            break;
 
-                    case EndOfStreamMessage:
-                        return totalRows;
+                        case EndOfStreamMessage:
+                            return totalRows;
+                    }
                 }
             }
-        }
-        catch (OperationCanceledException) when (_cancellationRequested)
-        {
-            await DrainAfterCancellationAsync();
-            throw;
-        }
+            catch (OperationCanceledException) when (_cancellationRequested)
+            {
+                await DrainAfterCancellationAsync();
+                throw;
+            }
 
-        return totalRows;
+            return totalRows;
+        }
+        finally
+        {
+            ExitBusy();
+        }
     }
 
     /// <summary>
@@ -1543,13 +1843,42 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             throw new InvalidOperationException("Connection is not open.");
 
         var effectiveQueryId = ResolveQueryId(queryId);
-        var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-        await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
+        EnterBusy(effectiveQueryId);
+        var slotReleased = false;
+        try
+        {
+            var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
+            var activity = ClickHouseActivitySource.StartQuery(rewrittenSql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+            var stopwatch = Stopwatch.StartNew();
+            _logger.LogQueryStarted(effectiveQueryId, rewrittenSql);
 
-        var enumerator = ReadServerMessagesAsync(cancellationToken)
-            .GetAsyncEnumerator(cancellationToken);
+            try
+            {
+                await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
 
-        return new ClickHouseDataReader(enumerator, this, queryId: effectiveQueryId);
+                var enumerator = ReadServerMessagesAsync(cancellationToken)
+                    .GetAsyncEnumerator(cancellationToken);
+
+                // Reader owns the busy slot from this point on.
+                slotReleased = true;
+                return new ClickHouseDataReader(enumerator, this, activity, effectiveQueryId, stopwatch);
+            }
+            catch (Exception ex)
+            {
+                stopwatch.Stop();
+                ClickHouseActivitySource.SetError(activity, ex);
+                activity?.Dispose();
+                ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, 0, success: false);
+                ClickHouseMeter.ErrorsTotal.Add(1);
+                _logger.QueryFailed(effectiveQueryId, ex.Message);
+                if (ex is ClickHouseProtocolException) await CloseInternalAsync();
+                throw;
+            }
+        }
+        finally
+        {
+            if (!slotReleased) ExitBusy();
+        }
     }
 
     private Task SendQueryAsync(string sql, CancellationToken cancellationToken, string? queryId = null)
@@ -1631,8 +1960,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             Block.WriteEmpty(ref writer);
         }
 
-        await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
 
     /// <summary>
@@ -1642,8 +1970,9 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// </summary>
     /// <param name="desired">
     /// The override roles for this call; null means fall back to the connection-level
-    /// <see cref="ClickHouseConnectionSettings.DefaultRoles"/>.
+    /// <see cref="ClickHouseConnectionSettings.Roles"/>.
     /// </param>
+    /// <param name="cancellationToken">Token to cancel the role-resolution round-trip.</param>
     private async Task EnsureRolesResolvedAsync(IReadOnlyList<string>? desired, CancellationToken cancellationToken)
     {
         // Precedence: per-call override > sticky override from ChangeRolesAsync > connection default.
@@ -1681,10 +2010,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         _inRoleSync = true;
         try
         {
-            // Reuse the public non-query path so we get message reading + exception
+            // Reuse the non-query message-reading path so we get exception
             // translation. _inRoleSync prevents EnsureRolesResolvedAsync from
-            // re-entering itself via SendQueryAsync.
-            await ExecuteNonQueryAsync(sql, progress: null, cancellationToken).ConfigureAwait(false);
+            // re-entering itself via SendQueryAsync. We call the Core method
+            // directly to bypass the busy gate — the outer Execute caller
+            // already owns the slot. The synthetic id ensures server-side
+            // logs distinguish the implicit SET ROLE from the outer query.
+            var roleSyncQueryId = ResolveQueryId(null);
+            await ExecuteNonQueryCoreAsync(sql, progress: null, cancellationToken, roleSyncQueryId).ConfigureAwait(false);
         }
         finally
         {
@@ -1740,8 +2073,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             var writer = new ProtocolWriter(bufferWriter);
             CancelMessage.Write(ref writer);
 
-            await _pipeWriter.WriteAsync(bufferWriter.WrittenMemory);
-            await _pipeWriter.FlushAsync();
+            await WriteAndFlushAsync(bufferWriter.WrittenMemory, CancellationToken.None);
 
             _cancellationRequested = true;
         }
@@ -1755,10 +2087,22 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// Drains remaining server messages after a cancellation to reset connection state.
     /// After Cancel is sent, the server responds with either Exception or EndOfStream.
     /// </summary>
-    private async Task DrainAfterCancellationAsync()
+    /// <remarks>
+    /// Captures the owned queryId at entry and only clears <c>_currentQueryId</c>
+    /// in the finally if it still matches — otherwise a drain running on a
+    /// detached continuation could null out the slot belonging to a subsequent
+    /// query started on the same connection.
+    /// </remarks>
+    internal async Task DrainAfterCancellationAsync()
     {
         if (_pipeReader == null || !_isOpen)
             return;
+
+        string? ownedQueryId;
+        lock (_queryLock)
+        {
+            ownedQueryId = _currentQueryId;
+        }
 
         var registry = _columnReaderRegistry;
 
@@ -1797,14 +2141,20 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         }
         catch
         {
-            // Timeout or other error - connection may be in bad state
-            // but we've done our best to drain
+            // Drain timed out or read garbled bytes. The wire is at an unknown
+            // offset, so the connection must not be reused. _protocolFatal flips
+            // CanBePooled to false, so a pool / ResilientConnection discards it.
+            _protocolFatal = true;
         }
         finally
         {
             lock (_queryLock)
             {
-                _currentQueryId = null;
+                // Only clear the slot we were draining for. A subsequent query
+                // may have installed its own id while we were mid-drain; we
+                // must not clobber it.
+                if (_currentQueryId == ownedQueryId)
+                    _currentQueryId = null;
             }
         }
     }
@@ -1835,6 +2185,30 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
                     if (message is EndOfStreamMessage)
                     {
+                        // EndOfStream must be the last byte the server sends for
+                        // this query. If anything follows in the SAME pipe segment
+                        // we just read, the server is out of spec and the stream
+                        // is no longer trustworthy. Pin the failure here rather
+                        // than letting stale bytes corrupt the next query.
+                        //
+                        // We deliberately don't peek into _pipeReader for trailing
+                        // bytes that haven't yet been ReadAsync'd — calling TryRead
+                        // here would return the same un-AdvanceTo'd result that
+                        // contained the EOS byte itself, falsely flagging it as
+                        // trailing. Bytes that arrive in a *later* packet after
+                        // EOS will be caught on the next query when the pump tries
+                        // to dispatch them as a fresh message type — typically the
+                        // unknown-message-type defence (L1) tears the connection
+                        // down at that point.
+                        if (!buffer.IsEmpty)
+                        {
+                            var trailingLength = buffer.Length;
+                            _pipeReader.AdvanceTo(buffer.End);
+                            _protocolFatal = true;
+                            throw new ClickHouseProtocolException(
+                                $"Server sent {trailingLength} byte(s) after EndOfStream; protocol stream is out of sync.");
+                        }
+
                         _pipeReader.AdvanceTo(buffer.Start);
                         yield return message;
                         yield break;
@@ -1876,7 +2250,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
         try
         {
-            var reader = new ProtocolReader(buffer);
+            var reader = CreateProtocolReader(buffer);
             var messageType = (ServerMessageType)reader.ReadVarInt();
 
             switch (messageType)
@@ -1901,7 +2275,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                             {
                                 scanBuffer.Slice(0, dataMessageLength).CopyTo(contiguous);
                                 var contiguousSeq = new ReadOnlySequence<byte>(contiguous, 0, (int)dataMessageLength);
-                                var contiguousReader = new ProtocolReader(contiguousSeq);
+                                var contiguousReader = CreateProtocolReader(contiguousSeq);
 
                                 var tableName = contiguousReader.ReadString();
                                 var block = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion);
@@ -1929,16 +2303,38 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     return true;
 
                 case ServerMessageType.Exception:
-                    var exceptionMessage = ExceptionMessage.Read(ref reader);
-                    buffer = buffer.Slice(reader.Consumed);
+                {
+                    // Scan-then-parse: validates the full ExceptionMessage is buffered
+                    // before we commit to ExceptionMessage.Read (which would otherwise
+                    // throw InvalidOperationException on a partial buffer and rely on
+                    // the catch below to translate that into "incomplete"). The scan
+                    // pass makes the contract explicit: false means incomplete (pump
+                    // more bytes), throw means malformed (tear connection down).
+                    var bodyBuffer = buffer.Slice(reader.Consumed);
+                    var scanReader = CreateProtocolReader(bodyBuffer);
+                    if (!ExceptionMessage.TryScan(ref scanReader))
+                        return false;
+
+                    var parseReader = CreateProtocolReader(bodyBuffer);
+                    var exceptionMessage = ExceptionMessage.Read(ref parseReader);
+                    buffer = bodyBuffer.Slice(parseReader.Consumed);
                     _pipeReader!.AdvanceTo(buffer.Start);
                     throw ClickHouseServerException.FromExceptionMessage(exceptionMessage);
+                }
 
                 case ServerMessageType.Progress:
-                    var progressMessage = ProgressMessage.Read(ref reader, NegotiatedProtocolVersion);
-                    buffer = buffer.Slice(reader.Consumed);
+                {
+                    var bodyBuffer = buffer.Slice(reader.Consumed);
+                    var scanReader = CreateProtocolReader(bodyBuffer);
+                    if (!ProgressMessage.TryScan(ref scanReader, NegotiatedProtocolVersion))
+                        return false;
+
+                    var parseReader = CreateProtocolReader(bodyBuffer);
+                    var progressMessage = ProgressMessage.Read(ref parseReader, NegotiatedProtocolVersion);
+                    buffer = bodyBuffer.Slice(parseReader.Consumed);
                     message = progressMessage;
                     return true;
+                }
 
                 case ServerMessageType.EndOfStream:
                     buffer = buffer.Slice(reader.Consumed);
@@ -1946,11 +2342,21 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     return true;
 
                 case ServerMessageType.ProfileInfo:
-                    // Skip profile info for now - read and discard
-                    SkipProfileInfo(ref reader);
-                    buffer = buffer.Slice(reader.Consumed);
+                {
+                    // Scan-then-skip — see ProfileInfo branch in TryReadTypedMessage
+                    // for the rationale (avoids leaning on catch-IOException for
+                    // partial-data handling).
+                    var bodyBuffer = buffer.Slice(reader.Consumed);
+                    var scanReader = CreateProtocolReader(bodyBuffer);
+                    if (!TrySkipProfileInfo(ref scanReader))
+                        return false;
+
+                    var parseReader = CreateProtocolReader(bodyBuffer);
+                    SkipProfileInfo(ref parseReader);
+                    buffer = bodyBuffer.Slice(parseReader.Consumed);
                     // Continue reading next message
                     return TryReadMessage(ref buffer, registry, out message);
+                }
 
                 case ServerMessageType.ProfileEvents:
                     // ProfileEvents is a data block containing profiling information
@@ -1993,7 +2399,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                             {
                                 scanBuffer.Slice(0, specialMessageLength).CopyTo(contiguous);
                                 var contiguousSeq = new ReadOnlySequence<byte>(contiguous, 0, (int)specialMessageLength);
-                                var contiguousReader = new ProtocolReader(contiguousSeq);
+                                var contiguousReader = CreateProtocolReader(contiguousSeq);
 
                                 var tableName = contiguousReader.ReadString();
                                 var block = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion);
@@ -2020,10 +2426,24 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     return true;
 
                 default:
-                    throw new ClickHouseException($"Unexpected server message type: {messageType}");
+                    // Unknown message-type byte — the stream is structurally
+                    // malformed (or the server speaks a protocol we don't).
+                    // Surface as a typed protocol exception so the catch below
+                    // sets _protocolFatal and the pool discards this connection.
+                    // Without this, the pump would keep reading the same byte
+                    // and deadlock.
+                    throw new ClickHouseProtocolException(
+                        $"Unknown server message type 0x{(byte)messageType:X2} ({(int)messageType}); protocol stream is malformed.");
             }
         }
-        catch (InvalidOperationException ex)
+        catch (ClickHouseProtocolException)
+        {
+            // See TryReadTypedMessage — wire bytes were malformed, the stream is
+            // out of sync, mark the connection as poison so the pool discards it.
+            _protocolFatal = true;
+            throw;
+        }
+        catch (InvalidOperationException)
         {
             // Not enough data yet
             return false;
@@ -2073,7 +2493,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             try
             {
                 var seq = new ReadOnlySequence<byte>(accumulator.WrittenMemory);
-                var blockReader = new ProtocolReader(seq);
+                var blockReader = CreateProtocolReader(seq);
                 return new DataMessage { Block = Block.ReadTypedBlockWithTableName(ref blockReader, registry, compressedTableName, NegotiatedProtocolVersion) };
             }
             catch (InvalidOperationException)
@@ -2129,6 +2549,31 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Non-throwing scan that returns true iff the bytes for a complete ProfileInfo
+    /// (per the negotiated protocol version) are buffered. Mirrors
+    /// <see cref="SkipProfileInfo"/> field-for-field — keep them in sync. Used by
+    /// the pumps to gate parse-or-wait without relying on a catch-IOException
+    /// backstop conflating "incomplete" with any other parser failure.
+    /// </summary>
+    private bool TrySkipProfileInfo(ref ProtocolReader reader)
+    {
+        if (!reader.TrySkipVarInt()) return false; // rows
+        if (!reader.TrySkipVarInt()) return false; // blocks
+        if (!reader.TrySkipVarInt()) return false; // bytes
+        if (!reader.TryReadByte(out _)) return false; // applied_limit
+        if (!reader.TrySkipVarInt()) return false; // rows_before_limit
+        if (!reader.TryReadByte(out _)) return false; // calculated_rows_before_limit / obsolete
+
+        if (NegotiatedProtocolVersion >= ProtocolVersion.WithRowsBeforeAggregation)
+        {
+            if (!reader.TryReadByte(out _)) return false; // applied_aggregation
+            if (!reader.TrySkipVarInt()) return false; // rows_before_aggregation
+        }
+
+        return true;
+    }
+
     private static T? ConvertResult<T>(object? value)
     {
         if (value is null)
@@ -2143,7 +2588,13 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
     private async Task CloseInternalAsync()
     {
-        _isOpen = false;
+        // Flip _isOpen under the lock so readers in CanBePooled / query
+        // entrypoints see the transition atomically with _currentQueryId /
+        // role-tracking clearing.
+        lock (_queryLock)
+        {
+            _isOpen = false;
+        }
         _compressionEnabled = false;
         _schemaCache.Clear();
         // A fresh TCP session starts with the user's default roles; drop our tracking
@@ -2232,6 +2683,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
         _disposed = true;
         await CloseInternalAsync();
+        _writeLock.Dispose();
     }
 
     /// <summary>
@@ -2271,6 +2723,9 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
         // Set compression state for response handling
         _compressionEnabled = _settings.Compress;
+        // Mirror SendQueryAsync (line 1661) — clear stale cancel state from a
+        // prior query so the bulk-path drain gate does not mis-trigger.
+        _cancellationRequested = false;
 
         var effectiveQueryId = ResolveQueryId(queryId);
         var queryMessage = QueryMessage.Create(
@@ -2313,8 +2768,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             File.AppendAllText(logPath, $"[CH] INSERT QUERY + INITIAL EMPTY: {bufferWriter.WrittenCount} bytes\n");
         }
 
-        await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
 
     /// <summary>
@@ -2352,7 +2806,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
             try
             {
-                var reader = new ProtocolReader(buffer);
+                var reader = CreateProtocolReader(buffer);
                 var messageType = (ServerMessageType)reader.ReadVarInt();
 
                 if (wireDump == "1")
@@ -2478,8 +2932,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             File.AppendAllText(logPath, $"[CH] HEX: {BitConverter.ToString(bufferWriter.WrittenSpan.ToArray())}\n");
         }
 
-        await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
 
     /// <summary>
@@ -2514,8 +2967,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             File.AppendAllText(logPath, $"[CH] HEX: {BitConverter.ToString(bufferWriter.WrittenSpan.ToArray())}\n");
         }
 
-        await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
-        await _pipeWriter.FlushAsync(cancellationToken);
+        await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
 
     /// <summary>
@@ -2579,8 +3031,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 File.AppendAllText(logPath, $"[CH] HEX: {BitConverter.ToString(bufferWriter.WrittenSpan.ToArray())}\n");
             }
 
-            await _pipeWriter!.WriteAsync(bufferWriter.WrittenMemory, cancellationToken);
-            await _pipeWriter.FlushAsync(cancellationToken);
+            await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
         }
         finally
         {
@@ -2711,7 +3162,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
             try
             {
-                var reader = new ProtocolReader(buffer);
+                var reader = CreateProtocolReader(buffer);
                 var messageType = (ServerMessageType)reader.ReadVarInt();
 
                 if (wireDump == "1")
@@ -2722,19 +3173,65 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 switch (messageType)
                 {
                     case ServerMessageType.EndOfStream:
-                        _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
+                    {
+                        // Advance past the EOS byte first, then check whether the
+                        // same buffer contained any trailing bytes — same L4 invariant
+                        // as the main pump (see ReadServerMessagesAsync). After a clean
+                        // INSERT EOS the server must not send anything else for this
+                        // query; trailing bytes mean the stream is out of sync.
+                        var afterEos = buffer.GetPosition(reader.Consumed);
+                        var trailing = buffer.Slice(afterEos);
+                        if (!trailing.IsEmpty)
+                        {
+                            var trailingLength = trailing.Length;
+                            _pipeReader.AdvanceTo(buffer.End);
+                            _protocolFatal = true;
+                            throw new ClickHouseProtocolException(
+                                $"Server sent {trailingLength} byte(s) after EndOfStream during INSERT; protocol stream is out of sync.");
+                        }
+                        _pipeReader.AdvanceTo(afterEos);
                         return;
+                    }
 
                     case ServerMessageType.Exception:
-                        var exceptionMessage = ExceptionMessage.Read(ref reader);
-                        _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
+                    {
+                        // Scan-then-parse — see TryReadMessage for the rationale.
+                        // Without TryScan a partial Exception throws InvalidOperationException
+                        // and the catch below treats it as "not enough bytes" — which
+                        // works but conflates incomplete data with any other parser bug.
+                        var bodyBuffer = buffer.Slice(reader.Consumed);
+                        var scanReader = CreateProtocolReader(bodyBuffer);
+                        if (!ExceptionMessage.TryScan(ref scanReader))
+                        {
+                            _pipeReader.AdvanceTo(buffer.Start, buffer.End);
+                            if (result.IsCompleted)
+                                throw new ClickHouseConnectionException("Incomplete INSERT response from server");
+                            continue;
+                        }
+
+                        var parseReader = CreateProtocolReader(bodyBuffer);
+                        var exceptionMessage = ExceptionMessage.Read(ref parseReader);
+                        _pipeReader.AdvanceTo(bodyBuffer.GetPosition(parseReader.Consumed));
                         throw ClickHouseServerException.FromExceptionMessage(exceptionMessage);
+                    }
 
                     case ServerMessageType.Progress:
-                        // Skip progress messages
-                        ProgressMessage.Read(ref reader, NegotiatedProtocolVersion);
-                        _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
+                    {
+                        var bodyBuffer = buffer.Slice(reader.Consumed);
+                        var scanReader = CreateProtocolReader(bodyBuffer);
+                        if (!ProgressMessage.TryScan(ref scanReader, NegotiatedProtocolVersion))
+                        {
+                            _pipeReader.AdvanceTo(buffer.Start, buffer.End);
+                            if (result.IsCompleted)
+                                throw new ClickHouseConnectionException("Incomplete INSERT response from server");
+                            continue;
+                        }
+
+                        var parseReader = CreateProtocolReader(bodyBuffer);
+                        _ = ProgressMessage.Read(ref parseReader, NegotiatedProtocolVersion);
+                        _pipeReader.AdvanceTo(bodyBuffer.GetPosition(parseReader.Consumed));
                         break;
+                    }
 
                     case ServerMessageType.Data:
                         // Skip any data messages (e.g., empty confirmation blocks)
@@ -2754,9 +3251,26 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                         break;
 
                     case ServerMessageType.ProfileInfo:
-                        SkipProfileInfo(ref reader);
-                        _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
+                    {
+                        // Scan-then-skip: removes the last catch-IOException
+                        // dependency in this dispatch. A partial ProfileInfo now
+                        // returns "wait for more bytes" cleanly instead of going
+                        // through the catch backstop.
+                        var bodyBuffer = buffer.Slice(reader.Consumed);
+                        var scanReader = CreateProtocolReader(bodyBuffer);
+                        if (!TrySkipProfileInfo(ref scanReader))
+                        {
+                            _pipeReader.AdvanceTo(buffer.Start, buffer.End);
+                            if (result.IsCompleted)
+                                throw new ClickHouseConnectionException("Incomplete INSERT response from server");
+                            continue;
+                        }
+
+                        var parseReader = CreateProtocolReader(bodyBuffer);
+                        SkipProfileInfo(ref parseReader);
+                        _pipeReader.AdvanceTo(bodyBuffer.GetPosition(parseReader.Consumed));
                         break;
+                    }
 
                     case ServerMessageType.ProfileEvents:
                         // For uncompressed data, do a scan pass first
@@ -2775,20 +3289,57 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                         break;
 
                     case ServerMessageType.TableColumns:
-                        // TableColumns message: external table name (string) + columns metadata (string)
-                        // Skip both and continue waiting (matching clickhouse-cpp behavior)
-                        reader.ReadString();
-                        reader.ReadString();
-                        _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
+                        // TableColumns message: external table name (string) + columns metadata (string).
+                        // Scan first so a partial message returns to the read loop instead of
+                        // throwing InvalidOperationException through the catch below — same
+                        // contract reasoning as Exception/Progress above.
+                        {
+                            var bodyBuffer = buffer.Slice(reader.Consumed);
+                            var scanReader = CreateProtocolReader(bodyBuffer);
+                            if (!scanReader.TrySkipString() || !scanReader.TrySkipString())
+                            {
+                                _pipeReader.AdvanceTo(buffer.Start, buffer.End);
+                                if (result.IsCompleted)
+                                    throw new ClickHouseConnectionException("Incomplete INSERT response from server");
+                                continue;
+                            }
+
+                            var parseReader = CreateProtocolReader(bodyBuffer);
+                            parseReader.ReadString();
+                            parseReader.ReadString();
+                            _pipeReader.AdvanceTo(bodyBuffer.GetPosition(parseReader.Consumed));
+                        }
                         break;
 
                     default:
-                        throw new ClickHouseException($"Unexpected server message type during INSERT: {messageType}");
+                        // Unknown message-type byte during the INSERT response — same
+                        // L1 defence as the main pump. Without this, an unknown type
+                        // would either throw the generic ClickHouseException (which
+                        // does NOT set _protocolFatal — pool would reuse a poisoned
+                        // connection) or fall through to the catch and silently retry.
+                        _protocolFatal = true;
+                        throw new ClickHouseProtocolException(
+                            $"Unknown server message type 0x{(byte)messageType:X2} ({(int)messageType}) during INSERT; protocol stream is malformed.");
                 }
+            }
+            catch (ClickHouseProtocolException)
+            {
+                // Already typed as a protocol exception (L1 default arm or L4 trailing
+                // bytes); _protocolFatal is set above, just propagate.
+                throw;
             }
             catch (InvalidOperationException)
             {
-                // Not enough data yet, need more
+                // Defensive backstop. With L1 (default arm), L3 (Exception, Progress,
+                // ProfileInfo, TableColumns scan-then-parse), and the existing
+                // scan-then-parse for Data / ProfileEvents, no message-type branch
+                // here SHOULD throw InvalidOperationException for "incomplete data" —
+                // every parse path is gated by a TryScan that returned true. A
+                // throw here would mean either (a) a parser invariant broke between
+                // scan and parse, or (b) a future message-type branch was added
+                // without a matching TryScan. Treat as "not enough data" (the
+                // pre-L3 contract) so we don't deadlock, but the failure mode is
+                // worth investigating if you see it in logs.
                 _pipeReader.AdvanceTo(buffer.Start, buffer.End);
 
                 if (result.IsCompleted)

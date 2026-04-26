@@ -28,7 +28,7 @@ public sealed class DynamicColumnSkipper : IColumnSkipper
         if (structureVersion != StructureVersionFlattened) return false;
 
         if (!reader.TryReadVarInt(out var numberOfTypesU)) return false;
-        var numberOfTypes = checked((int)numberOfTypesU);
+        var numberOfTypes = ProtocolGuards.ToInt32(numberOfTypesU, "Dynamic numberOfTypes");
 
         var typeNames = new string[numberOfTypes];
         for (int i = 0; i < numberOfTypes; i++)
@@ -77,7 +77,7 @@ public sealed class DynamicColumnSkipper : IColumnSkipper
             {
                 for (int i = 0; i < rowCount; i++)
                 {
-                    var idx = checked((int)reader.ReadUInt32());
+                    var idx = reader.ReadUInt32AsInt32("Dynamic index");
                     if (idx >= totalIndexValues) return false;
                     counts[idx]++;
                 }

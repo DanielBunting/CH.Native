@@ -39,12 +39,14 @@ public sealed class MapColumnSkipper : IColumnSkipper
 
         if (totalEntries > 0)
         {
+            var totalEntriesInt = ProtocolGuards.ToInt32(totalEntries, "Map total entries");
+
             // Skip keys
-            if (!_keySkipper.TrySkipColumn(ref reader, (int)totalEntries))
+            if (!_keySkipper.TrySkipColumn(ref reader, totalEntriesInt))
                 return false;
 
             // Skip values
-            if (!_valueSkipper.TrySkipColumn(ref reader, (int)totalEntries))
+            if (!_valueSkipper.TrySkipColumn(ref reader, totalEntriesInt))
                 return false;
         }
 
