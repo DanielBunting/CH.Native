@@ -373,6 +373,25 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
             return;
         }
 
+        // Reset session-scoped state (SET settings, USE database, temp
+        // tables) before returning to the idle stack. ClickHouse persists
+        // these for the session; without reset, the next renter inherits
+        // the previous renter's state. Best-effort: a reset failure
+        // discards the connection rather than leaking state to the next
+        // renter.
+        if (_options.ResetSessionStateOnReturn)
+        {
+            try
+            {
+                await conn.ResetSessionStateAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                await DiscardAsync(conn).ConfigureAwait(false);
+                return;
+            }
+        }
+
         _idle.Push(new PoolEntry(conn, createdAt, DateTime.UtcNow));
         // Release the permit the renter was holding — this is what wakes
         // any waiter parked in OpenConnectionAsync, who will then pop the

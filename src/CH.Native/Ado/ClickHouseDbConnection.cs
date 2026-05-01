@@ -105,18 +105,18 @@ public sealed class ClickHouseDbConnection : DbConnection
         if (_state != ConnectionState.Closed)
             throw new InvalidOperationException("Connection is not closed.");
 
-        _state = ConnectionState.Connecting;
+        SetState(ConnectionState.Connecting);
         try
         {
             var settings = ClickHouseConnectionSettings.Parse(_connectionString);
             _inner = new ClickHouseConnection(settings);
             await _inner.OpenAsync(cancellationToken).ConfigureAwait(false);
             _currentDatabase = settings.Database;
-            _state = ConnectionState.Open;
+            SetState(ConnectionState.Open);
         }
         catch
         {
-            _state = ConnectionState.Closed;
+            SetState(ConnectionState.Closed);
             _inner = null;
             throw;
         }
@@ -136,8 +136,22 @@ public sealed class ClickHouseDbConnection : DbConnection
             await _inner.CloseAsync().ConfigureAwait(false);
             _inner = null;
         }
-        _state = ConnectionState.Closed;
         _currentDatabase = null;
+        SetState(ConnectionState.Closed);
+    }
+
+    /// <summary>
+    /// Updates <see cref="_state"/> and raises the standard ADO
+    /// <see cref="DbConnection.StateChange"/> event so framework subscribers
+    /// (EF Core, Dapper, NHibernate, custom telemetry) observe every
+    /// transition. No-op when the new state equals the current state.
+    /// </summary>
+    private void SetState(ConnectionState newState)
+    {
+        var previous = _state;
+        if (previous == newState) return;
+        _state = newState;
+        OnStateChange(new System.Data.StateChangeEventArgs(previous, newState));
     }
 
     /// <inheritdoc />

@@ -93,6 +93,22 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private IReadOnlyList<string>? _pinnedRoles;
     private bool _pinnedRolesSet;
 
+    // Session-state tracking for pool-return reset (ResetSessionStateAsync).
+    // ClickHouse `SET <name> = <value>` and `USE <db>` and
+    // `CREATE TEMPORARY TABLE <t>` persist for the session's lifetime, which
+    // means a pool that reuses the same physical connection silently leaks
+    // session state from one renter to the next. We intercept the relevant
+    // statements at execute time (cheap regex over the SQL) and reset them
+    // when the pool returns the connection to the idle stack.
+    //
+    // This is best-effort: complex SQL (`SET a=1, b=2`, `WITH ... SET ...`,
+    // dynamically-built statements) may not be caught. The escape hatch for
+    // those callers is `ClickHouseDataSourceOptions.ResetSessionStateOnReturn = false`.
+    private readonly HashSet<string> _dirtySettings = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _tempTables = new(StringComparer.Ordinal);
+    private string? _userSetDatabase;
+    private readonly object _sessionStateLock = new();
+
     // Pool integration: when set, DisposeAsync hands the connection back to this
     // callback instead of tearing down the socket. The hook is one-shot — it is
     // atomically cleared on invocation, so a second Dispose (e.g. if the pool
@@ -899,6 +915,151 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     }
 
     /// <summary>
+    /// Resets session-scoped state (settings, default database, temporary
+    /// tables) so the connection is safe to hand to a different renter from
+    /// the pool. ClickHouse session state otherwise persists for the lifetime
+    /// of the physical connection, leaking from one pool consumer to the next.
+    /// </summary>
+    /// <remarks>
+    /// Best-effort tracking: only state set via the standard <c>SET name = value</c>,
+    /// <c>USE db</c>, and <c>CREATE TEMPORARY TABLE t</c> statements is caught.
+    /// Compound statements (<c>SET a=1, b=2</c>) and dynamic SQL may bypass
+    /// the inspector — callers needing stricter isolation should use
+    /// per-query <c>SETTINGS</c> clauses or set
+    /// <c>ClickHouseDataSourceOptions.ResetSessionStateOnReturn = false</c>
+    /// and manage state explicitly.
+    /// </remarks>
+    internal async Task ResetSessionStateAsync(CancellationToken cancellationToken = default)
+    {
+        if (!_isOpen || _protocolFatal) return;
+
+        string[] dirtySettings;
+        string[] tempTables;
+        string? userSetDatabase;
+        lock (_sessionStateLock)
+        {
+            dirtySettings = _dirtySettings.Count > 0 ? _dirtySettings.ToArray() : Array.Empty<string>();
+            tempTables = _tempTables.Count > 0 ? _tempTables.ToArray() : Array.Empty<string>();
+            userSetDatabase = _userSetDatabase;
+        }
+
+        // Restore default database first — a USE'd database may shadow temp
+        // table or settings names, and resetting the database makes
+        // subsequent statements unambiguous.
+        if (userSetDatabase is not null)
+        {
+            var defaultDb = string.IsNullOrEmpty(_settings.Database) ? "default" : _settings.Database!;
+            await ExecuteNonQueryAsync(
+                $"USE {Sql.ClickHouseIdentifier.Quote(defaultDb)}",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            lock (_sessionStateLock) { _userSetDatabase = null; }
+        }
+
+        // Reset each dirty setting to its default value. ClickHouse supports
+        // `SET <name> = DEFAULT` per-setting, so we batch one statement per
+        // dirty setting. Failures are best-effort: if a setting is unknown
+        // (e.g. set on an older server, then connection reused on a newer
+        // server with the setting renamed), we swallow and move on.
+        foreach (var name in dirtySettings)
+        {
+            try
+            {
+                await ExecuteNonQueryAsync(
+                    $"SET {name} = DEFAULT",
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exceptions.ClickHouseServerException)
+            {
+                // Setting may have been renamed or removed; tolerate.
+            }
+        }
+        lock (_sessionStateLock) { _dirtySettings.Clear(); }
+
+        // Drop temporary tables. ClickHouse's TEMPORARY TABLEs are
+        // session-scoped; an explicit DROP is required.
+        foreach (var name in tempTables)
+        {
+            try
+            {
+                await ExecuteNonQueryAsync(
+                    $"DROP TEMPORARY TABLE IF EXISTS {Sql.ClickHouseIdentifier.Quote(name)}",
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exceptions.ClickHouseServerException)
+            {
+                // Best-effort.
+            }
+        }
+        lock (_sessionStateLock) { _tempTables.Clear(); }
+    }
+
+    /// <summary>
+    /// Inspects user-issued SQL for session-scoped state changes (SET, USE,
+    /// CREATE TEMPORARY TABLE) and records them so <see cref="ResetSessionStateAsync"/>
+    /// can undo them at pool-return time. Best-effort: the patterns match the
+    /// canonical statement forms; complex / dynamic SQL may bypass the inspector.
+    /// </summary>
+    internal void TrackSessionStateMutation(string sql)
+    {
+        if (string.IsNullOrWhiteSpace(sql)) return;
+        var trimmed = sql.AsSpan().TrimStart();
+
+        // SET <identifier> =
+        if (StartsWithIgnoreCase(trimmed, "SET "))
+        {
+            var rest = trimmed.Slice(4).TrimStart();
+            var nameLen = 0;
+            while (nameLen < rest.Length && (char.IsLetterOrDigit(rest[nameLen]) || rest[nameLen] == '_'))
+                nameLen++;
+            if (nameLen > 0)
+            {
+                var name = rest.Slice(0, nameLen).ToString();
+                // Filter out SET ROLE — that's already managed by the role
+                // sync logic and resetting via SET ROLE = DEFAULT would fail.
+                if (!name.Equals("ROLE", StringComparison.OrdinalIgnoreCase))
+                {
+                    lock (_sessionStateLock) { _dirtySettings.Add(name); }
+                }
+            }
+            return;
+        }
+
+        // USE <identifier>
+        if (StartsWithIgnoreCase(trimmed, "USE "))
+        {
+            var rest = trimmed.Slice(4).TrimStart();
+            var nameLen = 0;
+            while (nameLen < rest.Length && (char.IsLetterOrDigit(rest[nameLen]) || rest[nameLen] == '_' || rest[nameLen] == '`'))
+                nameLen++;
+            if (nameLen > 0)
+            {
+                lock (_sessionStateLock) { _userSetDatabase = rest.Slice(0, nameLen).ToString(); }
+            }
+            return;
+        }
+
+        // CREATE TEMPORARY TABLE <identifier>
+        if (StartsWithIgnoreCase(trimmed, "CREATE TEMPORARY TABLE "))
+        {
+            var rest = trimmed.Slice("CREATE TEMPORARY TABLE ".Length).TrimStart();
+            // Skip optional IF NOT EXISTS
+            if (StartsWithIgnoreCase(rest, "IF NOT EXISTS "))
+                rest = rest.Slice("IF NOT EXISTS ".Length).TrimStart();
+            var nameLen = 0;
+            while (nameLen < rest.Length && (char.IsLetterOrDigit(rest[nameLen]) || rest[nameLen] == '_' || rest[nameLen] == '`'))
+                nameLen++;
+            if (nameLen > 0)
+            {
+                var name = rest.Slice(0, nameLen).ToString().Trim('`');
+                lock (_sessionStateLock) { _tempTables.Add(name); }
+            }
+        }
+    }
+
+    private static bool StartsWithIgnoreCase(ReadOnlySpan<char> span, string prefix)
+        => span.Length >= prefix.Length && span.Slice(0, prefix.Length).Equals(prefix.AsSpan(), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Creates a new command associated with this connection.
     /// </summary>
     /// <returns>A new command instance.</returns>
@@ -1139,7 +1300,11 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         EnterBusy(effectiveQueryId);
         try
         {
-            return await ExecuteNonQueryCoreAsync(sql, progress, cancellationToken, effectiveQueryId);
+            var result = await ExecuteNonQueryCoreAsync(sql, progress, cancellationToken, effectiveQueryId);
+            // Record session-state mutations only on successful execution so
+            // a failed `SET` doesn't poison the dirty list.
+            TrackSessionStateMutation(sql);
+            return result;
         }
         finally
         {
@@ -1308,7 +1473,6 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         string sql,
         [EnumeratorCancellation] CancellationToken cancellationToken = default,
         string? queryId = null)
-        where T : new()
     {
         await using var reader = await ExecuteReaderAsync(sql, cancellationToken, queryId);
 

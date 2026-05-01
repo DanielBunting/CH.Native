@@ -172,15 +172,19 @@ public sealed class ClickHouseQueryable<T> : IQueryable<T>, IOrderedQueryable<T>
 }
 
 /// <summary>
-/// Reflection helper to satisfy the typed mapper's `where T : new()` constraint.
+/// Reflection helper that materializes rows via <see cref="CH.Native.Results.TypeMapper{T}"/>.
 /// The data reader has already been advanced to the first row by the caller.
 /// </summary>
+/// <remarks>
+/// No generic constraint — the historical <c>where T : new()</c> excluded
+/// positional records and anonymous types at compile time even though
+/// <c>TypeMapper&lt;T&gt;</c> can materialize them via its args-ctor strategy.
+/// </remarks>
 internal static class ClickHouseQueryableHelper
 {
     public static async IAsyncEnumerable<T> MapAll<T>(
         ClickHouseDataReader reader,
         [EnumeratorCancellation] CancellationToken cancellationToken)
-        where T : new()
     {
         var mapper = new CH.Native.Results.TypeMapper<T>(reader);
 

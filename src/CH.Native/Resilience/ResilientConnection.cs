@@ -244,7 +244,6 @@ public sealed class ResilientConnection : IAsyncDisposable
     public async IAsyncEnumerable<T> QueryAsync<T>(
         string sql,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        where T : new()
     {
         ThrowIfDisposed();
         await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);

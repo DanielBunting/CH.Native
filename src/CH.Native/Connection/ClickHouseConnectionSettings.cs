@@ -372,10 +372,28 @@ public sealed class ClickHouseConnectionSettings
                     break;
                 case "servers":
                     var serverList = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    ServerAddress? firstServer = null;
                     foreach (var server in serverList)
                     {
                         var serverAddress = ServerAddress.Parse(server);
                         builder.WithServer(serverAddress.Host, serverAddress.Port);
+                        firstServer ??= serverAddress;
+                    }
+                    // Parsing at least one server satisfies the host requirement —
+                    // the multi-host list is a superset of a single Host setting.
+                    // If the caller didn't supply Host= explicitly, backfill the
+                    // primary Host/Port from the first server so plain
+                    // ClickHouseConnection (which doesn't consult the multi-host
+                    // list itself) opens against a real server rather than the
+                    // builder's localhost default.
+                    if (firstServer.HasValue)
+                    {
+                        if (!hasHost)
+                        {
+                            builder.WithHost(firstServer.Value.Host);
+                            builder.WithPort(firstServer.Value.Port);
+                        }
+                        hasHost = true;
                     }
                     break;
                 case "loadbalancing":

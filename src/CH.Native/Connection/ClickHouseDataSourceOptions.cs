@@ -69,4 +69,18 @@ public sealed class ClickHouseDataSourceOptions
     /// startups. Default false.
     /// </summary>
     public bool PrewarmOnStart { get; set; } = false;
+
+    /// <summary>
+    /// When true (default), the pool resets session-scoped server state on
+    /// each connection return — restoring the default database, dropping
+    /// dirty <c>SET</c> settings to <c>DEFAULT</c>, and dropping any
+    /// <c>CREATE TEMPORARY TABLE</c>s the previous renter created. Without
+    /// this, ClickHouse's session-state model leaks state from one renter
+    /// to the next on a reused physical connection.
+    ///
+    /// Set to false to skip the reset (and accept the leak) when callers
+    /// need the lowest-possible per-return latency or rely on session
+    /// state surviving across rents (anti-pattern).
+    /// </summary>
+    public bool ResetSessionStateOnReturn { get; set; } = true;
 }

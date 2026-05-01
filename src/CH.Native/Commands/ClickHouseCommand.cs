@@ -108,7 +108,6 @@ public sealed class ClickHouseCommand : IAsyncDisposable
     /// <returns>An async enumerable of mapped objects.</returns>
     public async IAsyncEnumerable<T> QueryAsync<T>(
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        where T : new()
     {
         await using var reader = await ExecuteReaderAsync(cancellationToken);
 
