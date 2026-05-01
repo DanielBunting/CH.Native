@@ -11,14 +11,25 @@ namespace CH.Native.Ado;
 public sealed class ClickHouseDbDataReader : DbDataReader
 {
     private readonly ClickHouseDataReader _inner;
+    // Optional: when ExecuteDbDataReaderAsync sets up CommandTimeout, ownership
+    // of the timeout CTS transfers to the reader so the timer stays armed
+    // across ReadAsync iterations. Without this, the CTS would be disposed
+    // when ExecuteDbDataReaderAsync returns and CommandTimeout would never fire.
+    private readonly CancellationTokenSource? _timeoutCts;
     private bool _closed;
     private bool _initialized;
     private bool _hasFirstRow;
     private bool _firstRowConsumed;
 
     internal ClickHouseDbDataReader(ClickHouseDataReader inner)
+        : this(inner, timeoutCts: null)
+    {
+    }
+
+    internal ClickHouseDbDataReader(ClickHouseDataReader inner, CancellationTokenSource? timeoutCts)
     {
         _inner = inner;
+        _timeoutCts = timeoutCts;
     }
 
     /// <summary>
@@ -98,18 +109,37 @@ public sealed class ClickHouseDbDataReader : DbDataReader
     {
         ThrowIfClosed();
 
-        // First ensure we're initialized (gets schema + first row if any)
-        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
-
-        // If this is the first Read() call and we have a first row buffered, return it
-        if (!_firstRowConsumed && _hasFirstRow)
+        // Combine the caller's token with the CommandTimeout CTS (if one was
+        // set up by ExecuteDbDataReaderAsync) so the timeout fires per-row,
+        // not just at the initial query dispatch.
+        var token = cancellationToken;
+        CancellationTokenSource? linked = null;
+        if (_timeoutCts is not null)
         {
-            _firstRowConsumed = true;
-            return true;
+            linked = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken, _timeoutCts.Token);
+            token = linked.Token;
         }
 
-        // Otherwise, read the next row
-        return await _inner.ReadAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // First ensure we're initialized (gets schema + first row if any)
+            await EnsureInitializedAsync(token).ConfigureAwait(false);
+
+            // If this is the first Read() call and we have a first row buffered, return it
+            if (!_firstRowConsumed && _hasFirstRow)
+            {
+                _firstRowConsumed = true;
+                return true;
+            }
+
+            // Otherwise, read the next row
+            return await _inner.ReadAsync(token).ConfigureAwait(false);
+        }
+        finally
+        {
+            linked?.Dispose();
+        }
     }
 
     // Row-data accessors must fail after the reader has been closed — returning
@@ -279,7 +309,10 @@ public sealed class ClickHouseDbDataReader : DbDataReader
     protected override void Dispose(bool disposing)
     {
         if (disposing)
+        {
             Close();
+            _timeoutCts?.Dispose();
+        }
         base.Dispose(disposing);
     }
 
@@ -287,6 +320,7 @@ public sealed class ClickHouseDbDataReader : DbDataReader
     public override async ValueTask DisposeAsync()
     {
         await CloseAsync().ConfigureAwait(false);
+        _timeoutCts?.Dispose();
         await base.DisposeAsync().ConfigureAwait(false);
     }
 }

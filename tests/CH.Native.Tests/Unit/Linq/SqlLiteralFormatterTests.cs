@@ -162,4 +162,33 @@ public class SqlLiteralFormatterTests
         Assert.Equal("SELECT * FROM t WHERE 1 = 1",
             Render("SELECT * FROM t WHERE 1 = 1"));
     }
+
+    [Fact]
+    public void ByteArray_FallsThroughToArrayPath_RendersAsByteList()
+    {
+        // Documents today's behaviour: byte[] matches the IEnumerable branch
+        // and renders as `[1, 2, 3]` rather than a ClickHouse-compatible hex
+        // literal. This is wrong for typical ClickHouse use (hash columns
+        // typically use FixedString or a hex literal), but no LINQ user
+        // currently uses byte[] in a Where predicate against a hashed column,
+        // so the gap is theoretical. Pin the actual behaviour so a future
+        // contract change is visible.
+        var bytes = new byte[] { 0xDE, 0xAD, 0xBE, 0xEF };
+        Assert.Equal("WHERE h = [222, 173, 190, 239]",
+            Render("WHERE h = {p1:Array(UInt8)}", ("p1", bytes)));
+    }
+
+    [Fact]
+    public void JsonDocument_FallsThroughToConvertToString_BrokenButPinned()
+    {
+        // System.Text.Json.JsonDocument doesn't have a useful ToString;
+        // Convert.ToString returns the type-name fallback. The visitor's
+        // primary path is parameter binding — JsonDocument inlining is a
+        // diagnostic edge case and pinned here for visibility.
+        using var doc = System.Text.Json.JsonDocument.Parse("""{"k": 1}""");
+        var rendered = Render("SELECT {p1:JSON}", ("p1", doc));
+        // Today: rendered as 'System.Text.Json.JsonDocument' (escaped quoted form).
+        // Test asserts the actual current output so a future fix flips this.
+        Assert.Contains("JsonDocument", rendered);
+    }
 }

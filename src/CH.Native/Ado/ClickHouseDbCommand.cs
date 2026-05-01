@@ -204,17 +204,29 @@ public sealed class ClickHouseDbCommand : DbCommand
     {
         EnsureConnection();
         var nativeParams = BuildNativeParameters();
-        using var timeoutCts = CreateTimeoutCts(cancellationToken);
+        // CommandTimeout for readers must outlive this method — the reader is
+        // returned to the caller and ReadAsync iterations need to observe the
+        // timer. Ownership of the CTS transfers to the returned
+        // ClickHouseDbDataReader, which disposes it when the reader is disposed.
+        var timeoutCts = CreateTimeoutCts(cancellationToken);
         var token = timeoutCts?.Token ?? cancellationToken;
 
-        var reader = await _connection!.Inner.ExecuteReaderWithParametersAsync(
-            _commandText,
-            nativeParams,
-            token,
-            rolesOverride: _roles is { Count: > 0 } ? _roles : null,
-            queryId: QueryId).ConfigureAwait(false);
-        QueryId = reader.QueryId ?? QueryId;
-        return new ClickHouseDbDataReader(reader);
+        try
+        {
+            var reader = await _connection!.Inner.ExecuteReaderWithParametersAsync(
+                _commandText,
+                nativeParams,
+                token,
+                rolesOverride: _roles is { Count: > 0 } ? _roles : null,
+                queryId: QueryId).ConfigureAwait(false);
+            QueryId = reader.QueryId ?? QueryId;
+            return new ClickHouseDbDataReader(reader, timeoutCts);
+        }
+        catch
+        {
+            timeoutCts?.Dispose();
+            throw;
+        }
     }
 
     /// <inheritdoc />
