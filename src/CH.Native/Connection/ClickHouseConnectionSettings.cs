@@ -529,6 +529,16 @@ public sealed class ClickHouseConnectionSettings
                     else
                         throw new ArgumentException($"Invalid {key} value: {value}", nameof(connectionString));
                     break;
+
+                default:
+                    // Unknown keys had been silently dropped, which made typos like
+                    // `Passwor=secret` (missing 'd') succeed with an empty password.
+                    // Throw so misconfigurations are caught at parse time rather than
+                    // surfacing as authentication or connectivity errors at runtime.
+                    throw new ArgumentException(
+                        $"Unknown connection-string key '{key}'. " +
+                        "Check spelling — common typos (Passwor, Hots, Userame) silently failed pre-fix.",
+                        nameof(connectionString));
             }
         }
 

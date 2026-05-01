@@ -77,11 +77,24 @@ public class CancelRecoveryTests
             "SELECT count() FROM numbers(10000000000)",
             queryId: queryId);
 
-        // Give the server a moment to register the query.
-        await Task.Delay(300);
-
+        // Wait deterministically for the query to register in system.processes
+        // rather than guessing a wall-clock delay. On busy CI hardware 300 ms
+        // could fire before the server has registered the query, leading to
+        // KillQuery being a no-op and the test timing out at line 88.
         await using var killer = new ClickHouseConnection(_fixture.BuildSettings());
         await killer.OpenAsync();
+
+        var registerDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        ulong registered = 0;
+        while (DateTime.UtcNow < registerDeadline && registered == 0)
+        {
+            registered = await killer.ExecuteScalarAsync<ulong>(
+                $"SELECT count() FROM system.processes WHERE query_id = '{queryId}'");
+            if (registered > 0) break;
+            await Task.Delay(50);
+        }
+        Assert.True(registered > 0, $"Query {queryId} never registered in system.processes within 5s.");
+
         await killer.KillQueryAsync(queryId);
 
         // The driver task should fault or return within a reasonable window.

@@ -61,15 +61,24 @@ public sealed class FixedStringColumnWriter : IColumnWriter<byte[]>
         if (value is null)
             throw NullAt(rowIndex: -1);
 
-        // Write the value bytes, truncating or padding as needed
-        var bytesToWrite = Math.Min(value.Length, _length);
-        for (int i = 0; i < bytesToWrite; i++)
+        // Pre-fix oversized input was silently truncated to the column's
+        // declared length, leaving the caller unaware that data was lost.
+        // Reject loudly — the fix is to declare a wider FixedString column
+        // or to truncate explicitly at the call site.
+        if (value.Length > _length)
+        {
+            throw new ArgumentException(
+                $"FixedString({_length}) cannot accept a {value.Length}-byte value; truncate at the " +
+                $"call site or declare a wider column.",
+                nameof(value));
+        }
+
+        // Write the value bytes, then zero-pad to the declared length.
+        for (int i = 0; i < value.Length; i++)
         {
             writer.WriteByte(value[i]);
         }
-
-        // Pad with null bytes if needed
-        for (int i = bytesToWrite; i < _length; i++)
+        for (int i = value.Length; i < _length; i++)
         {
             writer.WriteByte(0);
         }

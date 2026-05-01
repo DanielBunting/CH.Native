@@ -338,13 +338,28 @@ public sealed class ClickHouseConnectionSettingsBuilder
     }
 
     /// <summary>
-    /// Sets a client certificate for mutual TLS (mTLS) authentication.
+    /// Sets a client certificate for mutual TLS (mTLS) authentication. The
+    /// certificate <strong>must</strong> include a private key — TLS requires
+    /// the client to sign the handshake — so a public-only certificate is
+    /// rejected with <see cref="ArgumentException"/> to surface the
+    /// configuration mistake at builder time rather than at handshake time.
     /// </summary>
-    /// <param name="certificate">The client certificate.</param>
+    /// <param name="certificate">The client certificate, including private key.</param>
     /// <returns>This builder for chaining.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="certificate"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="certificate"/> has no associated private key.</exception>
     public ClickHouseConnectionSettingsBuilder WithTlsClientCertificate(X509Certificate2 certificate)
     {
-        _tlsClientCertificate = certificate ?? throw new ArgumentNullException(nameof(certificate));
+        ArgumentNullException.ThrowIfNull(certificate);
+        if (!certificate.HasPrivateKey)
+        {
+            throw new ArgumentException(
+                "TLS client certificate has no associated private key. mTLS requires the client to " +
+                "sign the handshake; load the .pfx with its key (or use the path overload that " +
+                "accepts a password) before passing it to WithTlsClientCertificate.",
+                nameof(certificate));
+        }
+        _tlsClientCertificate = certificate;
         return this;
     }
 
@@ -354,17 +369,27 @@ public sealed class ClickHouseConnectionSettingsBuilder
     /// <param name="path">Path to the certificate file.</param>
     /// <param name="password">Optional password for an encrypted PFX.</param>
     /// <returns>This builder for chaining.</returns>
+    /// <exception cref="ArgumentException">The certificate file does not contain a usable private key.</exception>
     public ClickHouseConnectionSettingsBuilder WithTlsClientCertificate(string path, string? password = null)
     {
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("Certificate path must be non-empty.", nameof(path));
 #if NET9_0_OR_GREATER
-        _tlsClientCertificate = string.IsNullOrEmpty(password)
+        var loaded = string.IsNullOrEmpty(password)
             ? X509CertificateLoader.LoadPkcs12FromFile(path, password: null)
             : X509CertificateLoader.LoadPkcs12FromFile(path, password);
 #else
-        _tlsClientCertificate = new X509Certificate2(path, password);
+        var loaded = new X509Certificate2(path, password);
 #endif
+        if (!loaded.HasPrivateKey)
+        {
+            loaded.Dispose();
+            throw new ArgumentException(
+                $"TLS client certificate at '{path}' has no associated private key. " +
+                "Provide a .pfx that bundles the key (and the matching password if encrypted).",
+                nameof(path));
+        }
+        _tlsClientCertificate = loaded;
         return this;
     }
 

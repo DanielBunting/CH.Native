@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using CH.Native.BulkInsert;
+using CH.Native.Telemetry;
 
 namespace CH.Native.Connection;
 
@@ -19,6 +20,9 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
     private readonly SemaphoreSlim _gate;
     private readonly CancellationTokenSource _disposeCts = new();
     private readonly Func<CancellationToken, ValueTask<ClickHouseConnectionSettings>> _settingsFactory;
+    private readonly ClickHouseLogger _logger;
+    private readonly Task _prewarmTask;
+    private readonly Task _evictionSweeperTask;
     private int _total;
     private int _pendingWaits;
     private long _totalRentsServed;
@@ -56,12 +60,94 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
         _options = options;
         _gate = new SemaphoreSlim(options.MaxPoolSize, options.MaxPoolSize);
         _settingsFactory = options.ConnectionFactory ?? (_ => new ValueTask<ClickHouseConnectionSettings>(options.Settings));
+        _logger = new ClickHouseLogger(options.Settings.Telemetry?.LoggerFactory);
 
-        if (options.PrewarmOnStart && options.MinPoolSize > 0)
+        // Capture the prewarm task so callers (and tests) have a deterministic
+        // join point. Pre-fix this was `_ = Task.Run(PrewarmAsync)` and any
+        // failure in PrewarmAsync was silently swallowed.
+        _prewarmTask = (options.PrewarmOnStart && options.MinPoolSize > 0)
+            ? Task.Run(PrewarmAsync)
+            : Task.CompletedTask;
+
+        // Background eviction: pre-fix the lifetime / idle-timeout check fired
+        // only on `OpenConnectionAsync`. A pool that goes hours without a rent
+        // kept stale sockets open against the server. The sweeper walks _idle
+        // periodically and discards expired entries; cancellation comes via
+        // _disposeCts and the task is awaited on DisposeAsync (mirroring the
+        // PrewarmTask pattern).
+        _evictionSweeperTask = Task.Run(EvictionSweeperAsync);
+    }
+
+    private TimeSpan EvictionSweepInterval
+    {
+        get
         {
-            _ = Task.Run(PrewarmAsync);
+            // Cadence: a quarter of the shorter of the two timeouts, clamped
+            // into a sane range. Pools with very short timeouts get more
+            // frequent sweeps; pools with long timeouts don't pay an idle CPU
+            // cost.
+            var shortest = _options.ConnectionLifetime < _options.ConnectionIdleTimeout
+                ? _options.ConnectionLifetime
+                : _options.ConnectionIdleTimeout;
+            var quarter = TimeSpan.FromTicks(shortest.Ticks / 4);
+            if (quarter < TimeSpan.FromSeconds(1)) return TimeSpan.FromSeconds(1);
+            if (quarter > TimeSpan.FromMinutes(5)) return TimeSpan.FromMinutes(5);
+            return quarter;
         }
     }
+
+    private async Task EvictionSweeperAsync()
+    {
+        var ct = _disposeCts.Token;
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(EvictionSweepInterval, ct).ConfigureAwait(false);
+                await SweepIdleOnce().ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Normal shutdown.
+        }
+    }
+
+    private async Task SweepIdleOnce()
+    {
+        // Pop every entry once, then push back whatever's still valid. The
+        // `_idle` stack is best-effort; a concurrent rent may pop the same
+        // entry and lifetime-check it on the rent path. That's harmless —
+        // both paths route through DiscardInternalAsync on expiry.
+        var keep = new List<PoolEntry>();
+        while (_idle.TryPop(out var entry))
+        {
+            if (IsExpired(entry))
+            {
+                try { await DiscardInternalAsync(entry.Connection).ConfigureAwait(false); }
+                catch { /* best-effort */ }
+            }
+            else
+            {
+                keep.Add(entry);
+            }
+        }
+        // Push survivors back in original (most-recent-first via stack) order.
+        for (int i = keep.Count - 1; i >= 0; i--)
+        {
+            _idle.Push(keep[i]);
+        }
+    }
+
+    /// <summary>
+    /// Task representing the background prewarm work (or
+    /// <see cref="Task.CompletedTask"/> if prewarm is disabled). Awaiting it gives
+    /// callers a deterministic point at which the pool's startup attempt is
+    /// known-finished. Failures are surfaced via the configured logger and the
+    /// task itself completes successfully — first real rent surfaces the
+    /// underlying problem.
+    /// </summary>
+    public Task PrewarmTask => _prewarmTask;
 
     /// <summary>The baseline connection settings.</summary>
     public ClickHouseConnectionSettings Settings => _options.Settings;
@@ -238,6 +324,15 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
         // semaphore.
         try { _disposeCts.Cancel(); } catch (ObjectDisposedException) { /* best-effort */ }
 
+        // Wait for the prewarm task to fully unwind before draining _idle. The
+        // cancel above tells in-flight prewarm rents to bail, but the task may
+        // still be partway through Push'ing a freshly-opened connection onto
+        // _idle. If we drained _idle first, that late Push would land on an
+        // emptied stack and the connection would leak (no Release of _gate,
+        // which is itself never disposed).
+        try { await _prewarmTask.ConfigureAwait(false); } catch { /* best-effort */ }
+        try { await _evictionSweeperTask.ConfigureAwait(false); } catch { /* best-effort */ }
+
         while (_idle.TryPop(out var entry))
         {
             // Idle connections don't hold a gate permit (they were released on
@@ -332,17 +427,27 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
     private async Task PrewarmAsync()
     {
         var target = _options.MinPoolSize;
+        var seeded = 0;
         for (var i = 0; i < target; i++)
         {
             try
             {
-                await using var conn = await OpenConnectionAsync(CancellationToken.None).ConfigureAwait(false);
+                await using var conn = await OpenConnectionAsync(_disposeCts.Token).ConfigureAwait(false);
                 // Immediately disposing returns the connection to the pool.
+                seeded++;
             }
-            catch
+            catch (OperationCanceledException) when (_disposeCts.IsCancellationRequested)
             {
-                // Prewarm is best-effort; real failures surface on first real rent.
-                break;
+                // Pool was disposed mid-prewarm; nothing to log.
+                return;
+            }
+            catch (Exception ex)
+            {
+                // Prewarm is best-effort but no longer silent: log once at the
+                // failure point so operators get a same-cause signal rather than
+                // a delayed observation when the first real rent fails.
+                _logger.PrewarmFailed(seeded, target, ex.Message, ex);
+                return;
             }
         }
     }

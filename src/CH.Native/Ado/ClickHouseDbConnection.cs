@@ -148,8 +148,25 @@ public sealed class ClickHouseDbConnection : DbConnection
         if (string.IsNullOrWhiteSpace(databaseName))
             throw new ArgumentException("Database name cannot be empty.", nameof(databaseName));
 
-        // ClickHouse supports USE in native protocol
-        // Escape backticks in database name
+        // Validate up-front so malformed identifiers never reach the wire.
+        // Backticks are allowed (the USE statement quotes the name and we double
+        // them below), but control characters — NUL, CR, LF, TAB, etc. — are
+        // not. Cap length at ClickHouse's documented identifier maximum.
+        if (databaseName.Length > 255)
+            throw new ArgumentException(
+                $"Database name length ({databaseName.Length}) exceeds the 255-character ClickHouse identifier maximum.",
+                nameof(databaseName));
+        for (int i = 0; i < databaseName.Length; i++)
+        {
+            var c = databaseName[i];
+            if (char.IsControl(c))
+                throw new ArgumentException(
+                    $"Database name contains control character U+{(int)c:X4} at position {i}; reject before sending.",
+                    nameof(databaseName));
+        }
+
+        // ClickHouse supports USE in native protocol; backtick-quote and double
+        // any embedded backticks per the identifier-quoting rule.
         using var cmd = CreateCommand();
         cmd.CommandText = $"USE `{databaseName.Replace("`", "``")}`";
         cmd.ExecuteNonQuery();

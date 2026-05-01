@@ -7,6 +7,17 @@ namespace CH.Native.BulkInsert;
 /// (table name, ordered column list fingerprint). The fingerprint differentiates
 /// POCOs that map disjoint column subsets of the same table.
 /// </summary>
+/// <remarks>
+/// Lifetime is bounded by the owning <c>ClickHouseConnection</c>: the cache is
+/// cleared on <c>CloseInternalAsync</c> and per-table on <c>InvalidateTable</c>.
+/// Entries are not evicted by size, so callers that bulk-insert into very many
+/// distinct tables on a long-lived pooled connection can accumulate metadata
+/// (a few hundred bytes per <see cref="BulkInsertSchema"/>). If that profile
+/// matches your workload, call
+/// <c>ClickHouseConnection.InvalidateSchemaCache()</c> periodically — or
+/// configure <c>BulkInsertOptions.UseSchemaCache = false</c> — to keep the
+/// per-connection footprint flat.
+/// </remarks>
 internal sealed class SchemaCache
 {
     private readonly ConcurrentDictionary<SchemaKey, BulkInsertSchema> _entries = new();

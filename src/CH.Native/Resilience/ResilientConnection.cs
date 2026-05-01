@@ -10,6 +10,21 @@ namespace CH.Native.Resilience;
 /// A resilient ClickHouse connection that provides retry, circuit breaker, load balancing,
 /// and health checking capabilities.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>Session stickiness:</b> a single <c>ResilientConnection</c> instance is
+/// not pinned to a single physical server. Each public call rents a healthy
+/// endpoint via the <see cref="LoadBalancer"/>; on a transient failure the
+/// retry path may select a different server for the next attempt. This is
+/// fine for read-only SQL — <see cref="ExecuteScalarAsync{T}"/> and
+/// <see cref="QueryAsync"/> are idempotent — and for write SQL the Round-3
+/// fix in <see cref="ExecuteNonQueryAsync"/> short-circuits retry entirely,
+/// so an INSERT cannot accidentally be replayed against a different replica.
+/// Callers that genuinely need session-scoped state (temporary tables,
+/// <c>SET ROLE</c>) should rent a raw <see cref="ClickHouseConnection"/>
+/// from a <see cref="ClickHouseDataSource"/> instead.
+/// </para>
+/// </remarks>
 public sealed class ResilientConnection : IAsyncDisposable
 {
     private readonly ClickHouseConnectionSettings _settings;
@@ -139,6 +154,15 @@ public sealed class ResilientConnection : IAsyncDisposable
     /// <summary>
     /// Executes a non-query command and returns the number of affected rows.
     /// </summary>
+    /// <remarks>
+    /// Resilience features (retry, circuit breaker, failover) are applied to
+    /// the connect / first-attempt phase only when <paramref name="sql"/> is a
+    /// write or DDL statement (INSERT, ALTER, OPTIMIZE, KILL, CREATE, DROP,
+    /// RENAME, TRUNCATE, SET, GRANT, REVOKE, USE, SYSTEM, WITH-INSERT, etc.).
+    /// Auto-retrying those after a transient error would risk duplicate rows
+    /// or repeated side effects against ClickHouse, which has no general
+    /// statement-level idempotency. SELECT-style reads continue to be retried.
+    /// </remarks>
     /// <param name="sql">The SQL command.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The number of affected rows.</returns>
@@ -146,6 +170,14 @@ public sealed class ResilientConnection : IAsyncDisposable
         string sql,
         CancellationToken cancellationToken = default)
     {
+        if (!SqlRetrySafety.IsRetrySafe(sql))
+        {
+            ThrowIfDisposed();
+            await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+            return await _currentConnection!.ExecuteNonQueryAsync(sql, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         return await ExecuteWithResilienceAsync(
             async ct =>
             {
@@ -227,8 +259,18 @@ public sealed class ResilientConnection : IAsyncDisposable
     /// Bulk inserts rows into the specified table.
     /// </summary>
     /// <remarks>
-    /// The entire bulk insert operation is wrapped with resilience features.
-    /// On transient failure, the entire insert will be retried.
+    /// <para>
+    /// Resilience covers the connect phase only. Once the wire INSERT begins,
+    /// no automatic retry is attempted: ClickHouse INSERTs into non-replicated
+    /// tables are not idempotent, so a transparent retry after partial bytes
+    /// were accepted would duplicate rows. This matches the behavior of the
+    /// <see cref="IAsyncEnumerable{T}"/> overload below.
+    /// </para>
+    /// <para>
+    /// If you need partial-commit semantics for very large inserts, split the
+    /// source into smaller batches and issue a separate
+    /// <c>BulkInsertAsync</c> per batch — each call is its own commit boundary.
+    /// </para>
     /// </remarks>
     /// <typeparam name="T">The POCO type representing a row.</typeparam>
     /// <param name="tableName">The table name to insert into.</param>
@@ -241,14 +283,9 @@ public sealed class ResilientConnection : IAsyncDisposable
         BulkInsertOptions? options = null,
         CancellationToken cancellationToken = default) where T : class
     {
-        await ExecuteWithResilienceAsync(
-            async ct =>
-            {
-                await EnsureConnectedAsync(ct).ConfigureAwait(false);
-                await _currentConnection!.BulkInsertAsync(tableName, rows, options, ct).ConfigureAwait(false);
-                return true;
-            },
-            cancellationToken).ConfigureAwait(false);
+        ThrowIfDisposed();
+        await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+        await _currentConnection!.BulkInsertAsync(tableName, rows, options, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

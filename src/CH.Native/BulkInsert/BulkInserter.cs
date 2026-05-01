@@ -56,6 +56,11 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         _connection = connection ?? throw new ArgumentNullException(nameof(connection));
         _tableName = tableName ?? throw new ArgumentNullException(nameof(tableName));
         _options = options ?? BulkInsertOptions.Default;
+        if (_options.BatchSize <= 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                _options.BatchSize,
+                $"{nameof(BulkInsertOptions)}.{nameof(BulkInsertOptions.BatchSize)} must be greater than zero.");
         _buffer = new List<T>(_options.BatchSize);
     }
 
@@ -642,28 +647,38 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     }
 
     /// <summary>
-    /// Disposes the bulk inserter. Callers are required to call <see cref="CompleteAsync"/>
-    /// explicitly for rows to persist — Dispose is teardown, not commit. If buffered rows
-    /// exist at dispose time without an explicit complete, an
-    /// <see cref="InvalidOperationException"/> is thrown so the data-loss path is loud
-    /// rather than silent. A clean inserter (no rows buffered, or already completed)
-    /// disposes without error.
+    /// Disposes the bulk inserter. If buffered (un-flushed) rows exist at dispose
+    /// time without an explicit <see cref="CompleteAsync"/>, an
+    /// <see cref="InvalidOperationException"/> is thrown so the data-loss is loud
+    /// rather than silent.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// If the caller did not call <see cref="CompleteAsync"/> but also never added
-    /// rows (e.g. <see cref="InitAsync"/> threw, or the inserter was abandoned before
-    /// any <see cref="AddAsync"/>), Dispose still needs to finalize the server-side
-    /// protocol state so the underlying connection is reusable. It does so by sending
-    /// the empty end-of-stream block via <see cref="CompleteAsync"/>. A failure there
-    /// still surfaces to the caller — a broken wire is not something to swallow.
+    /// <b>Important commit semantics.</b> Each batch that <see cref="AddAsync"/>
+    /// auto-flushes (or that <see cref="FlushAsync"/> writes explicitly) is
+    /// committed by the server <em>per-block</em> — they're durable at the moment
+    /// the block lands, independent of whether the INSERT statement is "completed"
+    /// by the empty-terminator block. So when <c>DisposeAsync</c> runs without
+    /// <c>CompleteAsync</c>, the previously-flushed batches <b>are persisted</b>;
+    /// only the buffered remainder (rows added since the last flush) is lost.
+    /// The exception message wording reflects this — "the buffered remainder
+    /// will not be persisted", not "no rows were persisted".
     /// </para>
     /// <para>
-    /// This is a deliberate contract change from a previous implementation that
-    /// swallowed implicit-complete failures. Prioritising data stability means never
-    /// dropping rows silently, even if it makes <c>await using</c> throw. Callers who
-    /// want fire-and-forget semantics should call <see cref="CompleteAsync"/> inside
-    /// their own try/catch.
+    /// Callers who need true all-or-nothing semantics across an entire batch
+    /// stream should use a <c>BatchSize</c> larger than the total row count
+    /// they intend to insert (so nothing flushes until <c>CompleteAsync</c>),
+    /// or wrap the whole insert in their own try/catch and re-issue against
+    /// a fresh table on failure.
+    /// </para>
+    /// <para>
+    /// If the caller did not call <see cref="CompleteAsync"/> but also never
+    /// added rows (e.g. <see cref="InitAsync"/> threw, or the inserter was
+    /// abandoned before any <see cref="AddAsync"/>), Dispose still needs to
+    /// finalize the server-side protocol state so the underlying connection
+    /// is reusable. It does so by driving the implicit complete via
+    /// <see cref="CompleteAsync"/>. A failure there still surfaces to the
+    /// caller — a broken wire is not something to swallow.
     /// </para>
     /// </remarks>
     public async ValueTask DisposeAsync()
@@ -681,18 +696,27 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
                 if (_buffer.Count > 0)
                 {
                     // Buffered rows + no explicit complete = loud failure. Finalize the
-                    // wire by sending the empty end-of-stream block so the server doesn't
-                    // receive the already-sent rows as a real insert, then throw.
+                    // wire by sending the empty end-of-stream block so the connection is
+                    // reusable, then throw.
+                    //
+                    // Important: ClickHouse INSERT commits each data block independently
+                    // (see the BulkInsertAtomicityTests suite). Any batch that was
+                    // already flushed before this dispose IS persistent; only the
+                    // buffered remainder (the rows below) is dropped. The exception
+                    // message reflects that — saying "no rows persisted" would be
+                    // a lie.
                     var bufferedCount = _buffer.Count;
+                    var totalFlushedRows = _totalRowsInserted;
                     _buffer.Clear();
                     try { await _connection.SendEmptyBlockAsync(CancellationToken.None).ConfigureAwait(false); } catch { /* best-effort teardown */ }
                     try { await _connection.ReceiveEndOfStreamAsync(CancellationToken.None).ConfigureAwait(false); } catch { /* best-effort teardown */ }
 
                     throw new InvalidOperationException(
                         $"BulkInserter for table '{_tableName}' was disposed with {bufferedCount} " +
-                        $"unflushed row(s) and no call to CompleteAsync(). Rows added via AddAsync " +
-                        $"are NOT persisted until CompleteAsync returns successfully — call it " +
-                        $"explicitly before disposing.");
+                        $"un-flushed row(s) and no call to CompleteAsync(). Those rows are LOST. " +
+                        $"({totalFlushedRows} previously-flushed row(s) on this inserter ARE persisted — " +
+                        $"ClickHouse commits each data block independently of CompleteAsync.) " +
+                        $"Call CompleteAsync() explicitly before disposing to flush the buffer.");
                 }
 
                 // No buffered rows but still mid-stream: finalize protocol state so the
@@ -729,6 +753,8 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
 
                 // Check new ClickHouseColumnAttribute
                 var newAttr = p.GetCustomAttribute<ClickHouseColumnAttribute>();
+                if (newAttr?.Ignore == true)
+                    return null;
 
                 // Prefer new attribute, fall back to legacy
                 var columnName = newAttr?.Name ?? legacyAttr?.Name ?? p.Name;

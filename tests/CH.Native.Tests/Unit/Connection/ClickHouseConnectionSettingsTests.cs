@@ -66,6 +66,21 @@ public class ClickHouseConnectionSettingsTests
             ClickHouseConnectionSettings.Parse(connectionString));
     }
 
+    [Theory]
+    [InlineData("Host=localhost;Passwor=secret")] // typo: missing 'd'
+    [InlineData("Host=localhost;Userame=admin")]   // typo: missing 'n'
+    [InlineData("Host=localhost;UnknownKey=value")]
+    public void Parse_UnknownKey_ThrowsArgumentException(string connectionString)
+    {
+        // Pre-fix: unknown keys were silently dropped, so common typos like
+        // "Passwor" (missing 'd') would result in an empty password being used —
+        // surfacing as a confusing authentication failure at runtime.
+        // Post-fix: we throw at parse time so misconfigurations are caught early.
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ClickHouseConnectionSettings.Parse(connectionString));
+        Assert.Contains("Unknown connection-string key", ex.Message);
+    }
+
     [Fact]
     public void Parse_CaseInsensitiveKeys()
     {

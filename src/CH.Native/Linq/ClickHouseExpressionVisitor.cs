@@ -604,6 +604,11 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
                 _currentExpression.Append(BuildLikePattern("%", endsValue, ""));
                 break;
 
+            // NOTE: case-folding semantics follow ClickHouse's `lower()` /
+            // `upper()` (ASCII-only by default). Turkish/Azeri `i`/`İ` do NOT
+            // round-trip through `string.ToLowerInvariant()`. Callers needing
+            // Unicode case-folding should use `lowerUTF8` server-side instead;
+            // we don't translate to it because LINQ doesn't carry locale intent.
             case nameof(string.ToLower):
             case nameof(string.ToLowerInvariant):
                 _currentExpression.Append("lower(");
@@ -648,27 +653,7 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
         if (collection == null)
             throw new InvalidOperationException("Contains requires a non-null collection");
 
-        var values = collection.Cast<object>().ToList();
-
-        if (values.Count == 0)
-        {
-            // Empty collection: always false
-            _currentExpression.Append("1 = 0");
-            return;
-        }
-
-        VisitPredicate(method.Arguments[0]);
-        _currentExpression.Append(" IN (");
-
-        bool first = true;
-        foreach (var item in values)
-        {
-            if (!first) _currentExpression.Append(", ");
-            AppendConstant(item);
-            first = false;
-        }
-
-        _currentExpression.Append(')');
+        EmitInClauseFromEnumerable(collection, method.Arguments[0]);
     }
 
     private void VisitMemoryExtensionsContains(MethodCallExpression method)
@@ -682,26 +667,43 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
         if (array == null)
             throw new InvalidOperationException("Could not extract array from span expression for Contains");
 
-        var values = array.Cast<object>().ToList();
+        EmitInClauseFromEnumerable(array, method.Arguments[1]);
+    }
 
-        if (values.Count == 0)
+    /// <summary>
+    /// Emits <c>&lt;valueExpr&gt; IN (...)</c> for a non-empty source, or
+    /// <c>1 = 0</c> for an empty one. Streams the source — pre-fix all three
+    /// callers materialised it via <c>Cast&lt;object&gt;().ToList()</c>, which
+    /// boxed every element of e.g. an <c>int[10000]</c> just to count it.
+    /// We emit the LHS predicate eagerly and back up the StringBuilder on
+    /// the empty path; that keeps the hot path branch-free.
+    /// </summary>
+    private void EmitInClauseFromEnumerable(IEnumerable source, Expression valueExpr)
+    {
+        var enumerator = source.GetEnumerator();
+        try
         {
-            _currentExpression.Append("1 = 0");
-            return;
+            if (!enumerator.MoveNext())
+            {
+                // Empty source — short-circuit to a constant-false predicate.
+                _currentExpression.Append("1 = 0");
+                return;
+            }
+
+            VisitPredicate(valueExpr);
+            _currentExpression.Append(" IN (");
+            AppendConstant(enumerator.Current);
+            while (enumerator.MoveNext())
+            {
+                _currentExpression.Append(", ");
+                AppendConstant(enumerator.Current);
+            }
+            _currentExpression.Append(')');
         }
-
-        VisitPredicate(method.Arguments[1]);
-        _currentExpression.Append(" IN (");
-
-        bool first = true;
-        foreach (var item in values)
+        finally
         {
-            if (!first) _currentExpression.Append(", ");
-            AppendConstant(item);
-            first = false;
+            (enumerator as IDisposable)?.Dispose();
         }
-
-        _currentExpression.Append(')');
     }
 
     private static IEnumerable? ExtractArrayFromSpanExpression(Expression expression)
@@ -743,26 +745,7 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
         if (collection == null)
             throw new InvalidOperationException("Contains requires a non-null collection");
 
-        var values = collection.Cast<object>().ToList();
-
-        if (values.Count == 0)
-        {
-            _currentExpression.Append("1 = 0");
-            return;
-        }
-
-        VisitPredicate(method.Arguments[1]);
-        _currentExpression.Append(" IN (");
-
-        bool first = true;
-        foreach (var item in values)
-        {
-            if (!first) _currentExpression.Append(", ");
-            AppendConstant(item);
-            first = false;
-        }
-
-        _currentExpression.Append(')');
+        EmitInClauseFromEnumerable(collection, method.Arguments[1]);
     }
 
     private static object? EvaluateExpressionSafe(Expression expression)
@@ -883,8 +866,14 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
             return;
         }
 
-        // Booleans are emitted as 0/1 — they're rarely worth parameterising and
-        // the existing inline form is what every comparison/aggregate already expects.
+        // Booleans are emitted inline as 0/1 — both forms are unambiguous, fully
+        // server-validated, and the comparison/aggregate sites here all expect a
+        // numeric form. SAFETY: the only way `value` is `bool` is if the C#
+        // expression tree carried a `ConstantExpression` of type `bool`; user
+        // input never reaches this site as a runtime-built bool. If that
+        // invariant ever changes (e.g. a future code path lets a non-constant
+        // bool through), revisit and route through the parameter binder
+        // alongside every other primitive below.
         if (value is bool b)
         {
             _currentExpression.Append(b ? "1" : "0");

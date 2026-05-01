@@ -110,10 +110,21 @@ public sealed class TupleColumnWriter : IColumnWriter<object[]>
         if (value is null)
             throw NullAt(rowIndex: -1);
 
-        // Write each element in order
+        // Reject arity mismatch loudly. Pre-fix a short array silently passed
+        // null to non-nullable inner writers (Int32 etc.), corrupting the
+        // wire data; an over-long array silently dropped the trailing
+        // elements.
+        if (value.Length != _elementWriters.Length)
+        {
+            throw new InvalidOperationException(
+                $"Tuple value has {value.Length} elements but the column declares " +
+                $"{_elementWriters.Length} ({TypeName}); arity must match exactly.");
+        }
+
+        // Write each element in order.
         for (int i = 0; i < _elementWriters.Length; i++)
         {
-            _elementWriters[i].WriteValue(ref writer, i < value.Length ? value[i] : null);
+            _elementWriters[i].WriteValue(ref writer, value[i]);
         }
     }
 

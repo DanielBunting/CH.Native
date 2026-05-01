@@ -23,4 +23,13 @@ public sealed class ClickHouseColumnAttribute : Attribute
     /// Lower values are ordered first. Default is int.MaxValue.
     /// </summary>
     public int Order { get; set; } = int.MaxValue;
+
+    /// <summary>
+    /// When set to <c>true</c>, the property is excluded from bulk-insert
+    /// column mapping entirely — equivalent to the legacy
+    /// <c>[Column(Ignore = true)]</c>. Use this for transient properties
+    /// (computed values, view-model fields) that don't correspond to a
+    /// table column.
+    /// </summary>
+    public bool Ignore { get; set; }
 }

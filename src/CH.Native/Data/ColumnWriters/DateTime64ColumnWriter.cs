@@ -1,3 +1,4 @@
+using CH.Native.Exceptions;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnWriters;
@@ -69,9 +70,23 @@ public sealed class DateTime64ColumnWriter : IColumnWriter<DateTime>
         long result;
         if (_precision > 7)
         {
-            // For precision 8 or 9, we need to multiply by the additional factor
+            // Precision 8 / 9: multiply ticks by the sub-tick factor. DateTime
+            // values near .NET's MaxValue can produce ticks counts large enough
+            // that the multiplication overflows Int64; pre-fix this wrapped
+            // silently to a negative wire value. checked() surfaces the
+            // overflow and we wrap it in a typed protocol exception so it
+            // doesn't get classified as transient downstream.
             var multiplier = (long)Math.Pow(10, _precision - 7);
-            result = ticks * multiplier;
+            try
+            {
+                result = checked(ticks * multiplier);
+            }
+            catch (OverflowException ex)
+            {
+                throw new ClickHouseProtocolException(
+                    $"DateTime64({_precision}) value {value:O} produces a tick-count that overflows Int64; " +
+                    "ClickHouse cannot represent this moment at the requested precision.", ex);
+            }
         }
         else
         {

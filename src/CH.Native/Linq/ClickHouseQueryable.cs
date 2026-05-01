@@ -151,13 +151,23 @@ public sealed class ClickHouseQueryable<T> : IQueryable<T>, IOrderedQueryable<T>
     }
 
     /// <summary>
-    /// Returns the SQL that would be generated for this query.
+    /// Returns the SQL that would be generated for this query, with captured
+    /// constants and closure values inlined as SQL literals so the result is
+    /// directly runnable in <c>clickhouse-client</c> or any raw-query path.
     /// Useful for debugging and testing.
     /// </summary>
-    /// <returns>The SQL query string.</returns>
+    /// <remarks>
+    /// The execution path uses parameter-bound SQL (<c>{p1:Int32}</c> placeholders)
+    /// for SQL-injection safety and server-side query-cache reuse; this method
+    /// is a diagnostic helper, not the executed form. The inline literals are
+    /// still escaped, but callers should not feed the output of <c>ToSql()</c>
+    /// into a privileged execution path.
+    /// </remarks>
+    /// <returns>The SQL query string with literals inlined.</returns>
     public string ToSql()
     {
-        return _provider.TranslateToSql(_expression);
+        var (sql, parameters) = _provider.TranslateToSqlWithParameters(_expression);
+        return SqlLiteralFormatter.RenderInline(sql, parameters);
     }
 }
 

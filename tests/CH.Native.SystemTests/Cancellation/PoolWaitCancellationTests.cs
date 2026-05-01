@@ -100,7 +100,15 @@ public class PoolWaitCancellationTests
         {
             using var cts = new CancellationTokenSource();
             var queuedRent = ds.OpenConnectionAsync(cts.Token).AsTask();
-            await Task.Delay(150);
+            // Wait deterministically for the rent to park on the gate rather
+            // than guessing a wall-clock delay. Pre-fix this was a fixed 150 ms,
+            // which was tight under CI contention and could fire cancel before
+            // the rent had registered as a pending wait.
+            var parkDeadline = DateTime.UtcNow.AddSeconds(2);
+            while (DateTime.UtcNow < parkDeadline && ds.GetStatistics().PendingWaits < 1)
+                await Task.Delay(20);
+            Assert.True(ds.GetStatistics().PendingWaits >= 1,
+                "Queued rent never registered as a pending wait; cancel race below would be meaningless.");
             cts.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queuedRent);
 

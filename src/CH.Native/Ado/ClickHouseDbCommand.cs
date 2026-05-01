@@ -241,15 +241,23 @@ public sealed class ClickHouseDbCommand : DbCommand
     /// <summary>
     /// Converts ADO.NET parameters to native ClickHouseParameterCollection.
     /// </summary>
+    /// <remarks>
+    /// ADO.NET callers commonly use <see cref="DBNull"/>.<see cref="DBNull.Value"/>
+    /// to represent SQL NULL. The native layer expects plain <c>null</c>, so we
+    /// translate at this boundary — without this, type inference would fail with
+    /// a cryptic "Cannot infer type from DBNull" error instead of the documented
+    /// "Cannot infer type from null" guidance to set <c>ClickHouseType</c> explicitly.
+    /// </remarks>
     private ClickHouseParameterCollection BuildNativeParameters()
     {
         var nativeParams = new ClickHouseParameterCollection();
         foreach (ClickHouseDbParameter p in _parameters)
         {
+            var value = p.Value is DBNull ? null : p.Value;
             if (!string.IsNullOrEmpty(p.ClickHouseType))
-                nativeParams.Add(p.ParameterName, p.Value, p.ClickHouseType);
+                nativeParams.Add(p.ParameterName, value, p.ClickHouseType);
             else
-                nativeParams.Add(p.ParameterName, p.Value);
+                nativeParams.Add(p.ParameterName, value);
         }
         return nativeParams;
     }

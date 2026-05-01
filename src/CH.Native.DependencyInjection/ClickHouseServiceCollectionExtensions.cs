@@ -1,4 +1,5 @@
 using CH.Native.Connection;
+using CH.Native.Exceptions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -37,6 +38,7 @@ public static class ClickHouseServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(section);
         var pocoSnapshot = section.Get<ClickHouseConnectionOptions>() ?? new ClickHouseConnectionOptions();
+        ClickHouseConnectionOptionsValidator.ValidateOrThrow(pocoSnapshot, (section as IConfigurationSection)?.Path);
         return AddCore(services, serviceKey: null,
             builderFactory: _ => ClickHouseConnectionOptionsMapper.CreateBuilder(pocoSnapshot),
             pocoSnapshot: pocoSnapshot);
@@ -84,6 +86,7 @@ public static class ClickHouseServiceCollectionExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(serviceKey);
         ArgumentNullException.ThrowIfNull(section);
         var pocoSnapshot = section.Get<ClickHouseConnectionOptions>() ?? new ClickHouseConnectionOptions();
+        ClickHouseConnectionOptionsValidator.ValidateOrThrow(pocoSnapshot, (section as IConfigurationSection)?.Path);
         return AddCore(services, serviceKey,
             builderFactory: _ => ClickHouseConnectionOptionsMapper.CreateBuilder(pocoSnapshot),
             pocoSnapshot: pocoSnapshot);
@@ -153,22 +156,29 @@ public static class ClickHouseServiceCollectionExtensions
 
         // ConnectionFactory: rebuild from scratch on every creation, layering provider
         // outputs on top. This is the rotating-credential path.
+        //
+        // Each provider call is wrapped in try/catch and rethrown as
+        // ClickHouseAuthenticationException so the Round-1 retry classifier
+        // recognises a credential-fetch failure as non-transient. Pre-fix a
+        // raw provider exception (e.g. Azure.Identity.AuthenticationFailedException
+        // wrapping an IOException) was treated as transient and retried for the
+        // full retry budget — burning the budget against a hopeless provider.
         Func<CancellationToken, ValueTask<ClickHouseConnectionSettings>>? connectionFactory = null;
         if (jwt is not null || cert is not null || ssh is not null || pwd is not null)
         {
             connectionFactory = async ct =>
             {
                 var b = builderFactory(sp);
-                if (pwd is not null) b.WithPassword(await pwd(ct).ConfigureAwait(false));
-                if (jwt is not null) b.WithJwt(await jwt(ct).ConfigureAwait(false));
+                if (pwd is not null) b.WithPassword(await InvokeProviderAsync(pwd, ct, "password").ConfigureAwait(false));
+                if (jwt is not null) b.WithJwt(await InvokeProviderAsync(jwt, ct, "JWT").ConfigureAwait(false));
                 if (ssh is not null)
                 {
-                    var mat = await ssh(ct).ConfigureAwait(false);
+                    var mat = await InvokeProviderAsync(ssh, ct, "SSH key").ConfigureAwait(false);
                     b.WithSshKey(mat.PrivateKey, mat.Passphrase);
                 }
                 if (cert is not null)
                 {
-                    var x = await cert(ct).ConfigureAwait(false);
+                    var x = await InvokeProviderAsync(cert, ct, "client certificate").ConfigureAwait(false);
                     b.WithTls().WithTlsClientCertificate(x).WithAuthMethod(ClickHouseAuthMethod.TlsClientCertificate);
                 }
                 return b.Build();
@@ -177,6 +187,37 @@ public static class ClickHouseServiceCollectionExtensions
 
         var options = BuildPoolOptions(baseline, connectionFactory, pocoSnapshot?.Pool, dsBuilder.PoolConfigurator);
         return new ClickHouseDataSource(options);
+    }
+
+    /// <summary>
+    /// Invokes a credential provider and rethrows any exception as
+    /// <see cref="ClickHouseAuthenticationException"/> so that
+    /// <see cref="CH.Native.Resilience.RetryPolicy.IsTransientException"/>
+    /// classifies it as non-transient. Cancellation propagates unchanged.
+    /// </summary>
+    private static async ValueTask<T> InvokeProviderAsync<T>(
+        Func<CancellationToken, ValueTask<T>> provider,
+        CancellationToken cancellationToken,
+        string providerKind)
+    {
+        try
+        {
+            return await provider(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (ClickHouseAuthenticationException)
+        {
+            // Already typed correctly — let it through.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new ClickHouseAuthenticationException(
+                $"{providerKind} credential provider failed: {ex.Message}", ex);
+        }
     }
 
     private static ClickHouseDataSourceOptions BuildPoolOptions(

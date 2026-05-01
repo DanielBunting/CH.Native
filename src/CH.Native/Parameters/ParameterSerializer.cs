@@ -172,6 +172,15 @@ public static class ParameterSerializer
 
     private static string SerializeDateTimeRaw(DateTime dt, string clickHouseType)
     {
+        // Mirror DateTime64ColumnWriter: a Local-kinded value is converted to
+        // UTC before formatting. ClickHouse columns store moments tagged with
+        // a server-side timezone, so sending the local clock face would land
+        // as a wrong moment when the column timezone differs from the
+        // client's. Unspecified is left as-is (caller convention is "treat as
+        // server-side timezone"). UTC values are passed through unchanged.
+        if (dt.Kind == DateTimeKind.Local)
+            dt = dt.ToUniversalTime();
+
         // DateTime64 gets microsecond precision
         if (clickHouseType.StartsWith("DateTime64", StringComparison.Ordinal))
         {
@@ -183,7 +192,13 @@ public static class ParameterSerializer
 
     private static string SerializeDateTimeOffsetRaw(DateTimeOffset dto)
     {
-        // Convert to UTC for storage with microsecond precision
+        // Convert to UTC for storage with microsecond precision. ClickHouse
+        // DateTime64 stores a timezone-tagged moment, not a wall-clock string,
+        // so the offset is "lost" only in the sense that the column's declared
+        // timezone determines presentation. Callers binding a DateTimeOffset
+        // against a non-UTC column should ensure the column's timezone matches
+        // the offset they care about (or just use UTC end-to-end and let
+        // ClickHouse's display-time conversion handle the rest).
         return dto.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss.ffffff", CultureInfo.InvariantCulture);
     }
 

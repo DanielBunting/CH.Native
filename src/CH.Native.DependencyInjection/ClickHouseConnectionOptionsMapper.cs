@@ -136,12 +136,28 @@ internal static class ClickHouseConnectionOptionsMapper
                 : StoreLocation.CurrentUser;
             using var store = new X509Store(tls.StoreName, location);
             store.Open(OpenFlags.ReadOnly);
-            var matches = store.Certificates.Find(X509FindType.FindByThumbprint, tls.Thumbprint, validOnly: false);
-            if (matches.Count == 0)
+
+            // First find any matching cert (valid or not) so we can give the
+            // caller a precise error: missing vs. expired / not-yet-valid.
+            // Pre-fix this used validOnly:false and silently presented an
+            // expired cert to the server, which then rejected at the TLS
+            // layer with an opaque error.
+            var anyMatch = store.Certificates.Find(X509FindType.FindByThumbprint, tls.Thumbprint, validOnly: false);
+            if (anyMatch.Count == 0)
                 throw new InvalidOperationException(
                     $"TLS client certificate with thumbprint '{tls.Thumbprint}' not found in " +
                     $"{location}\\{tls.StoreName}.");
-            builder.WithTlsClientCertificate(matches[0]);
+
+            var validMatches = store.Certificates.Find(X509FindType.FindByThumbprint, tls.Thumbprint, validOnly: true);
+            if (validMatches.Count == 0)
+            {
+                var first = anyMatch[0];
+                throw new InvalidOperationException(
+                    $"TLS client certificate with thumbprint '{tls.Thumbprint}' in " +
+                    $"{location}\\{tls.StoreName} is not valid (NotBefore={first.NotBefore:O}, NotAfter={first.NotAfter:O}). " +
+                    "Renew or replace the certificate before connecting.");
+            }
+            builder.WithTlsClientCertificate(validMatches[0]);
         }
     }
 

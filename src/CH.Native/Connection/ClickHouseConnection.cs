@@ -43,8 +43,12 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private SslStream? _sslStream;
     private PipeReader? _pipeReader;
     private PipeWriter? _pipeWriter;
-    private bool _isOpen;
-    private bool _disposed;
+    // Both are read lock-free via Volatile.Read in IsOpen (R3) and other
+    // best-effort guards. Mark volatile so writers also use release semantics
+    // — pre-R7 the writes were plain stores and a reader on weakly-ordered
+    // hardware (ARM) could observe stale values despite the Volatile.Read.
+    private volatile bool _isOpen;
+    private volatile bool _disposed;
     private bool _compressionEnabled;
     // True between the moment a public Execute path (or OpenAsync handshake) is
     // entered and the moment it returns or releases the slot. Read under
@@ -231,9 +235,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     public ServerHello? ServerInfo { get; private set; }
 
     /// <summary>
-    /// Gets a value indicating whether the connection is open.
+    /// Gets a value indicating whether the connection is open. Best-effort:
+    /// the pair of reads is volatile-safe across cores but the value can flip
+    /// the instant after the caller observes it (a concurrent
+    /// <see cref="DisposeAsync"/> can close the wire after this returns true).
+    /// Callers using this as a guard before issuing IO must still handle
+    /// <see cref="ObjectDisposedException"/> from the subsequent call.
     /// </summary>
-    public bool IsOpen => _isOpen && !_disposed;
+    public bool IsOpen => _isOpen && !_disposed; // both fields are `volatile`
 
     /// <summary>
     /// Gets the negotiated protocol version (minimum of client and server).
@@ -431,7 +440,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         }
         catch (AuthenticationException ex)
         {
-            throw new ClickHouseConnectionException($"TLS authentication failed: {ex.Message}", ex);
+            throw new ClickHouseAuthenticationException($"TLS authentication failed: {ex.Message}", ex);
         }
 
         return _sslStream;
@@ -454,11 +463,23 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         // If we have a custom CA certificate, validate against it
         if (_customCaCertificate != null && certificate != null)
         {
-            // Create a new chain with our custom CA
+            // Create a new chain with our custom CA. Pre-fix this set
+            // RevocationMode = NoCheck, so a server cert that had been
+            // explicitly revoked (CRL / OCSP) but still chained to the
+            // pinned CA was accepted. Switch to Online and tolerate the
+            // "unknown" status that self-signed CAs without OCSP / CRL
+            // endpoints surface — actively revoked certificates fail
+            // validation, certs with no published revocation info still
+            // succeed (matching existing test setups).
             using var customChain = new X509Chain();
             customChain.ChainPolicy.ExtraStore.Add(_customCaCertificate);
-            customChain.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
-            customChain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+            customChain.ChainPolicy.VerificationFlags =
+                X509VerificationFlags.AllowUnknownCertificateAuthority
+                | X509VerificationFlags.IgnoreCertificateAuthorityRevocationUnknown
+                | X509VerificationFlags.IgnoreCtlSignerRevocationUnknown
+                | X509VerificationFlags.IgnoreEndRevocationUnknown
+                | X509VerificationFlags.IgnoreRootRevocationUnknown;
+            customChain.ChainPolicy.RevocationMode = X509RevocationMode.Online;
 
 #if NET9_0_OR_GREATER
             var cert2 = certificate as X509Certificate2 ?? X509CertificateLoader.LoadCertificate(certificate.Export(X509ContentType.Cert));
@@ -489,11 +510,62 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         ServerInfo = await ReceiveServerHelloAsync(cancellationToken);
         NegotiatedProtocolVersion = Math.Min(ProtocolVersion.Current, ServerInfo.ProtocolRevision);
 
+        // We always advertise "notchunked" in the client addendum. If the
+        // server insists on chunked framing (no "notchunked" path), we must
+        // refuse the connection up-front rather than silently send un-chunked
+        // frames that the server will desync. "chunked_optional" / empty are
+        // permissive and accepted.
+        EnsureChunkedNegotiable(ServerInfo.ProtoSendChunkedServer, "send");
+        EnsureChunkedNegotiable(ServerInfo.ProtoRecvChunkedServer, "recv");
+
         // For protocol versions >= WithAddendum, send client hello addendum to server
         if (NegotiatedProtocolVersion >= ProtocolVersion.WithAddendum)
         {
             await SendHelloAddendumAsync(cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// Forwards a progress message to the user-supplied <see cref="IProgress{T}"/>
+    /// handler, swallowing exceptions so a buggy observer can't unwind the
+    /// message loop and corrupt connection state. Pre-fix a throwing handler
+    /// escaped the read loop, leaving <c>_currentQueryId</c> set and the wire
+    /// at an unknown offset; <c>_protocolFatal</c> was never set, so the pool
+    /// happily took the connection back.
+    /// </summary>
+    private void ReportProgressSafely(IProgress<Data.QueryProgress>? progress, ProgressMessage progressMessage)
+    {
+        if (progress is null) return;
+        try
+        {
+            progress.Report(progressMessage.ToQueryProgress());
+        }
+        catch (Exception ex)
+        {
+            _logger.ProgressHandlerThrew(ex.Message, ex);
+        }
+    }
+
+    private static void EnsureChunkedNegotiable(string? serverDeclared, string direction)
+    {
+        // Empty / null means the server doesn't speak the chunked vocabulary
+        // (older revision or no preference) — fall through.
+        if (string.IsNullOrEmpty(serverDeclared)) return;
+
+        // ClickHouse server values: "notchunked", "chunked", "notchunked_optional",
+        // "chunked_optional". Anything containing "notchunked" or "_optional" is
+        // accepted. A bare "chunked" means the server requires chunked framing,
+        // which CH.Native does not yet implement.
+        if (serverDeclared.Contains("notchunked", StringComparison.Ordinal) ||
+            serverDeclared.Contains("optional", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        throw new ClickHouseProtocolException(
+            $"Server requires chunked framing ({direction} = '{serverDeclared}') but CH.Native " +
+            "only supports the unchunked protocol path. Configure the server to allow " +
+            "'notchunked' or 'chunked_optional' for this client.");
     }
 
     private async Task PerformSshChallengeExchangeAsync(CancellationToken cancellationToken)
@@ -789,9 +861,19 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// Kills a query by its ID using a separate connection.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// This creates a new connection to execute KILL QUERY, which is more reliable
     /// than sending a Cancel message when the original connection may be blocked.
     /// Use <see cref="CurrentQueryId"/> to get the ID of a running query.
+    /// </para>
+    /// <para>
+    /// Natural-completion race: the original query may finish between this call
+    /// issuing the <c>KILL</c> and the server processing it. In that window the
+    /// caller of the original query may see either a clean End-Of-Stream
+    /// (query completed before kill landed) or a server-cancelled exception
+    /// (kill landed first). Both outcomes are valid; the caller should treat
+    /// either as "query is no longer running".
+    /// </para>
     /// </remarks>
     /// <param name="queryId">The query ID to kill.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -800,14 +882,16 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         if (string.IsNullOrEmpty(queryId))
             throw new ArgumentNullException(nameof(queryId));
 
-        await using var killConnection = new ClickHouseConnection(_settings);
-        await killConnection.OpenAsync(cancellationToken);
-
-        // Use parameterized approach to avoid SQL injection
-        // KILL QUERY doesn't support parameters, so we validate the queryId format
-        // Query IDs are GUIDs in format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        // Validate the GUID shape BEFORE opening a fresh TCP connection. The
+        // KILL QUERY statement does not accept parameters so we have to inline
+        // the id, and a malformed value can't ever satisfy that contract — burn
+        // the handshake on a hopeless call. Pre-fix this validation ran after
+        // OpenAsync, costing a full connect on every malformed input.
         if (!Guid.TryParse(queryId, out _))
             throw new ArgumentException("Invalid query ID format. Expected a GUID.", nameof(queryId));
+
+        await using var killConnection = new ClickHouseConnection(_settings);
+        await killConnection.OpenAsync(cancellationToken);
 
         await killConnection.ExecuteNonQueryAsync(
             $"KILL QUERY WHERE query_id = '{queryId}'",
@@ -987,7 +1071,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 switch (message)
                 {
                     case ProgressMessage progressMessage:
-                        progress?.Report(progressMessage.ToQueryProgress());
+                        ReportProgressSafely(progress, progressMessage);
                         rowsRead = (long)progressMessage.Rows;
                         break;
 
@@ -1094,7 +1178,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 switch (message)
                 {
                     case ProgressMessage progressMessage:
-                        progress?.Report(progressMessage.ToQueryProgress());
+                        ReportProgressSafely(progress, progressMessage);
                         totalRows = (long)progressMessage.Rows;
                         break;
 
@@ -1734,7 +1818,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     switch (message)
                     {
                         case ProgressMessage progressMessage:
-                            progress?.Report(progressMessage.ToQueryProgress());
+                            ReportProgressSafely(progress, progressMessage);
                             break;
 
                         case DataMessage dataMessage:
@@ -1800,7 +1884,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     switch (message)
                     {
                         case ProgressMessage progressMessage:
-                            progress?.Report(progressMessage.ToQueryProgress());
+                            ReportProgressSafely(progress, progressMessage);
                             totalRows = (long)progressMessage.Rows;
                             break;
 
@@ -2215,9 +2299,12 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     }
 
                     _pipeReader.AdvanceTo(buffer.Start);
-                    yield return message;
+                    if (message is not Protocol.Messages.SkipMessage)
+                    {
+                        yield return message;
+                    }
                     advancedInLoop = true;
-                    // Need to re-read buffer after yielding
+                    // Need to re-read buffer after yielding (or after a skip).
                     break;
                 }
 
@@ -2424,6 +2511,47 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     buffer = buffer.Slice(reader.Consumed);
                     message = specialData;
                     return true;
+
+                case ServerMessageType.ReadTaskRequest:
+                {
+                    // Wire format (TCPHandler::sendReadTaskRequest): zero body
+                    // beyond the message-type varint. Distributed read tasks
+                    // emit this when asking the client to enqueue work; we
+                    // don't participate in distributed task assignment, so
+                    // just consume the byte and keep reading.
+                    buffer = buffer.Slice(reader.Consumed);
+                    message = Protocol.Messages.SkipMessage.Instance;
+                    return true;
+                }
+
+                case ServerMessageType.PartUUIDs:
+                {
+                    // Wire format (TCPHandler::sendPartUUIDs): writeVectorBinary
+                    // of UUIDs — varint count + N × 16 bytes. Drain so distributed
+                    // SELECTs that emit part-uuid manifests don't poison the wire.
+                    var bodyBuffer = buffer.Slice(reader.Consumed);
+                    var scanReader = CreateProtocolReader(bodyBuffer);
+                    if (!scanReader.TryReadVarInt(out var partCount))
+                        return false;
+                    var uuidBytes = checked((int)partCount * 16);
+                    var consumedAfterVarInt = scanReader.Consumed;
+                    if (bodyBuffer.Length < consumedAfterVarInt + uuidBytes)
+                        return false;
+                    buffer = bodyBuffer.Slice(consumedAfterVarInt + uuidBytes);
+                    message = Protocol.Messages.SkipMessage.Instance;
+                    return true;
+                }
+
+                case ServerMessageType.Log:
+                    // Server-side log forwarding (set via SETTINGS send_logs_level).
+                    // The body is a block — full Block decode requires the same
+                    // context as Data messages and isn't worth implementing for
+                    // a feature most clients disable. Surface a specific guidance
+                    // message instead of the generic "malformed" default arm so
+                    // operators know how to fix it.
+                    throw new ClickHouseProtocolException(
+                        "Server emitted a Log message (type 10). CH.Native does not consume server-side log " +
+                        "forwarding; disable it via `SETTINGS send_logs_level = 'none'` on the query (or globally).");
 
                 default:
                     // Unknown message-type byte — the stream is structurally
@@ -2660,7 +2788,10 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             {
                 // Hooks must be robust; if the pool-return path throws we fall back
                 // to a real teardown so the caller's `await using` doesn't leak
-                // a half-returned connection.
+                // a half-returned connection. Dispose `_writeLock` here too — pre-fix
+                // this catch returned without disposing it, leaving a SemaphoreSlim
+                // orphaned and any waiters blocked indefinitely instead of seeing
+                // ObjectDisposedException.
                 if (!_disposed)
                 {
                     if (_isOpen)
@@ -2670,6 +2801,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     }
                     _disposed = true;
                     await CloseInternalAsync().ConfigureAwait(false);
+                    _writeLock.Dispose();
                 }
             }
             return;

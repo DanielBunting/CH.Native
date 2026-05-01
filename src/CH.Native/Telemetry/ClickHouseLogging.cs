@@ -53,6 +53,30 @@ public sealed partial class ClickHouseLogger
         Message = "Connection failed to {Host}:{Port}: {ErrorMessage}")]
     public partial void ConnectionFailed(string host, int port, string errorMessage);
 
+    /// <summary>
+    /// Logs that <see cref="ClickHouseDataSource"/> prewarm could not seed the pool
+    /// to <c>MinPoolSize</c>. The first real rent will surface the underlying
+    /// failure; this log gives operators a same-cause signal at startup.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 4,
+        Level = LogLevel.Warning,
+        Message = "DataSource prewarm seeded {Seeded}/{Target} connections before failing: {ErrorMessage}")]
+    public partial void PrewarmFailed(int seeded, int target, string errorMessage, Exception? exception);
+
+    /// <summary>
+    /// Logs that a user-supplied <see cref="System.IProgress{T}"/> handler
+    /// threw during <see cref="ClickHouseConnection"/>'s message-loop dispatch.
+    /// The exception is swallowed to keep the wire well-defined; the original
+    /// query continues. Operators see the message; callers don't lose
+    /// connection state to a buggy observer.
+    /// </summary>
+    [LoggerMessage(
+        EventId = 5,
+        Level = LogLevel.Warning,
+        Message = "Progress handler threw and was suppressed to keep the wire well-defined: {ErrorMessage}")]
+    public partial void ProgressHandlerThrew(string errorMessage, Exception? exception);
+
     #endregion
 
     #region Query Events
