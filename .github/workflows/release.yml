@@ -7,8 +7,16 @@ jobs:
   build-and-test:
     uses: ./.github/workflows/build-and-test.yml
 
+  # Heavy system-test suite (Cluster, Chaos, Resilience, Stress,
+  # VersionMatrix). Gates the NuGet publish: if any category fails, the
+  # release job below won't run and nothing ships. Prerelease pushes on
+  # main do not gate on this — fast-cycle prereleases trade some risk
+  # for shorter feedback, and the nightly run catches drift in between.
+  system-tests:
+    uses: ./.github/workflows/system-tests.yml
+
   release:
-    needs: build-and-test
+    needs: [build-and-test, system-tests]
     runs-on: ubuntu-latest
     permissions:
       contents: write

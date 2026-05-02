@@ -14,7 +14,7 @@
     <VersionPrefix>1.0.1</VersionPrefix>
     <Authors>Daniel Bunting</Authors>
     <Company>Daniel Bunting</Company>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/DanielBunting/CH.Native</PackageProjectUrl>
     <RepositoryUrl>https://github.com/DanielBunting/CH.Native</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
