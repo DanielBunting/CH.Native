@@ -16,14 +16,15 @@ public sealed class NullableColumnReader<T> : IColumnReader<T?>
     where T : struct
 {
     private readonly IColumnReader<T> _innerReader;
+    private readonly ArrayPool<T?> _resultPool;
 
     /// <summary>
     /// Creates a Nullable reader that wraps the specified inner reader.
     /// </summary>
     /// <param name="innerReader">The reader for the underlying type.</param>
     public NullableColumnReader(IColumnReader<T> innerReader)
+        : this(innerReader, ArrayPool<T?>.Shared)
     {
-        _innerReader = innerReader ?? throw new ArgumentNullException(nameof(innerReader));
     }
 
     /// <summary>
@@ -31,17 +32,22 @@ public sealed class NullableColumnReader<T> : IColumnReader<T?>
     /// </summary>
     /// <param name="innerReader">The reader for the underlying type.</param>
     public NullableColumnReader(IColumnReader innerReader)
+        : this(CastInner(innerReader), ArrayPool<T?>.Shared)
     {
-        if (innerReader is IColumnReader<T> typedReader)
-        {
-            _innerReader = typedReader;
-        }
-        else
-        {
-            throw new ArgumentException(
-                $"Inner reader must implement IColumnReader<{typeof(T).Name}>.",
-                nameof(innerReader));
-        }
+    }
+
+    internal NullableColumnReader(IColumnReader<T> innerReader, ArrayPool<T?> resultPool)
+    {
+        _innerReader = innerReader ?? throw new ArgumentNullException(nameof(innerReader));
+        _resultPool = resultPool ?? throw new ArgumentNullException(nameof(resultPool));
+    }
+
+    private static IColumnReader<T> CastInner(IColumnReader innerReader)
+    {
+        if (innerReader is IColumnReader<T> typed) return typed;
+        throw new ArgumentException(
+            $"Inner reader must implement IColumnReader<{typeof(T).Name}>.",
+            nameof(innerReader));
     }
 
     /// <inheritdoc />
@@ -86,16 +92,24 @@ public sealed class NullableColumnReader<T> : IColumnReader<T?>
             // Step 2: Read ALL values (including slots for null rows)
             using var innerValues = _innerReader.ReadTypedColumn(ref reader, rowCount);
 
-            // Step 3: Apply null mask using pooled result array
-            var resultPool = ArrayPool<T?>.Shared;
-            var result = resultPool.Rent(rowCount);
-
-            for (int i = 0; i < rowCount; i++)
+            // Step 3: Apply null mask using pooled result array. The result rental
+            // happens BEFORE the for loop, so any throw between them must return
+            // it — otherwise pool ledger drifts on every malformed read.
+            var result = _resultPool.Rent(rowCount);
+            try
             {
-                result[i] = nullBitmap[i] != 0 ? null : innerValues[i];
-            }
+                for (int i = 0; i < rowCount; i++)
+                {
+                    result[i] = nullBitmap[i] != 0 ? null : innerValues[i];
+                }
 
-            return new TypedColumn<T?>(result, rowCount, resultPool);
+                return new TypedColumn<T?>(result, rowCount, _resultPool);
+            }
+            catch
+            {
+                _resultPool.Return(result);
+                throw;
+            }
         }
         finally
         {
@@ -123,14 +137,15 @@ public sealed class NullableRefColumnReader<T> : IColumnReader<T?>
     where T : class
 {
     private readonly IColumnReader<T> _innerReader;
+    private readonly ArrayPool<T?> _resultPool;
 
     /// <summary>
     /// Creates a Nullable reader that wraps the specified inner reader.
     /// </summary>
     /// <param name="innerReader">The reader for the underlying type.</param>
     public NullableRefColumnReader(IColumnReader<T> innerReader)
+        : this(innerReader, ArrayPool<T?>.Shared)
     {
-        _innerReader = innerReader ?? throw new ArgumentNullException(nameof(innerReader));
     }
 
     /// <summary>
@@ -138,17 +153,22 @@ public sealed class NullableRefColumnReader<T> : IColumnReader<T?>
     /// </summary>
     /// <param name="innerReader">The reader for the underlying type.</param>
     public NullableRefColumnReader(IColumnReader innerReader)
+        : this(CastInner(innerReader), ArrayPool<T?>.Shared)
     {
-        if (innerReader is IColumnReader<T> typedReader)
-        {
-            _innerReader = typedReader;
-        }
-        else
-        {
-            throw new ArgumentException(
-                $"Inner reader must implement IColumnReader<{typeof(T).Name}>.",
-                nameof(innerReader));
-        }
+    }
+
+    internal NullableRefColumnReader(IColumnReader<T> innerReader, ArrayPool<T?> resultPool)
+    {
+        _innerReader = innerReader ?? throw new ArgumentNullException(nameof(innerReader));
+        _resultPool = resultPool ?? throw new ArgumentNullException(nameof(resultPool));
+    }
+
+    private static IColumnReader<T> CastInner(IColumnReader innerReader)
+    {
+        if (innerReader is IColumnReader<T> typed) return typed;
+        throw new ArgumentException(
+            $"Inner reader must implement IColumnReader<{typeof(T).Name}>.",
+            nameof(innerReader));
     }
 
     /// <inheritdoc />
@@ -193,16 +213,24 @@ public sealed class NullableRefColumnReader<T> : IColumnReader<T?>
             // Step 2: Read ALL values (including slots for null rows)
             using var innerValues = _innerReader.ReadTypedColumn(ref reader, rowCount);
 
-            // Step 3: Apply null mask using pooled result array
-            var resultPool = ArrayPool<T?>.Shared;
-            var result = resultPool.Rent(rowCount);
-
-            for (int i = 0; i < rowCount; i++)
+            // Step 3: Apply null mask using pooled result array. Wrap the
+            // post-rent path in try/catch so a malformed inner column or other
+            // late failure cannot leak the rented buffer.
+            var result = _resultPool.Rent(rowCount);
+            try
             {
-                result[i] = nullBitmap[i] != 0 ? null : innerValues[i];
-            }
+                for (int i = 0; i < rowCount; i++)
+                {
+                    result[i] = nullBitmap[i] != 0 ? null : innerValues[i];
+                }
 
-            return new TypedColumn<T?>(result, rowCount, resultPool);
+                return new TypedColumn<T?>(result, rowCount, _resultPool);
+            }
+            catch
+            {
+                _resultPool.Return(result);
+                throw;
+            }
         }
         finally
         {

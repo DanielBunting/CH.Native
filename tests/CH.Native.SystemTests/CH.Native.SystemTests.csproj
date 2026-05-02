@@ -17,6 +17,7 @@
     </PackageReference>
     <PackageReference Include="Testcontainers.ClickHouse" Version="4.0.0" />
     <PackageReference Include="Testcontainers" Version="4.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.*" />
     <PackageReference Include="OpenTelemetry" Version="1.9.0" />
     <PackageReference Include="OpenTelemetry.Exporter.InMemory" Version="1.9.0" />
     <PackageReference Include="Dapper" Version="2.1.35" />

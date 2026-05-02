@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Frozen;
 
 namespace CH.Native.Data;
@@ -8,6 +9,15 @@ namespace CH.Native.Data;
 public sealed class ColumnWriterRegistry
 {
     private readonly FrozenDictionary<string, IColumnWriter> _writers;
+
+    // Composite writers (Nullable / Array / Map / Tuple / LowCardinality / Nested /
+    // FixedString / DateTime64 / Time64 / Decimal* / JSON / Variant / Dynamic) are
+    // built on demand via ColumnWriterFactory. Pre-fix every GetWriter() call for a
+    // composite type allocated a fresh factory and a fresh writer; bulk inserts
+    // that touched many composite types paid a per-column rebuild cost. Mirror the
+    // ColumnReaderRegistry caching pattern so writers are built once per type-name.
+    private readonly ConcurrentDictionary<string, IColumnWriter> _compositeCache = new();
+    private ColumnWriterFactory? _factory;
 
     /// <summary>
     /// Gets the default registry with all built-in column writers.
@@ -41,8 +51,7 @@ public sealed class ColumnWriterRegistry
         // because there are no parens.
         if (IsCompositeType(baseType) || IsCompositeType(typeName))
         {
-            var factory = new ColumnWriterFactory(this);
-            return factory.CreateWriter(typeName);
+            return _compositeCache.GetOrAdd(typeName, BuildComposite);
         }
 
         // For simple parameterized types (e.g., Enum8('foo' = 1)), try base type lookup
@@ -52,6 +61,14 @@ public sealed class ColumnWriterRegistry
         }
 
         throw new NotSupportedException($"Column type '{typeName}' is not supported for writing.");
+    }
+
+    private IColumnWriter BuildComposite(string typeName)
+    {
+        // Lazily create the factory once and reuse — composite writers are
+        // referentially stable so a single shared factory is correct.
+        var factory = _factory ??= new ColumnWriterFactory(this);
+        return factory.CreateWriter(typeName);
     }
 
     private static string? ExtractBaseType(string typeName)

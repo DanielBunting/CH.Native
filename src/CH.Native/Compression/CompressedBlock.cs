@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using CH.Native.Exceptions;
 using CH.Native.Protocol;
 
 namespace CH.Native.Compression;
@@ -22,6 +23,20 @@ public static class CompressedBlock
     private const int ChecksumSize = 16;
     private const int HeaderSize = 9; // Algorithm (1) + CompressedSize (4) + UncompressedSize (4)
     private const int MinBlockSize = ChecksumSize + HeaderSize;
+
+    /// <summary>
+    /// Maximum decompressed-block size accepted on the wire. The ClickHouse default
+    /// <c>max_block_size_bytes</c> sits well below this; capping protects against a
+    /// hostile / corrupt server claiming gigabyte-sized uncompressed payloads and
+    /// forcing matching client-side allocations.
+    /// </summary>
+    public const int MaxBlockUncompressedSize = 256 * 1024 * 1024; // 256 MiB
+
+    /// <summary>
+    /// Maximum compressed-block size accepted on the wire — the wire field is
+    /// <c>uint</c>; we additionally reject values that would not fit in <see cref="int"/>.
+    /// </summary>
+    public const int MaxBlockCompressedSize = 256 * 1024 * 1024; // 256 MiB
 
     /// <summary>
     /// Compresses data and wraps it in the ClickHouse compressed block format.
@@ -127,23 +142,18 @@ public static class CompressedBlock
         var compressedSize = BinaryPrimitives.ReadUInt32LittleEndian(data[(ChecksumSize + 1)..]);
         var uncompressedSize = BinaryPrimitives.ReadUInt32LittleEndian(data[(ChecksumSize + 5)..]);
 
-        // Validate sizes
-        if (compressedSize < HeaderSize)
-            throw new InvalidDataException($"Invalid compressed size: {compressedSize}");
-
-        var expectedDataLength = ChecksumSize + compressedSize;
-        if (data.Length < expectedDataLength)
-            throw new InvalidDataException($"Incomplete compressed block: expected {expectedDataLength} bytes, got {data.Length}");
+        ValidateBlockSizes(compressedSize, uncompressedSize, data.Length);
 
         // Get compressor based on algorithm
         var compressor = GetCompressor(algorithm);
 
         // Decompress
-        var result = new byte[uncompressedSize];
+        var result = new byte[(int)uncompressedSize];
         var compressedData = data[(ChecksumSize + HeaderSize)..];
         var actualCompressedLength = (int)compressedSize - HeaderSize;
 
-        compressor.Decompress(compressedData[..actualCompressedLength], result, (int)uncompressedSize);
+        var written = compressor.Decompress(compressedData[..actualCompressedLength], result, (int)uncompressedSize);
+        ValidateDecompressedLength(written, (int)uncompressedSize, algorithm);
 
         return result;
     }
@@ -175,13 +185,7 @@ public static class CompressedBlock
         var compressedSize = BinaryPrimitives.ReadUInt32LittleEndian(data[(ChecksumSize + 1)..]);
         var uncompressedSize = BinaryPrimitives.ReadUInt32LittleEndian(data[(ChecksumSize + 5)..]);
 
-        // Validate sizes
-        if (compressedSize < HeaderSize)
-            throw new InvalidDataException($"Invalid compressed size: {compressedSize}");
-
-        var expectedDataLength = ChecksumSize + compressedSize;
-        if (data.Length < expectedDataLength)
-            throw new InvalidDataException($"Incomplete compressed block: expected {expectedDataLength} bytes, got {data.Length}");
+        ValidateBlockSizes(compressedSize, uncompressedSize, data.Length);
 
         // Get compressor based on algorithm
         var compressor = GetCompressor(algorithm);
@@ -192,9 +196,57 @@ public static class CompressedBlock
         var compressedData = data[(ChecksumSize + HeaderSize)..];
         var actualCompressedLength = (int)compressedSize - HeaderSize;
 
-        compressor.Decompress(compressedData[..actualCompressedLength], result, (int)uncompressedSize);
+        var written = compressor.Decompress(compressedData[..actualCompressedLength], result, (int)uncompressedSize);
+        try
+        {
+            ValidateDecompressedLength(written, (int)uncompressedSize, algorithm);
+        }
+        catch
+        {
+            // The wire stream is malformed; return the rented buffer before
+            // the typed exception escapes so the pool isn't leaked.
+            ArrayPool<byte>.Shared.Return(result);
+            throw;
+        }
 
         return new DecompressedResult(result, (int)uncompressedSize);
+    }
+
+    /// <summary>
+    /// Validates that the codec actually wrote <paramref name="expected"/> bytes.
+    /// Underrun (written &lt; expected) means the wire <c>uncompressed_size</c>
+    /// header overstates the real payload — the trailing bytes of the rented
+    /// buffer would otherwise contain whatever the pool's previous tenant left
+    /// behind, silently corrupting the downstream block parse.
+    /// </summary>
+    private static void ValidateDecompressedLength(int written, int expected, byte algorithm)
+    {
+        if (written < 0)
+            throw new ClickHouseProtocolException(
+                $"Decompressor (algorithm 0x{algorithm:X2}) returned {written}, indicating a decode error; " +
+                "compressed payload is malformed.");
+        if (written != expected)
+            throw new ClickHouseProtocolException(
+                $"Decompressor (algorithm 0x{algorithm:X2}) wrote {written} bytes but the wire header declared " +
+                $"{expected}; protocol stream is malformed or hostile.");
+    }
+
+    private static void ValidateBlockSizes(uint compressedSize, uint uncompressedSize, int availableLength)
+    {
+        if (compressedSize < HeaderSize)
+            throw new ClickHouseProtocolException(
+                $"Invalid compressed size: {compressedSize}; minimum is {HeaderSize} bytes (header).");
+        if (compressedSize > MaxBlockCompressedSize)
+            throw new ClickHouseProtocolException(
+                $"Wire compressedSize {compressedSize} exceeds {MaxBlockCompressedSize} byte cap; protocol stream is malformed or hostile.");
+        if (uncompressedSize > MaxBlockUncompressedSize)
+            throw new ClickHouseProtocolException(
+                $"Wire uncompressedSize {uncompressedSize} exceeds {MaxBlockUncompressedSize} byte cap; protocol stream is malformed or hostile.");
+
+        var expectedDataLength = ChecksumSize + (long)compressedSize;
+        if (availableLength < expectedDataLength)
+            throw new InvalidDataException(
+                $"Incomplete compressed block: expected {expectedDataLength} bytes, got {availableLength}");
     }
 
     /// <summary>

@@ -471,24 +471,11 @@ public class CircuitBreakerTests
 
         breaker.OnStateChanged += (_, args) => { lock (gate) stateChanges.Add(args); };
 
-        breaker.RecordFailure(); // Triggers Open
-
-        // OnStateChanged dispatch is via Task.Run — that part is real-time, so poll.
-        for (int i = 0; i < 50; i++)
-        {
-            lock (gate) if (stateChanges.Count >= 1) break;
-            await Task.Delay(20);
-        }
-
+        breaker.RecordFailure(); // Triggers Open — handler fires synchronously
         time.Advance(TimeSpan.FromSeconds(31));
-        _ = breaker.State; // Triggers HalfOpen transition
+        _ = breaker.State; // Triggers HalfOpen transition — handler fires synchronously
 
-        for (int i = 0; i < 50; i++)
-        {
-            lock (gate) if (stateChanges.Count >= 2) break;
-            await Task.Delay(20);
-        }
-
+        await Task.Yield(); // keep async signature stable
         lock (gate)
         {
             Assert.Equal(2, stateChanges.Count);

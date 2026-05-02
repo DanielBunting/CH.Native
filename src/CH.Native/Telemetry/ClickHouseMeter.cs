@@ -70,7 +70,7 @@ public static class ClickHouseMeter
     /// Query execution duration histogram.
     /// </summary>
     public static readonly Histogram<double> QueryDuration = Meter.CreateHistogram<double>(
-        "ch_native_query_duration_seconds",
+        "ch_native_query_duration",
         unit: "s",
         description: "Query execution duration");
 
@@ -78,7 +78,7 @@ public static class ClickHouseMeter
     /// Connection establishment duration histogram.
     /// </summary>
     public static readonly Histogram<double> ConnectDuration = Meter.CreateHistogram<double>(
-        "ch_native_connect_duration_seconds",
+        "ch_native_connect_duration",
         unit: "s",
         description: "Connection establishment duration");
 
@@ -123,7 +123,7 @@ public static class ClickHouseMeter
     /// Delay before retry attempt histogram.
     /// </summary>
     public static readonly Histogram<double> RetryDelaySeconds = Meter.CreateHistogram<double>(
-        "ch_native_retry_delay_seconds",
+        "ch_native_retry_delay",
         unit: "s",
         description: "Delay before retry attempt");
 

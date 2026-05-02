@@ -63,11 +63,16 @@ public sealed class CircuitBreaker
     {
         get
         {
+            (CircuitBreakerState oldState, CircuitBreakerState newState)? transition;
+            CircuitBreakerState current;
             lock (_lock)
             {
-                CheckForStateTransition();
-                return _state;
+                transition = CheckForStateTransition();
+                current = _state;
             }
+            if (transition.HasValue)
+                RaiseStateChanged(transition.Value.oldState, transition.Value.newState);
+            return current;
         }
     }
 
@@ -236,31 +241,45 @@ public sealed class CircuitBreaker
     /// <returns>True if requests are allowed, false if the circuit is open.</returns>
     public bool AllowRequest()
     {
+        (CircuitBreakerState oldState, CircuitBreakerState newState)? transition;
+        bool open;
         lock (_lock)
         {
-            CheckForStateTransition();
-            return _state != CircuitBreakerState.Open;
+            transition = CheckForStateTransition();
+            open = _state == CircuitBreakerState.Open;
         }
+        if (transition.HasValue)
+            RaiseStateChanged(transition.Value.oldState, transition.Value.newState);
+        return !open;
     }
 
     private void EnsureNotOpen()
     {
+        (CircuitBreakerState oldState, CircuitBreakerState newState)? transition;
+        bool open;
+        TimeSpan remaining = TimeSpan.Zero;
         lock (_lock)
         {
-            CheckForStateTransition();
-
-            if (_state == CircuitBreakerState.Open)
+            transition = CheckForStateTransition();
+            open = _state == CircuitBreakerState.Open;
+            if (open)
             {
                 var elapsed = UtcNow - _lastStateChange;
-                var remaining = _options.OpenDuration - elapsed;
-                throw CircuitBreakerOpenException.Create(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
+                var rem = _options.OpenDuration - elapsed;
+                remaining = rem > TimeSpan.Zero ? rem : TimeSpan.Zero;
             }
         }
+        if (transition.HasValue)
+            RaiseStateChanged(transition.Value.oldState, transition.Value.newState);
+        if (open)
+            throw CircuitBreakerOpenException.Create(remaining);
     }
 
-    private void CheckForStateTransition()
+    private (CircuitBreakerState oldState, CircuitBreakerState newState)? CheckForStateTransition()
     {
-        // Must be called under lock
+        // Must be called under lock. Returns the transition (if any) so the
+        // caller can raise the event AFTER releasing the lock, avoiding
+        // re-entrance hazards if a handler calls back into the breaker.
         if (_state == CircuitBreakerState.Open)
         {
             var elapsed = UtcNow - _lastStateChange;
@@ -269,9 +288,10 @@ public sealed class CircuitBreaker
                 var oldState = _state;
                 _state = CircuitBreakerState.HalfOpen;
                 _lastStateChange = UtcNow;
-                RaiseStateChanged(oldState, _state);
+                return (oldState, _state);
             }
         }
+        return null;
     }
 
     private void RaiseStateChanged(CircuitBreakerState oldState, CircuitBreakerState newState)
@@ -288,11 +308,18 @@ public sealed class CircuitBreaker
                 _logger.CircuitBreakerStateChanged(serverAddr, oldState.ToString(), newState.ToString());
         }
 
-        // Invoke outside the lock to prevent potential deadlocks
+        // Invoke synchronously after the lock has been released by the caller
+        // (OnSuccess / OnFailure / EnsureNotOpen / AllowRequest all release before
+        // calling RaiseStateChanged). Pre-fix this used Task.Run, which deferred
+        // the handler to a thread-pool thread — the handler then observed
+        // arbitrary post-transition state because subsequent operations could
+        // run before it executed. Snapshot _failureCount here so the event arg
+        // reflects state at transition time, not whenever the handler runs.
         var handler = OnStateChanged;
         if (handler != null)
         {
-            Task.Run(() => handler.Invoke(this, new CircuitBreakerStateChangedEventArgs(oldState, newState, _failureCount)));
+            var snapshotFailureCount = Volatile.Read(ref _failureCount);
+            handler.Invoke(this, new CircuitBreakerStateChangedEventArgs(oldState, newState, snapshotFailureCount));
         }
     }
 
@@ -301,7 +328,7 @@ public sealed class CircuitBreaker
         var handler = OnReset;
         if (handler != null)
         {
-            Task.Run(() => handler.Invoke(this, new CircuitBreakerResetEventArgs(previousState, previousFailureCount)));
+            handler.Invoke(this, new CircuitBreakerResetEventArgs(previousState, previousFailureCount));
         }
     }
 

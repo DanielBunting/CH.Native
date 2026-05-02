@@ -1,0 +1,3 @@
+#nullable enable
+CH.Native.Telemetry.ClickHouseLogger.AllowInsecureTlsEnabled(string! host, int port) -> void
+static CH.Native.Telemetry.ClickHouseActivitySource.StartBulkInsert(string! tableName, string? database, string? queryId, CH.Native.Telemetry.TelemetrySettings? settings) -> System.Diagnostics.Activity?

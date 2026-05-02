@@ -41,6 +41,7 @@ public sealed class MultiLineStringColumnSkipper : IColumnSkipper
     private readonly ArrayColumnSkipper _inner =
         new(new ArrayColumnSkipper(new PointColumnSkipper(), "Point"), "Array(Point)");
     public string TypeName => "MultiLineString";
+    /// <inheritdoc />
     public bool TrySkipColumn(ref ProtocolReader reader, int rowCount)
         => _inner.TrySkipColumn(ref reader, rowCount);
 }
@@ -53,6 +54,7 @@ public sealed class PolygonColumnSkipper : IColumnSkipper
     private readonly ArrayColumnSkipper _inner =
         new(new ArrayColumnSkipper(new PointColumnSkipper(), "Point"), "Ring");
     public string TypeName => "Polygon";
+    /// <inheritdoc />
     public bool TrySkipColumn(ref ProtocolReader reader, int rowCount)
         => _inner.TrySkipColumn(ref reader, rowCount);
 }
@@ -67,7 +69,9 @@ public sealed class MultiPolygonColumnSkipper : IColumnSkipper
                 new ArrayColumnSkipper(new PointColumnSkipper(), "Point"),
                 "Ring"),
             "Polygon");
+    /// <inheritdoc />
     public string TypeName => "MultiPolygon";
+    /// <inheritdoc />
     public bool TrySkipColumn(ref ProtocolReader reader, int rowCount)
         => _inner.TrySkipColumn(ref reader, rowCount);
 }

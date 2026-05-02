@@ -38,6 +38,18 @@ public sealed class ServerHello
     public string? DisplayName { get; init; }
 
     /// <summary>
+    /// Server's declared send-side chunked-packets capability (revision 54470+),
+    /// e.g. <c>"notchunked"</c>, <c>"chunked"</c>, or <c>"chunked_optional"</c>.
+    /// <see langword="null"/> on older revisions.
+    /// </summary>
+    public string? ProtoSendChunkedServer { get; init; }
+
+    /// <summary>
+    /// Server's declared receive-side chunked-packets capability (revision 54470+).
+    /// </summary>
+    public string? ProtoRecvChunkedServer { get; init; }
+
+    /// <summary>
     /// Reads a ServerHello from the protocol reader.
     /// </summary>
     /// <param name="reader">The protocol reader to read from.</param>
@@ -54,8 +66,23 @@ public sealed class ServerHello
             var errorMessage = reader.ReadString();
             var stackTrace = reader.ReadString();
 
-            throw new ClickHouseConnectionException(
-                $"Server returned error during handshake: [{errorCode}] {errorName}: {errorMessage}");
+            // Permanent auth/authorization failures during handshake are non-transient;
+            // raise them as ClickHouseAuthenticationException so the retry layer
+            // short-circuits instead of burning the retry budget on something that
+            // can never succeed with the same credentials.
+            if (IsAuthenticationErrorCode(errorCode))
+            {
+                throw new ClickHouseAuthenticationException(
+                    $"Server rejected handshake: [{errorCode}] {errorName}: {errorMessage}")
+                {
+                    ErrorCode = errorCode,
+                    ServerExceptionName = errorName,
+                };
+            }
+
+            // Other server-side handshake errors get the structured server-exception
+            // type so the retry policy can consult its transient-error-code list.
+            throw new ClickHouseServerException(errorCode, errorName, errorMessage, stackTrace);
         }
 
         if (messageType != ServerMessageType.Hello)
@@ -92,12 +119,16 @@ public sealed class ServerHello
             _ = reader.ReadVarInt(); // versionPatch - we don't use it
         }
 
-        // Read the server's chunked-packets capabilities. We always advertise "notchunked"
-        // in the client addendum, so we ignore what the server reports.
+        // Read the server's chunked-packets capability. We always advertise
+        // "notchunked" in the client addendum; capture what the server says so
+        // ClickHouseConnection can refuse a chunked-only server up-front
+        // instead of silently sending un-chunked frames that desync the wire.
+        string? protoSendChunkedSrv = null;
+        string? protoRecvChunkedSrv = null;
         if (protocolRevision >= ProtocolVersion.WithChunkedPackets)
         {
-            _ = reader.ReadString(); // proto_send_chunked_srv
-            _ = reader.ReadString(); // proto_recv_chunked_srv
+            protoSendChunkedSrv = reader.ReadString();
+            protoRecvChunkedSrv = reader.ReadString();
         }
 
         // Read password complexity rules if supported
@@ -124,7 +155,22 @@ public sealed class ServerHello
             VersionMinor = versionMinor,
             ProtocolRevision = protocolRevision,
             Timezone = timezone,
-            DisplayName = displayName
+            DisplayName = displayName,
+            ProtoSendChunkedServer = protoSendChunkedSrv,
+            ProtoRecvChunkedServer = protoRecvChunkedSrv,
         };
     }
+
+    // ClickHouse authentication / authorization error codes (src/Common/ErrorCodes.cpp).
+    // These are permanent failures: same credentials will never succeed.
+    private static bool IsAuthenticationErrorCode(int code) => code switch
+    {
+        192 => true, // UNKNOWN_USER
+        193 => true, // WRONG_PASSWORD
+        194 => true, // REQUIRED_PASSWORD
+        195 => true, // IP_ADDRESS_NOT_ALLOWED
+        196 => true, // UNKNOWN_ADDRESS_PATTERN_TYPE
+        516 => true, // AUTHENTICATION_FAILED
+        _ => false,
+    };
 }

@@ -85,6 +85,12 @@ public sealed class MapColumnReader<TKey, TValue> : IColumnReader<Dictionary<TKe
             using var keys = _keyReader.ReadTypedColumn(ref reader, count);
             using var values = _valueReader.ReadTypedColumn(ref reader, count);
 
+            // Map keys are already deduplicated by the server in well-formed
+            // blocks. If a corrupt / hostile stream emits a duplicate key, the
+            // assignment below is last-wins by Dictionary semantics — silently
+            // dropping the earlier value. We accept that rather than throwing,
+            // matching server-side semantics, but document it here so a future
+            // change to "throw on duplicate" is a deliberate choice.
             for (int i = 0; i < count; i++)
             {
                 dict[keys[i]] = values[i];

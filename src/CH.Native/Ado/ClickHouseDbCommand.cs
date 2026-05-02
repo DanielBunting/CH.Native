@@ -121,12 +121,25 @@ public sealed class ClickHouseDbCommand : DbCommand
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// ADO contract: <c>Cancel()</c> is best-effort and must not throw on an
+    /// inactive command or a broken connection. The synchronous wait is
+    /// dispatched via <see cref="Task.Run(Func{Task})"/> so a captured
+    /// single-threaded <see cref="SynchronizationContext"/> (UI / classic
+    /// ASP.NET) cannot deadlock against the in-flight query's continuation,
+    /// and any exception from <c>CancelCurrentQueryAsync</c> is swallowed.
+    /// </remarks>
     public override void Cancel()
     {
-        // Only attempt cancel if connection is open
-        if (_connection?.State == ConnectionState.Open)
+        if (_connection?.State != ConnectionState.Open) return;
+        var conn = _connection;
+        try
         {
-            _connection.Inner.CancelCurrentQueryAsync().GetAwaiter().GetResult();
+            Task.Run(() => conn.Inner.CancelCurrentQueryAsync()).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // Best-effort per System.Data.Common.DbCommand.Cancel contract.
         }
     }
 
@@ -204,17 +217,38 @@ public sealed class ClickHouseDbCommand : DbCommand
     {
         EnsureConnection();
         var nativeParams = BuildNativeParameters();
-        using var timeoutCts = CreateTimeoutCts(cancellationToken);
+        // CommandTimeout for readers must outlive this method — the reader is
+        // returned to the caller and ReadAsync iterations need to observe the
+        // timer. Ownership of the CTS transfers to the returned
+        // ClickHouseDbDataReader, which disposes it when the reader is disposed.
+        var timeoutCts = CreateTimeoutCts(cancellationToken);
         var token = timeoutCts?.Token ?? cancellationToken;
 
-        var reader = await _connection!.Inner.ExecuteReaderWithParametersAsync(
-            _commandText,
-            nativeParams,
-            token,
-            rolesOverride: _roles is { Count: > 0 } ? _roles : null,
-            queryId: QueryId).ConfigureAwait(false);
-        QueryId = reader.QueryId ?? QueryId;
-        return new ClickHouseDbDataReader(reader);
+        try
+        {
+            var reader = await _connection!.Inner.ExecuteReaderWithParametersAsync(
+                _commandText,
+                nativeParams,
+                token,
+                rolesOverride: _roles is { Count: > 0 } ? _roles : null,
+                queryId: QueryId).ConfigureAwait(false);
+            QueryId = reader.QueryId ?? QueryId;
+
+            // ADO contract: CommandBehavior.CloseConnection means "close the
+            // owning DbConnection when this reader is disposed". The wrapper
+            // reader honours this by holding the connection reference and
+            // closing it on Dispose; if the flag is not set, the connection
+            // outlives the reader as before.
+            var connectionToClose = (behavior & CommandBehavior.CloseConnection) != 0
+                ? _connection
+                : null;
+            return new ClickHouseDbDataReader(reader, timeoutCts, connectionToClose);
+        }
+        catch
+        {
+            timeoutCts?.Dispose();
+            throw;
+        }
     }
 
     /// <inheritdoc />
@@ -241,15 +275,23 @@ public sealed class ClickHouseDbCommand : DbCommand
     /// <summary>
     /// Converts ADO.NET parameters to native ClickHouseParameterCollection.
     /// </summary>
+    /// <remarks>
+    /// ADO.NET callers commonly use <see cref="DBNull"/>.<see cref="DBNull.Value"/>
+    /// to represent SQL NULL. The native layer expects plain <c>null</c>, so we
+    /// translate at this boundary — without this, type inference would fail with
+    /// a cryptic "Cannot infer type from DBNull" error instead of the documented
+    /// "Cannot infer type from null" guidance to set <c>ClickHouseType</c> explicitly.
+    /// </remarks>
     private ClickHouseParameterCollection BuildNativeParameters()
     {
         var nativeParams = new ClickHouseParameterCollection();
         foreach (ClickHouseDbParameter p in _parameters)
         {
+            var value = p.Value is DBNull ? null : p.Value;
             if (!string.IsNullOrEmpty(p.ClickHouseType))
-                nativeParams.Add(p.ParameterName, p.Value, p.ClickHouseType);
+                nativeParams.Add(p.ParameterName, value, p.ClickHouseType);
             else
-                nativeParams.Add(p.ParameterName, p.Value);
+                nativeParams.Add(p.ParameterName, value);
         }
         return nativeParams;
     }

@@ -93,10 +93,27 @@ public static class ClickHouseActivitySource
     /// <param name="database">The database name.</param>
     /// <param name="settings">Telemetry settings to check if tracing is enabled.</param>
     /// <returns>A new Activity, or null if tracing is disabled or not sampled.</returns>
+#pragma warning disable RS0027 // Source-compat shim for the v1.0 signature; the queryId-aware overload is the maximal one.
     public static Activity? StartBulkInsert(
         string tableName,
         string? database = null,
         TelemetrySettings? settings = null)
+#pragma warning restore RS0027
+        => StartBulkInsert(tableName, database, queryId: null, settings);
+
+    /// <summary>
+    /// Starts a new Activity for a ClickHouse bulk insert operation.
+    /// </summary>
+    /// <param name="tableName">The table being inserted into.</param>
+    /// <param name="database">The database name.</param>
+    /// <param name="queryId">The resolved query id for correlation against <c>system.query_log</c>.</param>
+    /// <param name="settings">Telemetry settings to check if tracing is enabled.</param>
+    /// <returns>A new Activity, or null if tracing is disabled or not sampled.</returns>
+    public static Activity? StartBulkInsert(
+        string tableName,
+        string? database,
+        string? queryId,
+        TelemetrySettings? settings)
     {
         if (settings?.EnableTracing == false)
             return null;
@@ -111,6 +128,9 @@ public static class ClickHouseActivitySource
             activity.SetTag("db.name", database);
 
         activity.SetTag("db.clickhouse.table", tableName);
+
+        if (queryId != null)
+            activity.SetTag("db.clickhouse.query_id", queryId);
 
         return activity;
     }

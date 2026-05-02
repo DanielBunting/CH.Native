@@ -25,6 +25,14 @@ public sealed class DateTimeWithTimezoneColumnWriter : IColumnWriter<DateTimeOff
     /// <inheritdoc />
     public Type ClrType => typeof(DateTimeOffset);
 
+    /// <summary>
+    /// Placeholder used by <see cref="NullableColumnWriter{T}"/> for null
+    /// slots. <c>default(DateTimeOffset)</c> is below the Unix epoch and would
+    /// fail the range check in <see cref="WriteValue"/>; the epoch is the
+    /// minimum representable value on the wire.
+    /// </summary>
+    public DateTimeOffset NullPlaceholder => DateTimeOffset.UnixEpoch;
+
     /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, DateTimeOffset[] values)
     {

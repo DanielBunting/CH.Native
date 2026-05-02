@@ -65,6 +65,16 @@ public sealed class DynamicColumnReader : IColumnReader
     {
         var numberOfTypes = reader.ReadVarIntAsInt32("Dynamic numberOfTypes");
 
+        // Cap before allocating: a hostile / corrupt server can advertise a huge
+        // numberOfTypes (up to int.MaxValue) and force two large array allocations
+        // before any type-name string is read. _configuredMaxTypes mirrors the
+        // server-side `Dynamic(max_types=N)`; allow modest slack (4×) for future
+        // server-side default bumps but reject obvious abuse upfront.
+        if (numberOfTypes < 0 || numberOfTypes > Math.Max(_configuredMaxTypes * 4, 256))
+            throw new Exceptions.ClickHouseProtocolException(
+                $"Dynamic numberOfTypes {numberOfTypes} exceeds the configured ceiling " +
+                $"(max_types={_configuredMaxTypes}); protocol stream is malformed or hostile.");
+
         var typeNames = new string[numberOfTypes];
         var innerReaders = new IColumnReader[numberOfTypes];
         for (int i = 0; i < numberOfTypes; i++)

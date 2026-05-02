@@ -149,16 +149,18 @@ public sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
             if (_isNullable && index == 0)
             {
                 result[i] = default!;
+                continue;
             }
-            else if (dictColumn != null && index < (ulong)dictColumn.Count)
+
+            var dictCount = dictColumn?.Count ?? 0;
+            if (index >= (ulong)dictCount)
             {
-                result[i] = dictColumn[(int)index];
+                throw new InvalidDataException(
+                    $"LowCardinality index {index} at row {i} is out of range (dictionary size = {dictCount}).");
             }
-            else
-            {
-                // Index out of range or empty dictionary - this shouldn't happen with valid data
-                result[i] = default!;
-            }
+
+            // Bounds check above guarantees the cast fits int.
+            result[i] = dictColumn![(int)index];
         }
 
         return new TypedColumn<T>(result, rowCount, pool);

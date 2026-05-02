@@ -71,6 +71,20 @@ public sealed class Decimal128ColumnWriter : IColumnWriter<ClickHouseDecimal>
         WriteValue(ref writer, chd);
     }
 
+    /// <summary>
+    /// Rescales the decimal mantissa to the column's declared scale.
+    /// </summary>
+    /// <remarks>
+    /// **Truncation, not rounding.** When the source decimal has more
+    /// fractional digits than the column scale, the excess digits are
+    /// dropped via <see cref="BigInteger.Divide(BigInteger, BigInteger)"/>
+    /// (round-toward-zero). For example, inserting <c>1.9999</c> into a
+    /// <c>Decimal128(2)</c> column stores <c>1.99</c>, not <c>2.00</c>.
+    /// Callers needing rounding semantics must round before binding —
+    /// e.g. <c>decimal.Round(value, scale, MidpointRounding.ToEven)</c>.
+    /// This matches ClickHouse server-side behaviour for implicit
+    /// rescaling but is silent — there is no exception or warning.
+    /// </remarks>
     private static BigInteger RescaleToTargetScale(ClickHouseDecimal value, int targetScale)
     {
         var mantissa = value.Mantissa;
@@ -85,7 +99,7 @@ public sealed class Decimal128ColumnWriter : IColumnWriter<ClickHouseDecimal>
             return mantissa * BigInteger.Pow(10, targetScale - currentScale);
         }
 
-        // Need fewer decimal places — divide (truncate)
+        // Need fewer decimal places — divide (truncate toward zero).
         return BigInteger.Divide(mantissa, BigInteger.Pow(10, currentScale - targetScale));
     }
 }

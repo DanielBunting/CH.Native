@@ -1,0 +1,112 @@
+#nullable enable
+CH.Native.DependencyInjection.ClickHouseConnectionOptions
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.AllowInsecureTls.get -> bool?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.AllowInsecureTls.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.AuthMethod.get -> CH.Native.Connection.ClickHouseAuthMethod?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.AuthMethod.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.ClickHouseConnectionOptions() -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.ClientName.get -> string?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.ClientName.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Compress.get -> bool?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Compress.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.CompressionMethod.get -> CH.Native.Compression.CompressionMethod?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.CompressionMethod.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.ConnectionString.get -> string?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.ConnectionString.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Database.get -> string?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Database.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Host.get -> string?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Host.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.JwtToken.get -> string?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.JwtToken.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Password.get -> string?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Password.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Pool.get -> CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Pool.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.ConnectionIdleTimeout.get -> System.TimeSpan?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.ConnectionIdleTimeout.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.ConnectionLifetime.get -> System.TimeSpan?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.ConnectionLifetime.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.ConnectionWaitTimeout.get -> System.TimeSpan?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.ConnectionWaitTimeout.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.MaxPoolSize.get -> int?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.MaxPoolSize.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.MinPoolSize.get -> int?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.MinPoolSize.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.PoolOptions() -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.PrewarmOnStart.get -> bool?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.PrewarmOnStart.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.ValidateOnRent.get -> bool?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.PoolOptions.ValidateOnRent.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Port.get -> int?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Port.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Roles.get -> System.Collections.Generic.IList<string!>?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Roles.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.SshPrivateKeyPassphrase.get -> string?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.SshPrivateKeyPassphrase.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.SshPrivateKeyPath.get -> string?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.SshPrivateKeyPath.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.TlsCaCertificatePath.get -> string?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.TlsCaCertificatePath.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.TlsClientCertificate.get -> CH.Native.DependencyInjection.TlsClientCertificateOptions?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.TlsClientCertificate.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.TlsPort.get -> int?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.TlsPort.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Username.get -> string?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Username.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.UseTls.get -> bool?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.UseTls.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptionsValidator
+CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions
+CH.Native.DependencyInjection.HealthChecks.ClickHouseHealthCheck
+CH.Native.DependencyInjection.HealthChecks.ClickHouseHealthCheck.CheckHealthAsync(Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckContext! context, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckResult>!
+CH.Native.DependencyInjection.HealthChecks.ClickHouseHealthCheck.ClickHouseHealthCheck(CH.Native.Connection.ClickHouseDataSource! dataSource, System.TimeSpan? timeout = null) -> void
+CH.Native.DependencyInjection.HealthChecks.ClickHouseHealthCheckBuilderExtensions
+CH.Native.DependencyInjection.IClickHouseCertificateProvider
+CH.Native.DependencyInjection.IClickHouseCertificateProvider.GetCertificateAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<System.Security.Cryptography.X509Certificates.X509Certificate2!>
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.ServiceKey.get -> object?
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.Services.get -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithCertificateProvider(System.Func<System.IServiceProvider!, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.Security.Cryptography.X509Certificates.X509Certificate2!>>!>! factory) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithCertificateProvider<TProvider>() -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithJwtProvider(System.Func<System.IServiceProvider!, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<string!>>!>! factory) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithJwtProvider<TProvider>() -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithPasswordProvider(System.Func<System.IServiceProvider!, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<string!>>!>! factory) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithPasswordProvider<TProvider>() -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithPool(System.Action<CH.Native.Connection.ClickHouseDataSourceOptions!>! configure) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithSshKeyProvider(System.Func<System.IServiceProvider!, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<CH.Native.DependencyInjection.SshKeyMaterial!>>!>! factory) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithSshKeyProvider<TProvider>() -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+CH.Native.DependencyInjection.IClickHouseJwtProvider
+CH.Native.DependencyInjection.IClickHouseJwtProvider.GetTokenAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<string!>
+CH.Native.DependencyInjection.IClickHousePasswordProvider
+CH.Native.DependencyInjection.IClickHousePasswordProvider.GetPasswordAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<string!>
+CH.Native.DependencyInjection.IClickHouseSshKeyProvider
+CH.Native.DependencyInjection.IClickHouseSshKeyProvider.GetKeyAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.ValueTask<CH.Native.DependencyInjection.SshKeyMaterial!>
+CH.Native.DependencyInjection.SshKeyMaterial
+CH.Native.DependencyInjection.SshKeyMaterial.Passphrase.get -> string?
+CH.Native.DependencyInjection.SshKeyMaterial.Passphrase.init -> void
+CH.Native.DependencyInjection.SshKeyMaterial.PrivateKey.get -> byte[]!
+CH.Native.DependencyInjection.SshKeyMaterial.PrivateKey.init -> void
+CH.Native.DependencyInjection.SshKeyMaterial.SshKeyMaterial(byte[]! PrivateKey, string? Passphrase = null) -> void
+CH.Native.DependencyInjection.TlsClientCertificateOptions
+CH.Native.DependencyInjection.TlsClientCertificateOptions.PfxPassword.get -> string?
+CH.Native.DependencyInjection.TlsClientCertificateOptions.PfxPassword.set -> void
+CH.Native.DependencyInjection.TlsClientCertificateOptions.PfxPath.get -> string?
+CH.Native.DependencyInjection.TlsClientCertificateOptions.PfxPath.set -> void
+CH.Native.DependencyInjection.TlsClientCertificateOptions.StoreLocation.get -> string?
+CH.Native.DependencyInjection.TlsClientCertificateOptions.StoreLocation.set -> void
+CH.Native.DependencyInjection.TlsClientCertificateOptions.StoreName.get -> string?
+CH.Native.DependencyInjection.TlsClientCertificateOptions.StoreName.set -> void
+CH.Native.DependencyInjection.TlsClientCertificateOptions.Thumbprint.get -> string?
+CH.Native.DependencyInjection.TlsClientCertificateOptions.Thumbprint.set -> void
+CH.Native.DependencyInjection.TlsClientCertificateOptions.TlsClientCertificateOptions() -> void
+static CH.Native.DependencyInjection.ClickHouseConnectionOptionsValidator.ValidateOrThrow(CH.Native.DependencyInjection.ClickHouseConnectionOptions! options, string? sectionPath = null) -> void
+static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, CH.Native.Connection.ClickHouseConnectionSettings! settings) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, Microsoft.Extensions.Configuration.IConfiguration! section) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! connectionString) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! serviceKey, Microsoft.Extensions.Configuration.IConfiguration! section) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! serviceKey, string! connectionString) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! serviceKey, System.Action<CH.Native.Connection.ClickHouseConnectionSettingsBuilder!>! configure) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<CH.Native.Connection.ClickHouseConnectionSettingsBuilder!>! configure) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+static CH.Native.DependencyInjection.HealthChecks.ClickHouseHealthCheckBuilderExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder! builder, string! name = "clickhouse", object? serviceKey = null, System.TimeSpan? timeout = null, System.Collections.Generic.IEnumerable<string!>? tags = null) -> Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder!

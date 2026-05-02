@@ -5,6 +5,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\CH.Native\CH.Native.csproj" />
+    <ProjectReference Include="..\..\src\CH.Native.Dapper\CH.Native.Dapper.csproj" />
     <PackageReference Include="Dapper" Version="2.1.*" />
   </ItemGroup>
 </Project>

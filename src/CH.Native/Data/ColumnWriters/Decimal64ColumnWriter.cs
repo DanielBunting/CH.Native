@@ -1,3 +1,4 @@
+using CH.Native.Exceptions;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnWriters;
@@ -47,8 +48,21 @@ public sealed class Decimal64ColumnWriter : IColumnWriter<decimal>
     /// <inheritdoc />
     public void WriteValue(ref ProtocolWriter writer, decimal value)
     {
+        // .NET's decimal-to-long cast is checked at runtime; surface as a
+        // typed protocol exception so the resilience layer doesn't retry an
+        // overflow that would deterministically repeat.
         var scaled = value * _multiplier;
-        var longValue = (long)Math.Round(scaled);
+        long longValue;
+        try
+        {
+            longValue = (long)Math.Round(scaled);
+        }
+        catch (OverflowException ex)
+        {
+            throw new ClickHouseProtocolException(
+                $"Decimal64({_scale}) cannot represent value {value} after scaling — " +
+                $"scaled magnitude exceeds Int64 range.", ex);
+        }
         writer.WriteInt64(longValue);
     }
 

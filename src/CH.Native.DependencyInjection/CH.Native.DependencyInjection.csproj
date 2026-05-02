@@ -9,14 +9,29 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="CH.Native.Tests" />
+    <InternalsVisibleTo Include="CH.Native.SystemTests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\CH.Native\CH.Native.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.*" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="8.*" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.*" />
     <PackageReference Include="Microsoft.Extensions.Options" Version="8.*" />
     <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="8.*" />
+
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="3.3.4">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="PublicAPI.Shipped.txt" />
+    <AdditionalFiles Include="PublicAPI.Unshipped.txt" />
   </ItemGroup>
 
 </Project>

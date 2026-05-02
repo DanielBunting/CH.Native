@@ -16,10 +16,25 @@
   <ItemGroup>
     <PackageReference Include="K4os.Compression.LZ4" Version="1.3.*" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.*" />
-    <PackageReference Include="SSH.NET" Version="2024.*" />
+    <!-- SSH.NET: pin minor version to avoid breaking-change drift across the
+         entire 2024.x line. Tighten further when a stable LTS line ships. -->
+    <PackageReference Include="SSH.NET" Version="2024.2.*" />
     <PackageReference Include="System.Diagnostics.DiagnosticSource" Version="8.*" />
-    <PackageReference Include="System.IO.Pipelines" Version="8.0.0" />
+    <!-- Align with sibling 8.x deps on a floating-patch range. -->
+    <PackageReference Include="System.IO.Pipelines" Version="8.*" />
     <PackageReference Include="ZstdSharp.Port" Version="0.8.*" />
+
+    <!-- Public-surface tracker. PublicAPI.Shipped.txt locks the known surface;
+         additions/removals raise an analyzer warning until they are listed in
+         PublicAPI.Unshipped.txt and reviewed before the next release. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="3.3.4">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <AdditionalFiles Include="PublicAPI.Shipped.txt" />
+    <AdditionalFiles Include="PublicAPI.Unshipped.txt" />
   </ItemGroup>
 
 </Project>

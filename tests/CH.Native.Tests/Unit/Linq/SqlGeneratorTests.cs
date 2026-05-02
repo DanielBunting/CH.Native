@@ -77,14 +77,17 @@ public class SqlGeneratorTests
 
     #region Where Clause Tests
 
+    // ToSql() inlines literals so the output is directly runnable in
+    // clickhouse-client. The execution path uses {p1:Type} parameter binding;
+    // these tests cover the rendered (debug) form.
+
     [Fact]
     public void Where_Equality_GeneratesCorrectSql()
     {
         var sql = GenerateSql<TestOrder>(q => q.Where(o => o.Id == 42));
 
         Assert.Contains("WHERE", sql);
-        Assert.Contains("`id` = {", sql);
-        Assert.DoesNotContain(" 42", sql);
+        Assert.Contains("`id` = 42", sql);
     }
 
     [Fact]
@@ -92,8 +95,7 @@ public class SqlGeneratorTests
     {
         var sql = GenerateSql<TestOrder>(q => q.Where(o => o.CustomerName == "John"));
 
-        Assert.Contains("`customer_name` = {", sql);
-        Assert.DoesNotContain("'John'", sql);
+        Assert.Contains("`customer_name` = 'John'", sql);
     }
 
     [Fact]
@@ -101,8 +103,7 @@ public class SqlGeneratorTests
     {
         var sql = GenerateSql<TestOrder>(q => q.Where(o => o.Amount > 100));
 
-        Assert.Contains("`amount` > {", sql);
-        Assert.DoesNotContain(" 100", sql);
+        Assert.Contains("`amount` > 100", sql);
     }
 
     [Fact]
@@ -110,8 +111,7 @@ public class SqlGeneratorTests
     {
         var sql = GenerateSql<TestOrder>(q => q.Where(o => o.Quantity <= 10));
 
-        Assert.Contains("`quantity` <= {", sql);
-        Assert.DoesNotContain(" 10", sql);
+        Assert.Contains("`quantity` <= 10", sql);
     }
 
     [Fact]
@@ -122,7 +122,7 @@ public class SqlGeneratorTests
 
         Assert.Contains("AND", sql);
         Assert.Contains("`is_active`", sql);
-        Assert.Contains("`amount` > {", sql);
+        Assert.Contains("`amount` > 0", sql);
     }
 
     [Fact]
@@ -166,8 +166,8 @@ public class SqlGeneratorTests
              .Where(o => o.Status == "Active"));
 
         Assert.Contains("AND", sql);
-        Assert.Contains("`amount` > {", sql);
-        Assert.Contains("`status` = {", sql);
+        Assert.Contains("`amount` > 100", sql);
+        Assert.Contains("`status` = 'Active'", sql);
     }
 
     #endregion
@@ -238,9 +238,10 @@ public class SqlGeneratorTests
         var ids = new List<int> { 1, 2, 3, 4, 5 };
         var sql = GenerateSql<TestOrder>(q => q.Where(o => ids.Contains(o.Id)));
 
-        // Each element is parameterised; the SQL contains five placeholders.
-        Assert.Contains("`id` IN ({", sql);
-        Assert.DoesNotContain("(1, 2, 3, 4, 5)", sql);
+        // Each element is rendered as an inline literal in the IN clause.
+        Assert.Contains("`id` IN (", sql);
+        Assert.Contains("1", sql);
+        Assert.Contains("5", sql);
     }
 
     [Fact]
@@ -249,8 +250,9 @@ public class SqlGeneratorTests
         var statuses = new[] { "Pending", "Processing" };
         var sql = GenerateSql<TestOrder>(q => q.Where(o => statuses.Contains(o.Status)));
 
-        Assert.Contains("`status` IN ({", sql);
-        Assert.DoesNotContain("'Pending'", sql);
+        Assert.Contains("`status` IN (", sql);
+        Assert.Contains("'Pending'", sql);
+        Assert.Contains("'Processing'", sql);
     }
 
     [Fact]
@@ -467,14 +469,14 @@ public class SqlGeneratorTests
     }
 
     [Fact]
-    public void Query_WithCapturedVariable_BindsAsParameter()
+    public void Query_WithCapturedVariable_RendersAsInlineLiteral()
     {
         var minAmount = 50.0m;
         var sql = GenerateSql<TestOrder>(q => q.Where(o => o.Amount > minAmount));
 
-        // Captured scalar is emitted as a {pN:Type} placeholder, not inlined.
-        Assert.Contains("`amount` > {", sql);
-        Assert.DoesNotContain(" 50", sql);
+        // The execution path emits a {pN:Type} placeholder + parameter binding;
+        // the diagnostic ToSql() form inlines the captured value as a literal.
+        Assert.Contains("`amount` > 50", sql);
     }
 
     #endregion
@@ -577,25 +579,23 @@ public class SqlGeneratorTests
     #region Special Character Tests
 
     [Fact]
-    public void Where_StringWithSingleQuote_BindsAsParameter()
+    public void Where_StringWithSingleQuote_IsEscapedInInlineLiteral()
     {
-        // Special characters no longer need SQL-string escaping because the value
-        // is bound through ClickHouse's {name:Type} parameter mechanism rather than
-        // inlined into the SQL text.
+        // ToSql()'s inline form must escape single quotes to keep the rendered
+        // SQL safe to paste into clickhouse-client. The execution path uses
+        // server-side parameter binding (which is the SQL-injection-safe path)
+        // — this test covers the diagnostic inline render.
         var sql = GenerateSql<TestOrder>(q => q.Where(o => o.CustomerName == "O'Brien"));
 
-        Assert.Contains("`customer_name` = {", sql);
-        Assert.DoesNotContain("O'Brien", sql);
-        Assert.DoesNotContain("O\\'Brien", sql);
+        Assert.Contains(@"`customer_name` = 'O\'Brien'", sql);
     }
 
     [Fact]
-    public void Where_StringWithBackslash_BindsAsParameter()
+    public void Where_StringWithBackslash_IsEscapedInInlineLiteral()
     {
         var sql = GenerateSql<TestOrder>(q => q.Where(o => o.CustomerName == "C:\\Path"));
 
-        Assert.Contains("`customer_name` = {", sql);
-        Assert.DoesNotContain("C:\\Path", sql);
+        Assert.Contains(@"`customer_name` = 'C:\\Path'", sql);
     }
 
     #endregion

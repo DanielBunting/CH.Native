@@ -173,7 +173,6 @@ public static class ClickHouseConnectionExtensions
         string sql,
         object parameters,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        where T : new()
     {
         await using var command = connection.CreateCommand(sql);
         AddParametersFromObject(command.Parameters, parameters);
@@ -198,7 +197,6 @@ public static class ClickHouseConnectionExtensions
         string sql,
         IDictionary<string, object?> parameters,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        where T : new()
     {
         await using var command = connection.CreateCommand(sql);
         AddParametersFromDictionary(command.Parameters, parameters);

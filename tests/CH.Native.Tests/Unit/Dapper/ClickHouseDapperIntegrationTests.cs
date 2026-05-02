@@ -28,6 +28,21 @@ public class ClickHouseDapperIntegrationTests
         Assert.True(true);
     }
 
+    [Fact]
+    public void AfterRegister_DapperMatchNamesWithUnderscores_IsTrue()
+    {
+        // Register flips DefaultTypeMap.MatchNamesWithUnderscores so the
+        // Dapper read path bridges snake_case columns to PascalCase
+        // properties — matching the typed mapper's snake_case fallback.
+        // The [ModuleInitializer] in DapperHandlerRegistration has already
+        // called Register by the time this test runs, so we just observe
+        // the post-state. A second call here is harmless and documents the
+        // expectation.
+        ClickHouseDapperIntegration.Register();
+
+        Assert.True(DefaultTypeMap.MatchNamesWithUnderscores);
+    }
+
     // The [ModuleInitializer] in DapperHandlerRegistration runs exactly once when
     // this test assembly loads, so by the time any test executes the handlers are
     // already registered. The checks below confirm the integration point is still

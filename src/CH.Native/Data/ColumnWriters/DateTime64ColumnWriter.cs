@@ -1,3 +1,4 @@
+using CH.Native.Exceptions;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnWriters;
@@ -61,6 +62,20 @@ public sealed class DateTime64ColumnWriter : IColumnWriter<DateTime>
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <see cref="DateTimeKind"/> handling:
+    /// <list type="bullet">
+    ///   <item><description><c>Utc</c> — written verbatim.</description></item>
+    ///   <item><description><c>Local</c> — converted to UTC before encoding.</description></item>
+    ///   <item><description><c>Unspecified</c> — treated as already-UTC. <b>Silent</b>:
+    ///     legacy code, JSON deserializers, or EF projections that hand back an
+    ///     unspecified-kind DateTime representing local time will be inserted at
+    ///     the wrong instant by the local UTC offset. Callers uncertain about
+    ///     kind should normalise via <c>DateTime.SpecifyKind(value, DateTimeKind.Utc)</c>
+    ///     (if the value really is UTC) or <c>DateTime.SpecifyKind(value, DateTimeKind.Local).ToUniversalTime()</c>
+    ///     (if it represents local wall-clock time) before binding.</description></item>
+    /// </list>
+    /// </remarks>
     public void WriteValue(ref ProtocolWriter writer, DateTime value)
     {
         var utcValue = value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : value;
@@ -69,9 +84,23 @@ public sealed class DateTime64ColumnWriter : IColumnWriter<DateTime>
         long result;
         if (_precision > 7)
         {
-            // For precision 8 or 9, we need to multiply by the additional factor
+            // Precision 8 / 9: multiply ticks by the sub-tick factor. DateTime
+            // values near .NET's MaxValue can produce ticks counts large enough
+            // that the multiplication overflows Int64; pre-fix this wrapped
+            // silently to a negative wire value. checked() surfaces the
+            // overflow and we wrap it in a typed protocol exception so it
+            // doesn't get classified as transient downstream.
             var multiplier = (long)Math.Pow(10, _precision - 7);
-            result = ticks * multiplier;
+            try
+            {
+                result = checked(ticks * multiplier);
+            }
+            catch (OverflowException ex)
+            {
+                throw new ClickHouseProtocolException(
+                    $"DateTime64({_precision}) value {value:O} produces a tick-count that overflows Int64; " +
+                    "ClickHouse cannot represent this moment at the requested precision.", ex);
+            }
         }
         else
         {

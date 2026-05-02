@@ -91,8 +91,9 @@ public class TlsConnectionTests
 
         await using var connection = new ClickHouseConnection(settings);
 
-        // Should throw because certificate validation fails
-        await Assert.ThrowsAsync<ClickHouseConnectionException>(
+        // Should throw because certificate validation fails. TLS handshake failure
+        // surfaces as ClickHouseAuthenticationException (a ClickHouseConnectionException).
+        await Assert.ThrowsAsync<ClickHouseAuthenticationException>(
             () => connection.OpenAsync());
     }
 
@@ -129,7 +130,7 @@ public class TlsConnectionTests
 
         await using var connection = new ClickHouseConnection(settings);
 
-        await Assert.ThrowsAsync<ClickHouseConnectionException>(
+        await Assert.ThrowsAsync<ClickHouseAuthenticationException>(
             () => connection.OpenAsync());
     }
 

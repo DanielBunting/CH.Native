@@ -52,6 +52,14 @@ public sealed class ColumnReaderRegistry
 
         // Check if this is a composite type that needs factory handling.
         // Also handle bare parameterless composites like `Dynamic`.
+        //
+        // Concurrent first-use: two threads asking for the same type-name
+        // simultaneously will both build a reader, with `GetOrAdd` keeping
+        // the first to land and discarding the second. Wasted build work is
+        // acceptable here — readers are stateless and the build cost is a
+        // few microseconds for typical types — and we keep the lock-free
+        // path on the read-hot side. If profiling ever flags the duplicate
+        // build, switch to `GetOrAdd(typeName, Lazy<IColumnReader>)`.
         if (IsCompositeType(baseType) || IsCompositeType(typeName))
         {
             if (_compositeCache.TryGetValue(typeName, out var cached))

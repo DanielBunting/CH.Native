@@ -15,6 +15,7 @@ public sealed class NullableColumnWriter<T> : IColumnWriter<T?>
     where T : struct
 {
     private readonly IColumnWriter<T> _innerWriter;
+    private readonly T _nullPlaceholder;
 
     /// <summary>
     /// Creates a Nullable writer that wraps the specified inner writer.
@@ -23,6 +24,7 @@ public sealed class NullableColumnWriter<T> : IColumnWriter<T?>
     public NullableColumnWriter(IColumnWriter<T> innerWriter)
     {
         _innerWriter = innerWriter ?? throw new ArgumentNullException(nameof(innerWriter));
+        _nullPlaceholder = ResolveNullPlaceholder(_innerWriter);
     }
 
     /// <summary>
@@ -41,6 +43,18 @@ public sealed class NullableColumnWriter<T> : IColumnWriter<T?>
                 $"Inner writer must implement IColumnWriter<{typeof(T).Name}>.",
                 nameof(innerWriter));
         }
+        _nullPlaceholder = ResolveNullPlaceholder(_innerWriter);
+    }
+
+    // Most value-type writers leave the interface default in place (which throws);
+    // fall back to default(T) for those. Range-checked writers (DateTime,
+    // DateTimeWithTimezone) override NullPlaceholder to return a benign in-range
+    // value (Unix epoch) so the per-row write of a placeholder under a "null"
+    // bitmap byte doesn't trip their range guard.
+    private static T ResolveNullPlaceholder(IColumnWriter<T> innerWriter)
+    {
+        try { return innerWriter.NullPlaceholder; }
+        catch (NotSupportedException) { return default; }
     }
 
     /// <inheritdoc />
@@ -63,10 +77,12 @@ public sealed class NullableColumnWriter<T> : IColumnWriter<T?>
             writer.WriteByte(values[i].HasValue ? (byte)0 : (byte)1);
         }
 
-        // Step 2: Write all values (default for nulls)
+        // Step 2: Write all values, substituting the inner writer's declared
+        // placeholder for null slots (default(T) by default; UnixEpoch for
+        // range-checked DateTime writers).
         for (int i = 0; i < values.Length; i++)
         {
-            _innerWriter.WriteValue(ref writer, values[i] ?? default);
+            _innerWriter.WriteValue(ref writer, values[i] ?? _nullPlaceholder);
         }
     }
 
@@ -74,7 +90,7 @@ public sealed class NullableColumnWriter<T> : IColumnWriter<T?>
     public void WriteValue(ref ProtocolWriter writer, T? value)
     {
         writer.WriteByte(value.HasValue ? (byte)0 : (byte)1);
-        _innerWriter.WriteValue(ref writer, value ?? default);
+        _innerWriter.WriteValue(ref writer, value ?? _nullPlaceholder);
     }
 
     void IColumnWriter.WriteColumn(ref ProtocolWriter writer, object?[] values)
@@ -88,14 +104,14 @@ public sealed class NullableColumnWriter<T> : IColumnWriter<T?>
         // Step 2: Write all values
         for (int i = 0; i < values.Length; i++)
         {
-            _innerWriter.WriteValue(ref writer, values[i] is T v ? v : default);
+            _innerWriter.WriteValue(ref writer, values[i] is T v ? v : _nullPlaceholder);
         }
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)
     {
         writer.WriteByte(value is null ? (byte)1 : (byte)0);
-        _innerWriter.WriteValue(ref writer, value is T v ? v : default);
+        _innerWriter.WriteValue(ref writer, value is T v ? v : _nullPlaceholder);
     }
 }
 

@@ -12,6 +12,11 @@ public sealed class DynamicColumnSkipper : IColumnSkipper
     private readonly ColumnSkipperFactory _factory;
     private readonly string _typeName;
 
+    /// <summary>
+    /// Creates a Dynamic skipper that delegates per-arm skipping to <paramref name="factory"/>.
+    /// </summary>
+    /// <param name="factory">Factory used to construct per-arm element skippers on demand.</param>
+    /// <param name="typeName">ClickHouse type name (typically <c>"Dynamic"</c>).</param>
     public DynamicColumnSkipper(ColumnSkipperFactory factory, string typeName)
     {
         _factory = factory;

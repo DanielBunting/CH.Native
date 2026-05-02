@@ -47,4 +47,15 @@ public interface IClickHouseDataSourceBuilder
 
     /// <summary>Overrides pool options. Called after any config-bound defaults.</summary>
     IClickHouseDataSourceBuilder WithPool(Action<ClickHouseDataSourceOptions> configure);
+
+    /// <summary>
+    /// Forces the auth-pairing validator (and, by extension, the
+    /// <see cref="ClickHouseDataSource"/> singleton factory) to run at host
+    /// startup instead of at first resolution. Registers an internal
+    /// <c>IHostedService</c>. Use this in apps that want a misconfigured
+    /// <c>AuthMethod=Jwt</c> / <c>AuthMethod=SshKey</c> without a chained
+    /// provider to fail at <c>app.Run()</c> rather than at the first request
+    /// that injects the DataSource.
+    /// </summary>
+    IClickHouseDataSourceBuilder ValidateOnStart();
 }

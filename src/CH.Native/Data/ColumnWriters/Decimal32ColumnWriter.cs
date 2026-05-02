@@ -1,3 +1,4 @@
+using CH.Native.Exceptions;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnWriters;
@@ -47,8 +48,23 @@ public sealed class Decimal32ColumnWriter : IColumnWriter<decimal>
     /// <inheritdoc />
     public void WriteValue(ref ProtocolWriter writer, decimal value)
     {
+        // .NET's decimal-to-int cast is already checked, so an out-of-range
+        // value raises OverflowException at runtime. Surface that as the
+        // typed protocol exception so the resilience layer doesn't classify
+        // it as a transient retry candidate (it isn't — same input would
+        // overflow on every retry).
         var scaled = value * _multiplier;
-        var intValue = (int)Math.Round(scaled);
+        int intValue;
+        try
+        {
+            intValue = (int)Math.Round(scaled);
+        }
+        catch (OverflowException ex)
+        {
+            throw new ClickHouseProtocolException(
+                $"Decimal32({_scale}) cannot represent value {value} after scaling — " +
+                $"scaled magnitude exceeds Int32 range.", ex);
+        }
         writer.WriteInt32(intValue);
     }
 

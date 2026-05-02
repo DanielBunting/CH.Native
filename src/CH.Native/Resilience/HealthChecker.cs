@@ -108,9 +108,14 @@ public sealed class HealthChecker : IAsyncDisposable
             {
                 break;
             }
-            catch
+            catch (Exception ex)
             {
-                // Log and continue - don't let health check failures stop the background task
+                // Don't let health check failures stop the background task —
+                // they're recorded per-server inside CheckServerAsync via
+                // node.MarkUnhealthy + OnHealthCheckCompleted. An exception
+                // escaping that level usually means a programmer error in the
+                // checker itself; log loudly so it's visible.
+                _logger?.HealthCheckFailed("background-loop", ex.Message);
             }
 
             try
@@ -132,6 +137,10 @@ public sealed class HealthChecker : IAsyncDisposable
 
     private async Task CheckServerAsync(ServerNode node, CancellationToken cancellationToken)
     {
+        // NOTE: probe duration uses DateTime.UtcNow rather than the injected
+        // TimeProvider — the duration is recorded only as a metric / log field,
+        // never used as a control-flow trigger. Tests that care about probe
+        // ordering should drive via TimeProvider on the surrounding scheduler.
         var wasHealthy = node.IsHealthy;
         var startTime = DateTime.UtcNow;
         Exception? checkException = null;

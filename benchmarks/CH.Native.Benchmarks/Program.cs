@@ -12,6 +12,9 @@ if (args.Length > 0)
         case "bulk":
             BenchmarkRunner.Run<BulkInsertBenchmarks>();
             break;
+        case "bulkalloc":
+            BenchmarkRunner.Run<BulkInsertDirectVsBoxedAllocationBenchmarks>();
+            break;
         case "parser":
             BenchmarkRunner.Run<TypeParserBenchmarks>();
             break;
@@ -119,6 +122,7 @@ static void RunAllBenchmarks()
     // Synthetic benchmarks (no container)
     BenchmarkRunner.Run<TypeParserBenchmarks>();
     BenchmarkRunner.Run<BulkInsertBenchmarks>();
+    BenchmarkRunner.Run<BulkInsertDirectVsBoxedAllocationBenchmarks>();
 
     // Protocol comparison benchmarks (requires Docker)
     RunComparisonBenchmarks();
@@ -144,6 +148,7 @@ static void PrintUsage()
         Synthetic Benchmarks (no Docker required):
           parser      - Type parser benchmarks
           bulk        - Bulk insert serialization benchmarks
+          bulkalloc   - Direct vs boxed bulk-insert allocation comparison (50K+ rows)
           geo         - Geo column reader/writer/skipper benchmarks
 
         Protocol Comparison Benchmarks (requires Docker):
