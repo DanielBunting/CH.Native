@@ -28,10 +28,10 @@ public class CancelDuringRoundTripTests : IAsyncLifetime
         _output = output;
     }
 
-    // Reset toxics before AND after each test — a failed assertion can short-circuit
-    // a finally block, leaving toxics in place that poison the next test.
-    public Task InitializeAsync() => _proxy.Client.RemoveAllToxicsAsync(ToxiproxyFixture.ProxyName);
-    public Task DisposeAsync() => _proxy.Client.RemoveAllToxicsAsync(ToxiproxyFixture.ProxyName);
+    // Recreate the proxy before and after each test (DELETE + POST) to clear
+    // server-side toxic-goroutine state and kick stale connections.
+    public Task InitializeAsync() => _proxy.ResetProxyAsync();
+    public Task DisposeAsync() => _proxy.ResetProxyAsync();
 
     [Fact]
     public async Task BulkInsert_CancelDuringInitAsync_SchemaWait_WireStaysUsable()

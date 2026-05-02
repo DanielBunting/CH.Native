@@ -1762,29 +1762,32 @@ public static class ColumnExtractorFactory
             var armCount = _armWriters.Length;
 
             // First pass: collect discriminator bytes into a pooled buffer, tallying arm counts.
+            // The rent must live inside the try/finally below — a malformed row throwing
+            // ArgumentOutOfRangeException out of the disc-collection loop would otherwise
+            // strand the rental in the pool's freelist.
             var counts = armCount <= 32 ? stackalloc int[armCount] : new int[armCount];
             var discPooled = ArrayPool<byte>.Shared.Rent(rowCount);
-            var discSpan = discPooled.AsSpan(0, rowCount);
-            for (int i = 0; i < rowCount; i++)
-            {
-                var v = _getter(rows[i]);
-                var disc = v.Discriminator;
-                discSpan[i] = disc;
-                if (disc == ClickHouseVariant.NullDiscriminator) continue;
-                if (disc >= armCount)
-                    throw new ArgumentOutOfRangeException(
-                        nameof(rows),
-                        $"Row {i} has Variant discriminator {disc} but column declares only {armCount} arms.");
-                counts[disc]++;
-            }
-            writer.WriteBytes(discSpan);
-
-            // Second pass: per arm, materialise a bucket of exact length and delegate.
-            // The buckets can't be pooled because IColumnWriter iterates values.Length —
-            // they are the only irreducible allocation on this hot path.
             var buckets = ArrayPool<object?[]>.Shared.Rent(armCount);
             try
             {
+                var discSpan = discPooled.AsSpan(0, rowCount);
+                for (int i = 0; i < rowCount; i++)
+                {
+                    var v = _getter(rows[i]);
+                    var disc = v.Discriminator;
+                    discSpan[i] = disc;
+                    if (disc == ClickHouseVariant.NullDiscriminator) continue;
+                    if (disc >= armCount)
+                        throw new ArgumentOutOfRangeException(
+                            nameof(rows),
+                            $"Row {i} has Variant discriminator {disc} but column declares only {armCount} arms.");
+                    counts[disc]++;
+                }
+                writer.WriteBytes(discSpan);
+
+                // Second pass: per arm, materialise a bucket of exact length and delegate.
+                // The buckets can't be pooled because IColumnWriter iterates values.Length —
+                // they are the only irreducible allocation on this hot path.
                 for (int arm = 0; arm < armCount; arm++)
                     buckets[arm] = counts[arm] == 0 ? Array.Empty<object?>() : new object?[counts[arm]];
 

@@ -114,6 +114,22 @@ internal sealed class ClickHouseDataSourceBuilder : IClickHouseDataSourceBuilder
         return this;
     }
 
+    public IClickHouseDataSourceBuilder ValidateOnStart()
+    {
+        // Multiple ValidateOnStart() calls on the same builder must register
+        // only one hosted service, otherwise we'd resolve the DataSource N
+        // times at startup. AddHostedService is keyless and Add (not TryAdd)
+        // by default, so guard with a flag captured on the builder.
+        if (_validateOnStartRegistered) return this;
+        _validateOnStartRegistered = true;
+
+        var serviceKey = ServiceKey;
+        Services.AddHostedService(sp => new ClickHouseStartupValidator(sp, serviceKey));
+        return this;
+    }
+
+    private bool _validateOnStartRegistered;
+
     private void RegisterKeyed<TService, TImpl>()
         where TService : class
         where TImpl : class, TService

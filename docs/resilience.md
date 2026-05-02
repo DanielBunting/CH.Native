@@ -316,3 +316,4 @@ See [Telemetry](telemetry.md) for more details.
 
 - [Configuration](configuration.md) - Connection settings
 - [Telemetry](telemetry.md) - Monitoring and observability
+- [Connection Pooling — Connection poison detection](connection-pooling.md#connection-poison-detection) - When the pool discards vs. reuses a connection after a server `KILL QUERY` or protocol error

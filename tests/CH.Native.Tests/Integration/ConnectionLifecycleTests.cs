@@ -89,7 +89,10 @@ public class ConnectionLifecycleTests
             var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
                 await inserter.DisposeAsync());
             Assert.Contains("CompleteAsync", ex.Message);
-            Assert.Contains("2 unflushed row", ex.Message);
+            // Pre-fix this read "unflushed row"; the message now uses "un-flushed
+            // row(s)" and explains that previously-flushed batches DO persist
+            // (see BulkInserter.cs DisposeAsync). Match the new wording.
+            Assert.Contains("un-flushed row", ex.Message);
         }
         finally
         {

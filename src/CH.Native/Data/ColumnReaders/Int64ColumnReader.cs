@@ -24,9 +24,9 @@ public sealed class Int64ColumnReader : IColumnReader<long>
     /// <inheritdoc />
     public TypedColumn<long> ReadTypedColumn(ref ProtocolReader reader, int rowCount)
     {
+        var byteCount = ProtocolGuards.ValidateBulkReadByteCount(rowCount, sizeof(long), "Int64 column rowCount");
         var pool = ArrayPool<long>.Shared;
         var values = pool.Rent(rowCount);
-        var byteCount = rowCount * sizeof(long);
 
         // Fast path: bulk copy if data is contiguous
         if (reader.TryGetContiguousSpan(byteCount, out var span))

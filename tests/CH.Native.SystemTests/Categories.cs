@@ -22,4 +22,11 @@ internal static class Categories
     public const string Security = "Security";
     public const string DependencyInjection = "DependencyInjection";
     public const string Suite = "Suite";
+
+    /// <summary>
+    /// Long-running boundary tests (e.g. LowCardinality 65k dictionary transition).
+    /// Excluded from default runs via <c>--filter "Category!=LongBoundary"</c>;
+    /// nightly CI opts in by selecting <c>Category=LongBoundary</c>.
+    /// </summary>
+    public const string LongBoundary = "LongBoundary";
 }

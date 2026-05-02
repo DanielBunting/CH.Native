@@ -86,6 +86,16 @@ public class MultiToxiproxyFixture : IAsyncLifetime
         await WaitReachableAsync(EndpointB);
     }
 
+    /// <summary>
+    /// Recreates both proxies (DELETE + POST). Kicks stale connections holding
+    /// toxic-goroutine state — see <see cref="ToxiproxyFixture.ResetProxyAsync"/>.
+    /// </summary>
+    public async Task ResetProxiesAsync()
+    {
+        await Client.EnsureProxyAsync(ProxyAName, $"0.0.0.0:{InternalProxyPortA}", "ch_a:9000");
+        await Client.EnsureProxyAsync(ProxyBName, $"0.0.0.0:{InternalProxyPortB}", "ch_b:9000");
+    }
+
     public ClickHouseConnectionSettings BuildSettings(IEnumerable<ServerAddress> servers,
         Action<ClickHouseConnectionSettingsBuilder>? configure = null)
     {

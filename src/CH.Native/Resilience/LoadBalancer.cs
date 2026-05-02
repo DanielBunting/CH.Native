@@ -27,6 +27,11 @@ public sealed class LoadBalancer
 
     /// <summary>
     /// Gets the next available server based on the load balancing strategy.
+    /// Selection is best-effort: the caller snapshots the healthy-node set and
+    /// then picks an index, so a server marked unhealthy in the narrow window
+    /// between snapshot and return can still be returned. The caller's connect
+    /// path observes the failure on its own (and feeds it back into the
+    /// health checker on the next probe), so this is acceptable noise.
     /// </summary>
     /// <returns>The server address to use, or null if no healthy servers are available.</returns>
     public ServerAddress? GetNextServer()
@@ -66,6 +71,12 @@ public sealed class LoadBalancer
     /// <summary>
     /// Marks a server as healthy, immediately updating its health status.
     /// </summary>
+    /// <remarks>
+    /// Race with <see cref="MarkServerFailed"/> is intentionally last-write-
+    /// wins: the connect path observes a real failure and the background probe
+    /// observes a real success, so whichever lands second reflects the most
+    /// recent ground truth on the next rent. No need for stronger ordering.
+    /// </remarks>
     /// <param name="address">The address of the server that succeeded.</param>
     public void MarkServerHealthy(ServerAddress address)
     {

@@ -17,7 +17,11 @@ public sealed class TupleColumnSkipper : IColumnSkipper
         _typeName = $"Tuple({string.Join(", ", elementTypeNames)})";
     }
 
+    /// <inheritdoc />
+
     public string TypeName => _typeName;
+
+    /// <inheritdoc />
 
     public bool TrySkipColumn(ref ProtocolReader reader, int rowCount)
     {
@@ -46,7 +50,11 @@ public sealed class NestedColumnSkipper : IColumnSkipper
         _typeName = typeName;
     }
 
+    /// <inheritdoc />
+
     public string TypeName => _typeName;
+
+    /// <inheritdoc />
 
     public bool TrySkipColumn(ref ProtocolReader reader, int rowCount)
     {

@@ -6,8 +6,14 @@ namespace CH.Native.Data.ColumnWriters;
 
 /// <summary>
 /// Column writer for IPv4 values.
-/// IPv4 in ClickHouse is stored as 4 bytes in little-endian order.
 /// </summary>
+/// <remarks>
+/// ClickHouse stores IPv4 as a 4-byte little-endian <see cref="uint"/> on the
+/// wire. <see cref="IPAddress.GetAddressBytes()"/> returns bytes in
+/// <em>network order</em> (big-endian), so the writer reverses them before
+/// emitting. <c>1.2.3.4</c> goes out on the wire as
+/// <c>[0x04, 0x03, 0x02, 0x01]</c> — symmetric with <see cref="IPv4ColumnReader"/>.
+/// </remarks>
 public sealed class IPv4ColumnWriter : IColumnWriter<IPAddress>
 {
     /// <inheritdoc />

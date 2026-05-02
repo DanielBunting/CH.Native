@@ -87,7 +87,10 @@ public class BulkInsertPartialBatchLossTests
             var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
                 await inserter.DisposeAsync());
             Assert.Contains("CompleteAsync", ex.Message);
-            Assert.Contains("unflushed", ex.Message);
+            // Pre-fix the message read "unflushed"; the F2 contract clarification
+            // changed it to "un-flushed row(s)" with explicit wording about which
+            // rows are LOST vs persisted (see BulkInserter.cs DisposeAsync).
+            Assert.Contains("un-flushed", ex.Message);
 
             // Data did not persist (as expected — CompleteAsync was never called).
             await using var verify = new ClickHouseConnection(_fixture.ConnectionString);

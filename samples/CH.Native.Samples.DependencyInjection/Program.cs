@@ -12,9 +12,9 @@
 //   docker run --rm -p 9000:9000 -p 8123:8123 -p 9440:9440 clickhouse/clickhouse-server
 //   dotnet run --project samples/CH.Native.Samples.DependencyInjection
 //
-// The keyed "mtls" / "ssh" / "primary" endpoints will fail handshake on a vanilla
-// OSS container — they're wired up for shape, not for actually passing. The
-// default DataSource + "replica" + "adhoc" work end-to-end.
+// The keyed "mtls" / "ssh" / "primary" endpoints will fail handshake on a
+// vanilla OSS container — they're wired up for shape, not for actually passing.
+// The default DataSource + "replica" + "adhoc" work end-to-end.
 
 using System.Security.Cryptography.X509Certificates;
 using CH.Native.Connection;
@@ -83,9 +83,11 @@ app.MapGet("/", () => "CH.Native DI sample — see /events/count, /replica/serve
 app.MapGet("/events/count", async (ClickHouseDataSource ds, CancellationToken ct) =>
 {
     await using var conn = await ds.OpenConnectionAsync(ct);
-    // Sample query — against a vanilla container this returns zero rows by using
-    // a system table that always exists.
-    var count = await conn.ExecuteScalarAsync<ulong>("SELECT count() FROM system.numbers LIMIT 10", ct);
+    // Sample query — counts a bounded slice of system.numbers (the table itself
+    // is infinite, so the inner LIMIT is required).
+    var count = await conn.ExecuteScalarAsync<ulong>(
+        "SELECT count() FROM (SELECT * FROM system.numbers LIMIT 10)",
+        cancellationToken: ct);
     return Results.Ok(new { count });
 });
 
@@ -94,20 +96,21 @@ app.MapGet("/replica/server", async (
     CancellationToken ct) =>
 {
     await using var conn = await replica.OpenConnectionAsync(ct);
-    var version = await conn.ExecuteScalarAsync<string>("SELECT version()", ct);
+    var version = await conn.ExecuteScalarAsync<string>("SELECT version()", cancellationToken: ct);
     return Results.Ok(new { version });
 });
 
 app.MapPost("/events/bulk", async (
     ClickHouseDataSource ds,
-    IEnumerable<EventRow> rows,
+    List<EventRow> rows,
     CancellationToken ct) =>
 {
     // Ensure a demo table exists.
     await using (var setup = await ds.OpenConnectionAsync(ct))
     {
         await setup.ExecuteNonQueryAsync(
-            "CREATE TABLE IF NOT EXISTS sample_events (event_id UUID, ts DateTime, payload String) ENGINE = Memory", ct);
+            "CREATE TABLE IF NOT EXISTS sample_events (event_id UUID, ts DateTime, payload String) ENGINE = Memory",
+            cancellationToken: ct);
     }
 
     await using var inserter = await ds.CreateBulkInserterAsync<EventRow>("sample_events", cancellationToken: ct);

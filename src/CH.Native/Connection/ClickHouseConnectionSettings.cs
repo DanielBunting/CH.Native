@@ -290,6 +290,11 @@ public sealed class ClickHouseConnectionSettings
         var builder = CreateBuilder();
         var pairs = connectionString.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var hasHost = false;
+        // Track whether each of the conflicting keys was explicitly set by
+        // the caller (as opposed to backfilled). Mixing them is rejected
+        // outright — see the `servers` / `host` / `server` cases below.
+        var hostExplicit = false;
+        var serversSpecified = false;
 
         // Track resilience options parsed from connection string
         int? maxRetries = null;
@@ -319,12 +324,17 @@ public sealed class ClickHouseConnectionSettings
             {
                 case "host":
                 case "server":
+                    if (serversSpecified)
+                        throw new ArgumentException(
+                            "Connection string cannot specify both 'Host' (single endpoint) and 'Servers' (failover list) — they have different semantics. Use 'Servers' alone for multi-host failover, or 'Host' alone for a single endpoint.",
+                            nameof(connectionString));
                     builder.WithHost(value);
                     hasHost = true;
+                    hostExplicit = true;
                     break;
                 case "port":
                     if (!int.TryParse(value, out var port) || port < 1 || port > 65535)
-                        throw new ArgumentException($"Invalid port value: {value}", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: integer between 1 and 65535.", nameof(connectionString));
                     builder.WithPort(port);
                     break;
                 case "database":
@@ -343,7 +353,7 @@ public sealed class ClickHouseConnectionSettings
                 case "timeout":
                 case "connecttimeout":
                     if (!int.TryParse(value, out var timeout) || timeout < 0)
-                        throw new ArgumentException($"Invalid timeout value: {value}", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: non-negative integer (seconds).", nameof(connectionString));
                     builder.WithConnectTimeout(TimeSpan.FromSeconds(timeout));
                     break;
                 case "compress":
@@ -362,26 +372,45 @@ public sealed class ClickHouseConnectionSettings
                     }
                     else
                     {
-                        throw new ArgumentException($"Invalid compression value: {value}", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: true, false, 1, 0.", nameof(connectionString));
                     }
                     break;
                 case "compressionmethod":
                     if (!Enum.TryParse<CompressionMethod>(value, ignoreCase: true, out var method))
-                        throw new ArgumentException($"Invalid compression method: {value}. Valid values: Lz4, Zstd", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: Lz4, Zstd.", nameof(connectionString));
                     builder.WithCompressionMethod(method);
                     break;
                 case "servers":
+                    if (hostExplicit)
+                        throw new ArgumentException(
+                            "Connection string cannot specify both 'Host' (single endpoint) and 'Servers' (failover list) — they have different semantics. Use 'Servers' alone for multi-host failover, or 'Host' alone for a single endpoint.",
+                            nameof(connectionString));
                     var serverList = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                    ServerAddress? firstServer = null;
                     foreach (var server in serverList)
                     {
                         var serverAddress = ServerAddress.Parse(server);
                         builder.WithServer(serverAddress.Host, serverAddress.Port);
+                        firstServer ??= serverAddress;
                     }
+                    // Parsing at least one server satisfies the host requirement —
+                    // the multi-host list is a superset of a single Host setting.
+                    // Backfill the primary Host/Port from the first server so plain
+                    // ClickHouseConnection (which doesn't consult the multi-host
+                    // list itself) opens against a real server rather than the
+                    // builder's localhost default.
+                    if (firstServer.HasValue)
+                    {
+                        builder.WithHost(firstServer.Value.Host);
+                        builder.WithPort(firstServer.Value.Port);
+                        hasHost = true;
+                    }
+                    serversSpecified = true;
                     break;
                 case "loadbalancing":
                 case "loadbalancer":
                     if (!Enum.TryParse<LoadBalancingStrategy>(value, ignoreCase: true, out var strategy))
-                        throw new ArgumentException($"Invalid load balancing strategy: {value}. Valid values: RoundRobin, Random, FirstAvailable", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: RoundRobin, Random, FirstAvailable.", nameof(connectionString));
                     builder.WithLoadBalancing(strategy);
                     break;
 
@@ -389,35 +418,35 @@ public sealed class ClickHouseConnectionSettings
                 case "maxretries":
                 case "retries":
                     if (!int.TryParse(value, out var retries) || retries < 0)
-                        throw new ArgumentException($"Invalid max retries value: {value}", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: non-negative integer.", nameof(connectionString));
                     maxRetries = retries;
                     break;
                 case "retrybasedelay":
                 case "retrydelay":
                     if (!int.TryParse(value, out var baseDelay) || baseDelay < 0)
-                        throw new ArgumentException($"Invalid retry base delay value: {value}", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: non-negative integer (milliseconds).", nameof(connectionString));
                     retryBaseDelayMs = baseDelay;
                     break;
                 case "retrymaxdelay":
                     if (!int.TryParse(value, out var maxDelay) || maxDelay < 0)
-                        throw new ArgumentException($"Invalid retry max delay value: {value}", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: non-negative integer (milliseconds).", nameof(connectionString));
                     retryMaxDelayMs = maxDelay;
                     break;
                 case "circuitbreakerthreshold":
                 case "cbthreshold":
                     if (!int.TryParse(value, out var threshold) || threshold < 1)
-                        throw new ArgumentException($"Invalid circuit breaker threshold value: {value}", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: positive integer.", nameof(connectionString));
                     circuitBreakerThreshold = threshold;
                     break;
                 case "circuitbreakerduration":
                 case "cbduration":
                     if (!int.TryParse(value, out var duration) || duration < 1)
-                        throw new ArgumentException($"Invalid circuit breaker duration value: {value}", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: positive integer (seconds).", nameof(connectionString));
                     circuitBreakerDurationSec = duration;
                     break;
                 case "healthcheckinterval":
                     if (!int.TryParse(value, out var hcInterval) || hcInterval < 1)
-                        throw new ArgumentException($"Invalid health check interval value: {value}", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: positive integer (seconds).", nameof(connectionString));
                     healthCheckIntervalSec = hcInterval;
                     break;
 
@@ -440,14 +469,14 @@ public sealed class ClickHouseConnectionSettings
                     }
                     else
                     {
-                        throw new ArgumentException($"Invalid TLS value: {value}", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: true, false, 1, 0.", nameof(connectionString));
                     }
                     break;
                 case "tlsport":
                 case "sslport":
                 case "secureport":
                     if (!int.TryParse(value, out var tlsPort) || tlsPort < 1 || tlsPort > 65535)
-                        throw new ArgumentException($"Invalid TLS port value: {value}", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: integer between 1 and 65535.", nameof(connectionString));
                     builder.WithTlsPort(tlsPort);
                     break;
                 case "allowinsecuretls":
@@ -467,7 +496,7 @@ public sealed class ClickHouseConnectionSettings
                     }
                     else
                     {
-                        throw new ArgumentException($"Invalid AllowInsecureTls value: {value}", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: true, false, 1, 0.", nameof(connectionString));
                     }
                     break;
                 case "tlscacertificate":
@@ -514,7 +543,7 @@ public sealed class ClickHouseConnectionSettings
 
                 case "stringmaterialization":
                     if (!Enum.TryParse<StringMaterialization>(value, ignoreCase: true, out var materialization))
-                        throw new ArgumentException($"Invalid string materialization value: {value}. Valid values: Eager, Lazy", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: Eager, Lazy.", nameof(connectionString));
                     builder.WithStringMaterialization(materialization);
                     break;
 
@@ -527,8 +556,18 @@ public sealed class ClickHouseConnectionSettings
                     else if (value.Equals("0", StringComparison.Ordinal))
                         builder.WithSchemaCache(false);
                     else
-                        throw new ArgumentException($"Invalid {key} value: {value}", nameof(connectionString));
+                        throw new ArgumentException($"Invalid {key}='{value}'. Valid values: true, false, 1, 0.", nameof(connectionString));
                     break;
+
+                default:
+                    // Unknown keys had been silently dropped, which made typos like
+                    // `Passwor=secret` (missing 'd') succeed with an empty password.
+                    // Throw so misconfigurations are caught at parse time rather than
+                    // surfacing as authentication or connectivity errors at runtime.
+                    throw new ArgumentException(
+                        $"Unknown connection-string key '{key}'. " +
+                        "Check spelling — common typos (Passwor, Hots, Userame) silently failed pre-fix.",
+                        nameof(connectionString));
             }
         }
 

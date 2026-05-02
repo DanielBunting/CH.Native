@@ -16,6 +16,15 @@ public sealed class DateTimeColumnWriter : IColumnWriter<DateTime>
     /// <inheritdoc />
     public Type ClrType => typeof(DateTime);
 
+    /// <summary>
+    /// Placeholder used by <see cref="NullableColumnWriter{T}"/> for null
+    /// slots. <c>default(DateTime)</c> is <c>0001-01-01</c>, which is below
+    /// <see cref="UnixEpoch"/> and would fail the range check in
+    /// <see cref="WriteValue"/>; the epoch is the minimum representable
+    /// DateTime on the wire.
+    /// </summary>
+    public DateTime NullPlaceholder => UnixEpoch;
+
     /// <inheritdoc />
     public void WriteColumn(ref ProtocolWriter writer, DateTime[] values)
     {

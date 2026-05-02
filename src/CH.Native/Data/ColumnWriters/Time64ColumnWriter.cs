@@ -1,3 +1,4 @@
+using CH.Native.Exceptions;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnWriters;
@@ -53,8 +54,19 @@ public sealed class Time64ColumnWriter : IColumnWriter<TimeOnly>
         long result;
         if (_precision > 7)
         {
+            // TimeOnly is bounded to one day so this never overflows in
+            // practice — but the check is defense-in-depth and matches the
+            // sibling DateTime64 writer's contract.
             var multiplier = (long)Math.Pow(10, _precision - 7);
-            result = ticks * multiplier;
+            try
+            {
+                result = checked(ticks * multiplier);
+            }
+            catch (OverflowException ex)
+            {
+                throw new ClickHouseProtocolException(
+                    $"Time64({_precision}) value {value} produces a tick-count that overflows Int64.", ex);
+            }
         }
         else
         {

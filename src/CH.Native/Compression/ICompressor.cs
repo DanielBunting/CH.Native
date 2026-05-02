@@ -25,9 +25,14 @@ public interface ICompressor
     /// Decompresses the source data into the destination buffer.
     /// </summary>
     /// <param name="source">The compressed data.</param>
-    /// <param name="destination">The buffer to write decompressed data to.</param>
-    /// <param name="uncompressedSize">The expected size of the decompressed data.</param>
-    /// <returns>The number of bytes written to the destination.</returns>
+    /// <param name="destination">The buffer to write decompressed data to. Implementations
+    /// must treat its length as the upper bound on output bytes — callers (notably
+    /// <see cref="CompressedBlock"/>) size this span to the wire-declared
+    /// <c>uncompressedSize</c> and the underlying codec uses span length to clamp output.</param>
+    /// <param name="uncompressedSize">The expected size of the decompressed data, redundant
+    /// with <paramref name="destination"/>.Length and provided as a hint for codecs that
+    /// can validate against it. Implementations are not required to consult it.</param>
+    /// <returns>The number of bytes actually written to the destination.</returns>
     int Decompress(ReadOnlySpan<byte> source, Span<byte> destination, int uncompressedSize);
 
     /// <summary>

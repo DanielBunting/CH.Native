@@ -141,6 +141,10 @@ public sealed class RetryPolicy
     {
         return ex switch
         {
+            // Permanent auth/authorization rejections — same credentials will never
+            // succeed, so retrying just wastes the budget. Listed before the broader
+            // ClickHouseConnectionException arm because the type derives from it.
+            ClickHouseAuthenticationException => false,
             SocketException => true,
             TimeoutException => true,
             IOException => true,
@@ -180,6 +184,10 @@ public sealed class RetryPolicy
     {
         return ex switch
         {
+            // Auth failures arrive cleanly — server emits an exception then closes,
+            // but the failure mode isn't socket corruption, and we won't retry, so
+            // there's nothing to evict.
+            ClickHouseAuthenticationException => false,
             SocketException => true,
             IOException => true,
             ClickHouseConnectionException => true,

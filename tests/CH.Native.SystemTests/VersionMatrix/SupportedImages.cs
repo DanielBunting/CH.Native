@@ -26,4 +26,15 @@ internal static class SupportedImages
         [V24_8_LTS],
         [Latest],
     ];
+
+    /// <summary>
+    /// Images that support the experimental Dynamic and Variant types.
+    /// Both are gated by <c>SET allow_experimental_*_type = 1</c> session settings;
+    /// this list pins the images on which the wire format is exercised here.
+    /// </summary>
+    public static IEnumerable<object[]> WithDynamicVariant =>
+    [
+        [V24_8_LTS],
+        [Latest],
+    ];
 }

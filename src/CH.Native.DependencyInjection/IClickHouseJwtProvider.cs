@@ -7,6 +7,13 @@ namespace CH.Native.DependencyInjection;
 /// window, not per query. Implementations should handle their own caching
 /// and refresh behaviour (e.g. via <c>Azure.Identity</c>'s
 /// <c>TokenCredential</c> which caches internally).
+/// <para>
+/// Failure-driven refresh is not guaranteed: a query failure only re-invokes
+/// the provider on the next rent if it caused the pool to discard the
+/// connection (e.g. protocol-fatal error, <c>KILL QUERY</c>). Server-side
+/// SQL errors leave the connection poolable and reuse the existing token.
+/// See the package README ("Invocation cadence") for the full contract.
+/// </para>
 /// </summary>
 public interface IClickHouseJwtProvider
 {

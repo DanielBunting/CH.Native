@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
+using CH.Native.Commands;
 using CH.Native.Connection;
 using CH.Native.Numerics;
 using CH.Native.Results;
@@ -151,26 +152,56 @@ public sealed class ClickHouseQueryable<T> : IQueryable<T>, IOrderedQueryable<T>
     }
 
     /// <summary>
-    /// Returns the SQL that would be generated for this query.
+    /// Returns the SQL that would be generated for this query, with captured
+    /// constants and closure values inlined as SQL literals so the result is
+    /// directly runnable in <c>clickhouse-client</c> or any raw-query path.
     /// Useful for debugging and testing.
     /// </summary>
-    /// <returns>The SQL query string.</returns>
+    /// <remarks>
+    /// The execution path uses parameter-bound SQL (<c>{p1:Int32}</c> placeholders)
+    /// for SQL-injection safety and server-side query-cache reuse; this method
+    /// is a diagnostic helper, not the executed form. The inline literals are
+    /// still escaped, but callers should not feed the output of <c>ToSql()</c>
+    /// into a privileged execution path.
+    /// </remarks>
+    /// <returns>The SQL query string with literals inlined.</returns>
     public string ToSql()
     {
-        return _provider.TranslateToSql(_expression);
+        var (sql, parameters) = _provider.TranslateToSqlWithParameters(_expression);
+        return SqlLiteralFormatter.RenderInline(sql, parameters);
+    }
+
+    /// <summary>
+    /// Returns the SQL that the executor will actually send to ClickHouse, with
+    /// captured constants emitted as <c>{name:Type}</c> placeholders bound to a
+    /// parallel <see cref="ClickHouseParameterCollection"/>. This is the form
+    /// used at execution time (server-side parameter substitution), and the
+    /// SQL-injection-safe shape regardless of value contents.
+    /// </summary>
+    /// <returns>
+    /// The placeholder-bearing SQL plus the parameter collection that resolves
+    /// each placeholder.
+    /// </returns>
+    public (string Sql, ClickHouseParameterCollection Parameters) ToParameterizedSql()
+    {
+        return _provider.TranslateToSqlWithParameters(_expression);
     }
 }
 
 /// <summary>
-/// Reflection helper to satisfy the typed mapper's `where T : new()` constraint.
+/// Reflection helper that materializes rows via <see cref="CH.Native.Results.TypeMapper{T}"/>.
 /// The data reader has already been advanced to the first row by the caller.
 /// </summary>
+/// <remarks>
+/// No generic constraint — the historical <c>where T : new()</c> excluded
+/// positional records and anonymous types at compile time even though
+/// <c>TypeMapper&lt;T&gt;</c> can materialize them via its args-ctor strategy.
+/// </remarks>
 internal static class ClickHouseQueryableHelper
 {
     public static async IAsyncEnumerable<T> MapAll<T>(
         ClickHouseDataReader reader,
         [EnumeratorCancellation] CancellationToken cancellationToken)
-        where T : new()
     {
         var mapper = new CH.Native.Results.TypeMapper<T>(reader);
 

@@ -141,6 +141,51 @@ public class CompressedBlockTests
     }
 
     [Fact]
+    public void Decompress_UncompressedSizeOverstated_ThrowsClickHouseProtocolException()
+    {
+        // Pre-fix the heap-allocating Decompress path ignored the codec's return
+        // value, so an overstated `uncompressed_size` header would copy whatever
+        // the rented (or freshly allocated) buffer contained for the trailing
+        // bytes — silently corrupting the downstream parse.
+        // Post-fix: ValidateDecompressedLength catches the mismatch and throws.
+        var bytes = BuildOverstatedBlock(overstateBy: 64);
+
+        var ex = Assert.Throws<CH.Native.Exceptions.ClickHouseProtocolException>(() =>
+            CompressedBlock.Decompress(bytes));
+        Assert.Contains("wrote", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DecompressPooled_UncompressedSizeOverstated_ThrowsAndReturnsRentedBuffer()
+    {
+        // Mirror test for the pooled path. The fix has an explicit catch around
+        // ValidateDecompressedLength that returns the rented buffer before the
+        // exception escapes — without that, the throw would leak the buffer.
+        var bytes = BuildOverstatedBlock(overstateBy: 64);
+
+        Assert.Throws<CH.Native.Exceptions.ClickHouseProtocolException>(() =>
+        {
+            using var _ = CompressedBlock.DecompressPooled(bytes);
+        });
+    }
+
+    private static byte[] BuildOverstatedBlock(int overstateBy)
+    {
+        // Compress a small payload, then bump the uncompressed_size header
+        // and recompute the CityHash128 so the gate accepts the (mutated) block.
+        var inner = new byte[] { 1, 2, 3, 4, 5 };
+        using var compressed = CompressedBlock.CompressPooled(inner, Lz4Compressor.Instance);
+        var bytes = compressed.Span.ToArray();
+
+        var realSize = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(21));
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(21),
+            realSize + (uint)overstateBy);
+        CityHash128.HashBytes(bytes.AsSpan(16), bytes.AsSpan(0, 16));
+        return bytes;
+    }
+
+    [Fact]
     public void Compress_EmptyData_Works()
     {
         var original = Array.Empty<byte>();

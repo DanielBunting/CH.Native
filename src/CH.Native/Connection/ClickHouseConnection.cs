@@ -43,8 +43,12 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private SslStream? _sslStream;
     private PipeReader? _pipeReader;
     private PipeWriter? _pipeWriter;
-    private bool _isOpen;
-    private bool _disposed;
+    // Both are read lock-free via Volatile.Read in IsOpen (R3) and other
+    // best-effort guards. Mark volatile so writers also use release semantics
+    // — pre-R7 the writes were plain stores and a reader on weakly-ordered
+    // hardware (ARM) could observe stale values despite the Volatile.Read.
+    private volatile bool _isOpen;
+    private volatile bool _disposed;
     private bool _compressionEnabled;
     // True between the moment a public Execute path (or OpenAsync handshake) is
     // entered and the moment it returns or releases the slot. Read under
@@ -89,6 +93,22 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     private IReadOnlyList<string>? _pinnedRoles;
     private bool _pinnedRolesSet;
 
+    // Session-state tracking for pool-return reset (ResetSessionStateAsync).
+    // ClickHouse `SET <name> = <value>` and `USE <db>` and
+    // `CREATE TEMPORARY TABLE <t>` persist for the session's lifetime, which
+    // means a pool that reuses the same physical connection silently leaks
+    // session state from one renter to the next. We intercept the relevant
+    // statements at execute time (cheap regex over the SQL) and reset them
+    // when the pool returns the connection to the idle stack.
+    //
+    // This is best-effort: complex SQL (`SET a=1, b=2`, `WITH ... SET ...`,
+    // dynamically-built statements) may not be caught. The escape hatch for
+    // those callers is `ClickHouseDataSourceOptions.ResetSessionStateOnReturn = false`.
+    private readonly HashSet<string> _dirtySettings = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _tempTables = new(StringComparer.Ordinal);
+    private string? _userSetDatabase;
+    private readonly object _sessionStateLock = new();
+
     // Pool integration: when set, DisposeAsync hands the connection back to this
     // callback instead of tearing down the socket. The hook is one-shot — it is
     // atomically cleared on invocation, so a second Dispose (e.g. if the pool
@@ -123,6 +143,28 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 if (_busy) return false;
                 if (_currentQueryId is not null) return false;
                 if (_pinnedRolesSet || _rolesExplicitlySet) return false;
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Pool-eligibility check that runs *before* <see cref="ResetSessionStateAsync"/>.
+    /// Excludes the role latch because reset issues SET ROLE DEFAULT and clears it;
+    /// gating on <see cref="_rolesExplicitlySet"/> here would discard every
+    /// connection that ever ran <c>SET ROLE</c> before reset got a chance to fix it.
+    /// </summary>
+    internal bool CanBePooledBeforeReset
+    {
+        get
+        {
+            lock (_queryLock)
+            {
+                if (_disposed || !_isOpen) return false;
+                if (_protocolFatal) return false;
+                if (_busy) return false;
+                if (_currentQueryId is not null) return false;
+                if (_pinnedRolesSet) return false;
                 return true;
             }
         }
@@ -171,6 +213,27 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// recovery path has been disabled by <c>_completeStarted</c>.
     /// </summary>
     internal void MarkProtocolFatal() => _protocolFatal = true;
+
+    /// <summary>
+    /// Clears <see cref="_currentQueryId"/> if it still matches the given id.
+    /// Used by callers (BulkInserter) that own a query id but bail out before
+    /// the read loop processes EndOfStream — without this, a server exception
+    /// during schema fetch leaves <c>_currentQueryId</c> set and
+    /// <see cref="CanBePooled"/> reports false, causing the pool to discard
+    /// an otherwise-clean connection. Mirrors the safety pattern in
+    /// <see cref="DrainAfterCancellationAsync"/>: only clear if the slot is
+    /// still ours so we don't clobber a subsequent query that already
+    /// installed its own id.
+    /// </summary>
+    internal void ClearOwnedQueryId(string? ownedId)
+    {
+        if (ownedId is null) return;
+        lock (_queryLock)
+        {
+            if (_currentQueryId == ownedId)
+                _currentQueryId = null;
+        }
+    }
 
     /// <summary>
     /// Releases the busy slot acquired by <see cref="EnterBusy"/>. Idempotent —
@@ -231,9 +294,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     public ServerHello? ServerInfo { get; private set; }
 
     /// <summary>
-    /// Gets a value indicating whether the connection is open.
+    /// Gets a value indicating whether the connection is open. Best-effort:
+    /// the pair of reads is volatile-safe across cores but the value can flip
+    /// the instant after the caller observes it (a concurrent
+    /// <see cref="DisposeAsync"/> can close the wire after this returns true).
+    /// Callers using this as a guard before issuing IO must still handle
+    /// <see cref="ObjectDisposedException"/> from the subsequent call.
     /// </summary>
-    public bool IsOpen => _isOpen && !_disposed;
+    public bool IsOpen => _isOpen && !_disposed; // both fields are `volatile`
 
     /// <summary>
     /// Gets the negotiated protocol version (minimum of client and server).
@@ -328,6 +396,8 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             ClickHouseMeter.IncrementConnections();
             _logger.ConnectionOpened(_settings.Host, _settings.EffectivePort,
                 stopwatch.Elapsed.TotalMilliseconds, NegotiatedProtocolVersion);
+            if (_settings.AllowInsecureTls)
+                _logger.AllowInsecureTlsEnabled(_settings.Host, _settings.EffectivePort);
         }
         catch (Exception ex)
         {
@@ -431,7 +501,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         }
         catch (AuthenticationException ex)
         {
-            throw new ClickHouseConnectionException($"TLS authentication failed: {ex.Message}", ex);
+            throw new ClickHouseAuthenticationException($"TLS authentication failed: {ex.Message}", ex);
         }
 
         return _sslStream;
@@ -454,11 +524,23 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         // If we have a custom CA certificate, validate against it
         if (_customCaCertificate != null && certificate != null)
         {
-            // Create a new chain with our custom CA
+            // Create a new chain with our custom CA. Pre-fix this set
+            // RevocationMode = NoCheck, so a server cert that had been
+            // explicitly revoked (CRL / OCSP) but still chained to the
+            // pinned CA was accepted. Switch to Online and tolerate the
+            // "unknown" status that self-signed CAs without OCSP / CRL
+            // endpoints surface — actively revoked certificates fail
+            // validation, certs with no published revocation info still
+            // succeed (matching existing test setups).
             using var customChain = new X509Chain();
             customChain.ChainPolicy.ExtraStore.Add(_customCaCertificate);
-            customChain.ChainPolicy.VerificationFlags = X509VerificationFlags.AllowUnknownCertificateAuthority;
-            customChain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+            customChain.ChainPolicy.VerificationFlags =
+                X509VerificationFlags.AllowUnknownCertificateAuthority
+                | X509VerificationFlags.IgnoreCertificateAuthorityRevocationUnknown
+                | X509VerificationFlags.IgnoreCtlSignerRevocationUnknown
+                | X509VerificationFlags.IgnoreEndRevocationUnknown
+                | X509VerificationFlags.IgnoreRootRevocationUnknown;
+            customChain.ChainPolicy.RevocationMode = X509RevocationMode.Online;
 
 #if NET9_0_OR_GREATER
             var cert2 = certificate as X509Certificate2 ?? X509CertificateLoader.LoadCertificate(certificate.Export(X509ContentType.Cert));
@@ -489,11 +571,62 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         ServerInfo = await ReceiveServerHelloAsync(cancellationToken);
         NegotiatedProtocolVersion = Math.Min(ProtocolVersion.Current, ServerInfo.ProtocolRevision);
 
+        // We always advertise "notchunked" in the client addendum. If the
+        // server insists on chunked framing (no "notchunked" path), we must
+        // refuse the connection up-front rather than silently send un-chunked
+        // frames that the server will desync. "chunked_optional" / empty are
+        // permissive and accepted.
+        EnsureChunkedNegotiable(ServerInfo.ProtoSendChunkedServer, "send");
+        EnsureChunkedNegotiable(ServerInfo.ProtoRecvChunkedServer, "recv");
+
         // For protocol versions >= WithAddendum, send client hello addendum to server
         if (NegotiatedProtocolVersion >= ProtocolVersion.WithAddendum)
         {
             await SendHelloAddendumAsync(cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// Forwards a progress message to the user-supplied <see cref="IProgress{T}"/>
+    /// handler, swallowing exceptions so a buggy observer can't unwind the
+    /// message loop and corrupt connection state. Pre-fix a throwing handler
+    /// escaped the read loop, leaving <c>_currentQueryId</c> set and the wire
+    /// at an unknown offset; <c>_protocolFatal</c> was never set, so the pool
+    /// happily took the connection back.
+    /// </summary>
+    private void ReportProgressSafely(IProgress<Data.QueryProgress>? progress, ProgressMessage progressMessage)
+    {
+        if (progress is null) return;
+        try
+        {
+            progress.Report(progressMessage.ToQueryProgress());
+        }
+        catch (Exception ex)
+        {
+            _logger.ProgressHandlerThrew(ex.Message, ex);
+        }
+    }
+
+    private static void EnsureChunkedNegotiable(string? serverDeclared, string direction)
+    {
+        // Empty / null means the server doesn't speak the chunked vocabulary
+        // (older revision or no preference) — fall through.
+        if (string.IsNullOrEmpty(serverDeclared)) return;
+
+        // ClickHouse server values: "notchunked", "chunked", "notchunked_optional",
+        // "chunked_optional". Anything containing "notchunked" or "_optional" is
+        // accepted. A bare "chunked" means the server requires chunked framing,
+        // which CH.Native does not yet implement.
+        if (serverDeclared.Contains("notchunked", StringComparison.Ordinal) ||
+            serverDeclared.Contains("optional", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        throw new ClickHouseProtocolException(
+            $"Server requires chunked framing ({direction} = '{serverDeclared}') but CH.Native " +
+            "only supports the unchunked protocol path. Configure the server to allow " +
+            "'notchunked' or 'chunked_optional' for this client.");
     }
 
     private async Task PerformSshChallengeExchangeAsync(CancellationToken cancellationToken)
@@ -789,9 +922,19 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// Kills a query by its ID using a separate connection.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// This creates a new connection to execute KILL QUERY, which is more reliable
     /// than sending a Cancel message when the original connection may be blocked.
     /// Use <see cref="CurrentQueryId"/> to get the ID of a running query.
+    /// </para>
+    /// <para>
+    /// Natural-completion race: the original query may finish between this call
+    /// issuing the <c>KILL</c> and the server processing it. In that window the
+    /// caller of the original query may see either a clean End-Of-Stream
+    /// (query completed before kill landed) or a server-cancelled exception
+    /// (kill landed first). Both outcomes are valid; the caller should treat
+    /// either as "query is no longer running".
+    /// </para>
     /// </remarks>
     /// <param name="queryId">The query ID to kill.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -800,19 +943,208 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         if (string.IsNullOrEmpty(queryId))
             throw new ArgumentNullException(nameof(queryId));
 
-        await using var killConnection = new ClickHouseConnection(_settings);
-        await killConnection.OpenAsync(cancellationToken);
-
-        // Use parameterized approach to avoid SQL injection
-        // KILL QUERY doesn't support parameters, so we validate the queryId format
-        // Query IDs are GUIDs in format xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        // Validate the GUID shape BEFORE opening a fresh TCP connection. The
+        // KILL QUERY statement does not accept parameters so we have to inline
+        // the id, and a malformed value can't ever satisfy that contract — burn
+        // the handshake on a hopeless call. Pre-fix this validation ran after
+        // OpenAsync, costing a full connect on every malformed input.
         if (!Guid.TryParse(queryId, out _))
             throw new ArgumentException("Invalid query ID format. Expected a GUID.", nameof(queryId));
+
+        await using var killConnection = new ClickHouseConnection(_settings);
+        await killConnection.OpenAsync(cancellationToken);
 
         await killConnection.ExecuteNonQueryAsync(
             $"KILL QUERY WHERE query_id = '{queryId}'",
             cancellationToken: cancellationToken);
     }
+
+    /// <summary>
+    /// Resets session-scoped state (settings, default database, temporary
+    /// tables) so the connection is safe to hand to a different renter from
+    /// the pool. ClickHouse session state otherwise persists for the lifetime
+    /// of the physical connection, leaking from one pool consumer to the next.
+    /// </summary>
+    /// <remarks>
+    /// Best-effort tracking: only state set via the standard <c>SET name = value</c>,
+    /// <c>USE db</c>, and <c>CREATE TEMPORARY TABLE t</c> statements is caught.
+    /// Compound statements (<c>SET a=1, b=2</c>) and dynamic SQL may bypass
+    /// the inspector — callers needing stricter isolation should use
+    /// per-query <c>SETTINGS</c> clauses or set
+    /// <c>ClickHouseDataSourceOptions.ResetSessionStateOnReturn = false</c>
+    /// and manage state explicitly.
+    /// </remarks>
+    internal async Task ResetSessionStateAsync(CancellationToken cancellationToken = default)
+    {
+        if (!_isOpen || _protocolFatal) return;
+
+        string[] dirtySettings;
+        string[] tempTables;
+        string? userSetDatabase;
+        lock (_sessionStateLock)
+        {
+            dirtySettings = _dirtySettings.Count > 0 ? _dirtySettings.ToArray() : Array.Empty<string>();
+            tempTables = _tempTables.Count > 0 ? _tempTables.ToArray() : Array.Empty<string>();
+            userSetDatabase = _userSetDatabase;
+        }
+
+        // Restore default database first — a USE'd database may shadow temp
+        // table or settings names, and resetting the database makes
+        // subsequent statements unambiguous.
+        if (userSetDatabase is not null)
+        {
+            var defaultDb = string.IsNullOrEmpty(_settings.Database) ? "default" : _settings.Database!;
+            await ExecuteNonQueryAsync(
+                $"USE {Sql.ClickHouseIdentifier.Quote(defaultDb)}",
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            lock (_sessionStateLock) { _userSetDatabase = null; }
+        }
+
+        // Reset each dirty setting to its default value. ClickHouse supports
+        // `SET <name> = DEFAULT` per-setting, so we batch one statement per
+        // dirty setting. Failures are best-effort: if a setting is unknown
+        // (e.g. set on an older server, then connection reused on a newer
+        // server with the setting renamed), we swallow and move on.
+        foreach (var name in dirtySettings)
+        {
+            try
+            {
+                await ExecuteNonQueryAsync(
+                    $"SET {name} = DEFAULT",
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exceptions.ClickHouseServerException)
+            {
+                // Setting may have been renamed or removed; tolerate.
+            }
+        }
+        lock (_sessionStateLock) { _dirtySettings.Clear(); }
+
+        // Drop temporary tables. ClickHouse's TEMPORARY TABLEs are
+        // session-scoped; an explicit DROP is required.
+        foreach (var name in tempTables)
+        {
+            try
+            {
+                await ExecuteNonQueryAsync(
+                    $"DROP TEMPORARY TABLE IF EXISTS {Sql.ClickHouseIdentifier.Quote(name)}",
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exceptions.ClickHouseServerException)
+            {
+                // Best-effort.
+            }
+        }
+        lock (_sessionStateLock) { _tempTables.Clear(); }
+
+        // Restore roles to login-time defaults if a previous query on this
+        // connection issued SET ROLE. Without this, the role survives the
+        // return-to-pool boundary and leaks to the next renter — observable
+        // as the next caller seeing currentRoles() return the prior tenant's
+        // role list. Best-effort: a server-side denial leaves the latch alone
+        // so the connection won't be re-handed-out with stale state.
+        bool needsRoleReset;
+        lock (_queryLock)
+        {
+            needsRoleReset = _rolesExplicitlySet || _currentServerRoles is not null;
+        }
+        if (needsRoleReset)
+        {
+            try
+            {
+                await ExecuteNonQueryAsync(
+                    "SET ROLE DEFAULT",
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                lock (_queryLock)
+                {
+                    _currentServerRoles = null;
+                    _rolesExplicitlySet = false;
+                }
+            }
+            catch (Exceptions.ClickHouseServerException)
+            {
+                // Best-effort: if the server rejects SET ROLE DEFAULT, leave
+                // the latch set so CanBePooled keeps the connection out of
+                // rotation rather than handing it back with stale roles.
+            }
+        }
+    }
+
+    /// <summary>
+    /// Inspects user-issued SQL for session-scoped state changes (SET, USE,
+    /// CREATE TEMPORARY TABLE) and records them so <see cref="ResetSessionStateAsync"/>
+    /// can undo them at pool-return time. Best-effort: the patterns match the
+    /// canonical statement forms; complex / dynamic SQL may bypass the inspector.
+    /// </summary>
+    internal void TrackSessionStateMutation(string sql)
+    {
+        if (string.IsNullOrWhiteSpace(sql)) return;
+        var trimmed = sql.AsSpan().TrimStart();
+
+        // SET <identifier> =
+        if (StartsWithIgnoreCase(trimmed, "SET "))
+        {
+            var rest = trimmed.Slice(4).TrimStart();
+            var nameLen = 0;
+            while (nameLen < rest.Length && (char.IsLetterOrDigit(rest[nameLen]) || rest[nameLen] == '_'))
+                nameLen++;
+            if (nameLen > 0)
+            {
+                var name = rest.Slice(0, nameLen).ToString();
+                // SET ROLE is normally driven by EnsureRolesResolvedAsync which
+                // updates _currentServerRoles and _rolesExplicitlySet itself.
+                // A raw `SET ROLE …` issued via ExecuteNonQueryAsync bypasses
+                // that path, so latch _rolesExplicitlySet here so the
+                // pool-return reset still issues SET ROLE DEFAULT instead of
+                // leaking the role to the next renter. The setting itself is
+                // not tracked in _dirtySettings (resetting via SET ROLE=DEFAULT
+                // would fail — it's a role command, not a settings command).
+                if (name.Equals("ROLE", StringComparison.OrdinalIgnoreCase))
+                {
+                    lock (_queryLock) { _rolesExplicitlySet = true; }
+                }
+                else
+                {
+                    lock (_sessionStateLock) { _dirtySettings.Add(name); }
+                }
+            }
+            return;
+        }
+
+        // USE <identifier>
+        if (StartsWithIgnoreCase(trimmed, "USE "))
+        {
+            var rest = trimmed.Slice(4).TrimStart();
+            var nameLen = 0;
+            while (nameLen < rest.Length && (char.IsLetterOrDigit(rest[nameLen]) || rest[nameLen] == '_' || rest[nameLen] == '`'))
+                nameLen++;
+            if (nameLen > 0)
+            {
+                lock (_sessionStateLock) { _userSetDatabase = rest.Slice(0, nameLen).ToString(); }
+            }
+            return;
+        }
+
+        // CREATE TEMPORARY TABLE <identifier>
+        if (StartsWithIgnoreCase(trimmed, "CREATE TEMPORARY TABLE "))
+        {
+            var rest = trimmed.Slice("CREATE TEMPORARY TABLE ".Length).TrimStart();
+            // Skip optional IF NOT EXISTS
+            if (StartsWithIgnoreCase(rest, "IF NOT EXISTS "))
+                rest = rest.Slice("IF NOT EXISTS ".Length).TrimStart();
+            var nameLen = 0;
+            while (nameLen < rest.Length && (char.IsLetterOrDigit(rest[nameLen]) || rest[nameLen] == '_' || rest[nameLen] == '`'))
+                nameLen++;
+            if (nameLen > 0)
+            {
+                var name = rest.Slice(0, nameLen).ToString().Trim('`');
+                lock (_sessionStateLock) { _tempTables.Add(name); }
+            }
+        }
+    }
+
+    private static bool StartsWithIgnoreCase(ReadOnlySpan<char> span, string prefix)
+        => span.Length >= prefix.Length && span.Slice(0, prefix.Length).Equals(prefix.AsSpan(), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Creates a new command associated with this connection.
@@ -987,7 +1319,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 switch (message)
                 {
                     case ProgressMessage progressMessage:
-                        progress?.Report(progressMessage.ToQueryProgress());
+                        ReportProgressSafely(progress, progressMessage);
                         rowsRead = (long)progressMessage.Rows;
                         break;
 
@@ -1055,7 +1387,11 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         EnterBusy(effectiveQueryId);
         try
         {
-            return await ExecuteNonQueryCoreAsync(sql, progress, cancellationToken, effectiveQueryId);
+            var result = await ExecuteNonQueryCoreAsync(sql, progress, cancellationToken, effectiveQueryId);
+            // Record session-state mutations only on successful execution so
+            // a failed `SET` doesn't poison the dirty list.
+            TrackSessionStateMutation(sql);
+            return result;
         }
         finally
         {
@@ -1094,7 +1430,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                 switch (message)
                 {
                     case ProgressMessage progressMessage:
-                        progress?.Report(progressMessage.ToQueryProgress());
+                        ReportProgressSafely(progress, progressMessage);
                         totalRows = (long)progressMessage.Rows;
                         break;
 
@@ -1224,7 +1560,6 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         string sql,
         [EnumeratorCancellation] CancellationToken cancellationToken = default,
         string? queryId = null)
-        where T : new()
     {
         await using var reader = await ExecuteReaderAsync(sql, cancellationToken, queryId);
 
@@ -1719,22 +2054,30 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         try
         {
             var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-            await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
+            using var activity = ClickHouseActivitySource.StartQuery(rewrittenSql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+            var stopwatch = Stopwatch.StartNew();
+            long rowsRead = 0;
+            var success = false;
 
-            // Register cancellation callback to send Cancel message to server
-            await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
-
-            object? result = null;
-            bool hasResult = false;
+            _logger.LogQueryStarted(effectiveQueryId, rewrittenSql);
 
             try
             {
+                await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
+
+                // Register cancellation callback to send Cancel message to server
+                await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
+
+                object? result = null;
+                bool hasResult = false;
+
                 await foreach (var message in ReadServerMessagesAsync(cancellationToken))
                 {
                     switch (message)
                     {
                         case ProgressMessage progressMessage:
-                            progress?.Report(progressMessage.ToQueryProgress());
+                            ReportProgressSafely(progress, progressMessage);
+                            rowsRead = (long)progressMessage.Rows;
                             break;
 
                         case DataMessage dataMessage:
@@ -1747,17 +2090,35 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                             break;
 
                         case EndOfStreamMessage:
+                            success = true;
+                            ClickHouseActivitySource.SetQueryResults(activity, hasResult ? 1 : 0, 0);
                             return ConvertResult<T>(result);
                     }
                 }
+
+                return default;
             }
-            catch (OperationCanceledException) when (_cancellationRequested)
+            catch (OperationCanceledException ex) when (_cancellationRequested)
             {
+                ClickHouseActivitySource.SetError(activity, ex);
                 await DrainAfterCancellationAsync();
                 throw;
             }
-
-            return default;
+            catch (Exception ex)
+            {
+                ClickHouseActivitySource.SetError(activity, ex);
+                ClickHouseMeter.ErrorsTotal.Add(1);
+                _logger.QueryFailed(effectiveQueryId, ex.Message);
+                if (ex is ClickHouseProtocolException) await CloseInternalAsync();
+                throw;
+            }
+            finally
+            {
+                stopwatch.Stop();
+                ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, rowsRead, success);
+                if (success)
+                    _logger.QueryCompleted(effectiveQueryId, rowsRead, stopwatch.Elapsed.TotalMilliseconds);
+            }
         }
         finally
         {
@@ -1786,21 +2147,26 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         try
         {
             var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-            await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
-
-            // Register cancellation callback to send Cancel message to server
-            await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
-
+            using var activity = ClickHouseActivitySource.StartQuery(rewrittenSql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+            var stopwatch = Stopwatch.StartNew();
             long totalRows = 0;
+            var success = false;
+
+            _logger.LogQueryStarted(effectiveQueryId, rewrittenSql);
 
             try
             {
+                await SendQueryAsync(rewrittenSql, settings, rolesOverride, cancellationToken, effectiveQueryId);
+
+                // Register cancellation callback to send Cancel message to server
+                await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
+
                 await foreach (var message in ReadServerMessagesAsync(cancellationToken))
                 {
                     switch (message)
                     {
                         case ProgressMessage progressMessage:
-                            progress?.Report(progressMessage.ToQueryProgress());
+                            ReportProgressSafely(progress, progressMessage);
                             totalRows = (long)progressMessage.Rows;
                             break;
 
@@ -1809,17 +2175,35 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                             break;
 
                         case EndOfStreamMessage:
+                            success = true;
+                            ClickHouseActivitySource.SetQueryResults(activity, totalRows, 0);
                             return totalRows;
                     }
                 }
+
+                return totalRows;
             }
-            catch (OperationCanceledException) when (_cancellationRequested)
+            catch (OperationCanceledException ex) when (_cancellationRequested)
             {
+                ClickHouseActivitySource.SetError(activity, ex);
                 await DrainAfterCancellationAsync();
                 throw;
             }
-
-            return totalRows;
+            catch (Exception ex)
+            {
+                ClickHouseActivitySource.SetError(activity, ex);
+                ClickHouseMeter.ErrorsTotal.Add(1);
+                _logger.QueryFailed(effectiveQueryId, ex.Message);
+                if (ex is ClickHouseProtocolException) await CloseInternalAsync();
+                throw;
+            }
+            finally
+            {
+                stopwatch.Stop();
+                ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, totalRows, success);
+                if (success)
+                    _logger.QueryCompleted(effectiveQueryId, totalRows, stopwatch.Elapsed.TotalMilliseconds);
+            }
         }
         finally
         {
@@ -2108,8 +2492,13 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
         try
         {
-            // Use a short timeout for draining - we don't want to wait forever
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            // Bounded drain wait so a wedged server doesn't strand the
+            // connection forever. Pre-fix this was 5 s; under loaded networks
+            // or slow servers a normal drain occasionally exceeded that and
+            // flipped _protocolFatal, discarding an otherwise-fine connection.
+            // 30 s gives realistic tail-latency headroom while still capping
+            // the worst case.
+            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
             while (true)
             {
@@ -2215,9 +2604,12 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     }
 
                     _pipeReader.AdvanceTo(buffer.Start);
-                    yield return message;
+                    if (message is not Protocol.Messages.SkipMessage)
+                    {
+                        yield return message;
+                    }
                     advancedInLoop = true;
-                    // Need to re-read buffer after yielding
+                    // Need to re-read buffer after yielding (or after a skip).
                     break;
                 }
 
@@ -2424,6 +2816,47 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     buffer = buffer.Slice(reader.Consumed);
                     message = specialData;
                     return true;
+
+                case ServerMessageType.ReadTaskRequest:
+                {
+                    // Wire format (TCPHandler::sendReadTaskRequest): zero body
+                    // beyond the message-type varint. Distributed read tasks
+                    // emit this when asking the client to enqueue work; we
+                    // don't participate in distributed task assignment, so
+                    // just consume the byte and keep reading.
+                    buffer = buffer.Slice(reader.Consumed);
+                    message = Protocol.Messages.SkipMessage.Instance;
+                    return true;
+                }
+
+                case ServerMessageType.PartUUIDs:
+                {
+                    // Wire format (TCPHandler::sendPartUUIDs): writeVectorBinary
+                    // of UUIDs — varint count + N × 16 bytes. Drain so distributed
+                    // SELECTs that emit part-uuid manifests don't poison the wire.
+                    var bodyBuffer = buffer.Slice(reader.Consumed);
+                    var scanReader = CreateProtocolReader(bodyBuffer);
+                    if (!scanReader.TryReadVarInt(out var partCount))
+                        return false;
+                    var uuidBytes = checked((int)partCount * 16);
+                    var consumedAfterVarInt = scanReader.Consumed;
+                    if (bodyBuffer.Length < consumedAfterVarInt + uuidBytes)
+                        return false;
+                    buffer = bodyBuffer.Slice(consumedAfterVarInt + uuidBytes);
+                    message = Protocol.Messages.SkipMessage.Instance;
+                    return true;
+                }
+
+                case ServerMessageType.Log:
+                    // Server-side log forwarding (set via SETTINGS send_logs_level).
+                    // The body is a block — full Block decode requires the same
+                    // context as Data messages and isn't worth implementing for
+                    // a feature most clients disable. Surface a specific guidance
+                    // message instead of the generic "malformed" default arm so
+                    // operators know how to fix it.
+                    throw new ClickHouseProtocolException(
+                        "Server emitted a Log message (type 10). CH.Native does not consume server-side log " +
+                        "forwarding; disable it via `SETTINGS send_logs_level = 'none'` on the query (or globally).");
 
                 default:
                     // Unknown message-type byte — the stream is structurally
@@ -2660,7 +3093,10 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             {
                 // Hooks must be robust; if the pool-return path throws we fall back
                 // to a real teardown so the caller's `await using` doesn't leak
-                // a half-returned connection.
+                // a half-returned connection. Dispose `_writeLock` here too — pre-fix
+                // this catch returned without disposing it, leaving a SemaphoreSlim
+                // orphaned and any waiters blocked indefinitely instead of seeing
+                // ObjectDisposedException.
                 if (!_disposed)
                 {
                     if (_isOpen)
@@ -2670,6 +3106,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     }
                     _disposed = true;
                     await CloseInternalAsync().ConfigureAwait(false);
+                    _writeLock.Dispose();
                 }
             }
             return;

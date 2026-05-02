@@ -10,18 +10,13 @@ using Xunit;
 namespace CH.Native.SystemTests.Security;
 
 /// <summary>
-/// Pins the contract on identifier escaping in the LINQ provider and bulk-insert
-/// column mapping. Today, <see cref="TableNameResolver.Resolve{T}"/> emits the
-/// raw snake_case form and <see cref="SqlBuilder.Table"/> stores the table name
-/// verbatim; <c>[ClickHouseColumn(Name = "...")]</c> values are similarly trusted
-/// without escape. Only <see cref="SqlBuilder.QuoteIdentifier"/> (used for SELECT
-/// aliases) goes through <see cref="ClickHouseIdentifier.Quote"/>.
-///
-/// <para><b>Several tests in this file are expected to fail today.</b> They drive
-/// the fix toward applying <see cref="ClickHouseIdentifier.Quote"/> uniformly in
-/// <see cref="SqlBuilder.Table"/>, <see cref="TableNameResolver"/>, and the LINQ
-/// expression visitor's column-name emission. Leaving them red is the point —
-/// they document the gap.</para>
+/// Regression coverage for uniform identifier quoting across the LINQ provider
+/// and bulk-insert column mapping. The architectural contract is that
+/// <see cref="TableNameResolver.Resolve{T}"/> returns the raw snake_case form
+/// and quoting happens at the SQL-emission boundary in <see cref="SqlBuilder.Table"/>
+/// (via <see cref="ClickHouseIdentifier.Quote"/>). Tests here pin both the
+/// resolver's raw-output contract and the emission boundary's quoted output, so
+/// either layer regressing is caught.
 /// </summary>
 [Collection("SingleNode")]
 [Trait(Categories.Name, Categories.Security)]
@@ -45,10 +40,11 @@ public class IdentifierEscapingTests : IAsyncLifetime
     // --- TableNameResolver: pin current behaviour and drive the fix. ---
 
     [Fact]
-    public void TableNameResolver_PlainEntity_BehaviourPinned()
+    public void TableNameResolver_PlainEntity_ReturnsRawSnakeCase()
     {
-        // Today: returns snake_case unquoted. When the fix lands, this should
-        // be backtick-quoted (i.e. `users_entity`). Update the assertion then.
+        // Architectural contract: the resolver returns raw, unquoted snake_case.
+        // Quoting belongs at the SQL-emission boundary in SqlBuilder.Table —
+        // see TableNameResolver_PlainEntity_ToSql_IsQuoted below.
         var resolved = TableNameResolver.Resolve<UsersEntity>();
 
         Assert.Equal("users_entity", resolved);
@@ -69,19 +65,6 @@ public class IdentifierEscapingTests : IAsyncLifetime
     }
 
     // --- LINQ table-name emission: assert ToSql() quotes the FROM clause. ---
-
-    [Fact]
-    public async Task LinqQuery_TableName_AppearsQuoted_InGeneratedSql_ExpectedFailing()
-    {
-        await using var conn = new ClickHouseConnection(_fixture.BuildSettings());
-        await conn.OpenAsync();
-
-        var sql = conn.Table<UsersEntity>().ToSql();
-
-        // The fix is to wrap the FROM-clause identifier with ClickHouseIdentifier.Quote.
-        // Today: " FROM users" — no backticks.
-        Assert.Contains(" FROM `", sql);
-    }
 
     [Fact]
     public async Task LinqQuery_ExplicitTableName_WithBacktick_RoundTripSucceeds()
