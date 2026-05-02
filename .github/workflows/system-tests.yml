@@ -1,0 +1,214 @@
+name: System Tests (nightly)
+
+# Heavyweight system-test categories that need multi-node ClickHouse,
+# Toxiproxy chaos injection, or long stress runs. The fast PR pipeline
+# (build-and-test.yml) covers Allocation/Observability/Cancellation/Security
+# /Linq/Streams/ServerFailures/DependencyInjection. This workflow covers
+# the categories the README marks "1–15 min": Cluster, Chaos, Resilience,
+# Stress, VersionMatrix.
+#
+# Soak is opt-in (workflow_dispatch only) — the nightly cadence shouldn't
+# pay for a 10–60 min run on every schedule.
+
+on:
+  schedule:
+    # 03:00 UTC daily — catches drift between releases (image tag rolls,
+    # transient infra issues, anything not exercised by the release gate).
+    - cron: '0 3 * * *'
+  workflow_call: # invoked from release.yml as a release gate
+  workflow_dispatch:
+    inputs:
+      include_soak:
+        description: 'Include Soak category'
+        required: false
+        default: 'false'
+        type: choice
+        options: ['false', 'true']
+      soak_duration:
+        description: 'Soak duration (TimeSpan, e.g. 00:30:00)'
+        required: false
+        default: '00:10:00'
+        type: string
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  COVERAGE_RUNSETTINGS: tests/coverlet.runsettings
+
+jobs:
+  # Each heavyweight category runs in its own job so a flake in (say)
+  # Chaos doesn't gate the Cluster signal, and so timeouts are scoped.
+  category:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: cluster
+            filter: 'Category=Cluster'
+            timeout: 30
+          - name: chaos
+            filter: 'Category=Chaos'
+            timeout: 30
+          - name: resilience
+            filter: 'Category=Resilience'
+            timeout: 45
+          - name: stress
+            filter: 'Category=Stress'
+            timeout: 60
+          - name: version-matrix
+            filter: 'Category=VersionMatrix'
+            timeout: 45
+    timeout-minutes: ${{ matrix.timeout }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Verify Docker is available
+        run: docker info
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Run ${{ matrix.name }} category
+        run: |
+          dotnet test tests/CH.Native.SystemTests/CH.Native.SystemTests.csproj \
+            --no-build --configuration Release \
+            --filter "${{ matrix.filter }}" \
+            --settings "$COVERAGE_RUNSETTINGS" \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ./TestResults/${{ matrix.name }} \
+            --logger "trx;LogFileName=${{ matrix.name }}.trx" \
+            --blame-hang-timeout 10m
+
+      - name: Upload ${{ matrix.name }} coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ matrix.name }}
+          path: TestResults/${{ matrix.name }}/**/coverage.cobertura.xml
+          if-no-files-found: warn
+
+      - name: Upload ${{ matrix.name }} test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testresults-${{ matrix.name }}
+          path: TestResults/${{ matrix.name }}/**/*.trx
+          if-no-files-found: warn
+
+  soak:
+    if: github.event_name == 'workflow_dispatch' && inputs.include_soak == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CHNATIVE_SOAK_DURATION: ${{ inputs.soak_duration }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Verify Docker is available
+        run: docker info
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Soak (CHNATIVE_SOAK_DURATION=${{ inputs.soak_duration }})
+        run: |
+          dotnet test tests/CH.Native.SystemTests/CH.Native.SystemTests.csproj \
+            --no-build --configuration Release \
+            --filter "Category=Soak" \
+            --results-directory ./TestResults/soak \
+            --logger "trx;LogFileName=soak.trx" \
+            --blame-hang-timeout 30m
+
+      - name: Upload soak test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testresults-soak
+          path: TestResults/soak/**/*.trx
+          if-no-files-found: warn
+
+  coverage:
+    needs: category
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Download coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: coverage-artifacts
+          pattern: coverage-*
+          merge-multiple: false
+
+      - name: Install ReportGenerator
+        run: dotnet tool install --global dotnet-reportgenerator-globaltool
+
+      - name: Merge coverage and generate report
+        run: |
+          shopt -s globstar nullglob
+          inputs=(coverage-artifacts/**/coverage.cobertura.xml)
+          if [ ${#inputs[@]} -eq 0 ]; then
+            echo "No coverage files found — skipping merge."
+            exit 0
+          fi
+          reportgenerator \
+            "-reports:coverage-artifacts/**/coverage.cobertura.xml" \
+            "-targetdir:coverage-report" \
+            "-reporttypes:Cobertura;HtmlInline;MarkdownSummaryGithub" \
+            "-assemblyfilters:+CH.Native;+CH.Native.Dapper;+CH.Native.DependencyInjection;-*.Tests;-*.SystemTests;-*.SmokeTests"
+
+      - name: Publish coverage summary to job
+        if: hashFiles('coverage-report/SummaryGithub.md') != ''
+        run: cat coverage-report/SummaryGithub.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload merged coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-nightly
+          path: coverage-report
+          if-no-files-found: warn
+
+      - name: Upload to Codecov
+        if: env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage-report/Cobertura.xml
+          flags: nightly
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

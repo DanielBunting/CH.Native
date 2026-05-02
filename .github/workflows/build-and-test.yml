@@ -5,10 +5,15 @@ on:
     branches: [main]
   workflow_call: # allow other workflows to reuse this
 
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  COVERAGE_RUNSETTINGS: tests/coverlet.runsettings
+
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,16 +26,15 @@ jobs:
             9.0.x
             10.0.x
 
-      - name: Restore dependencies
+      - name: Restore
         run: dotnet restore
 
       - name: Build
         run: dotnet build --no-restore --configuration Release
 
-  test:
+  unit:
     needs: build
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,11 +47,192 @@ jobs:
             9.0.x
             10.0.x
 
-      - name: Restore dependencies
+      - name: Restore
         run: dotnet restore
 
       - name: Build
         run: dotnet build --no-restore --configuration Release
 
-      - name: Run tests
-        run: dotnet test --no-build --configuration Release --verbosity normal
+      - name: Unit tests (no Docker)
+        run: |
+          dotnet test tests/CH.Native.Tests/CH.Native.Tests.csproj \
+            --no-build --configuration Release \
+            --filter "FullyQualifiedName!~CH.Native.Tests.Integration" \
+            --settings "$COVERAGE_RUNSETTINGS" \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ./TestResults/unit \
+            --logger "trx;LogFileName=unit.trx"
+
+      - name: Upload unit coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-unit
+          path: TestResults/unit/**/coverage.cobertura.xml
+          if-no-files-found: warn
+
+      - name: Upload unit test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testresults-unit
+          path: TestResults/unit/**/*.trx
+          if-no-files-found: warn
+
+  integration:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: Integration tests (Testcontainers / Docker)
+        run: |
+          dotnet test tests/CH.Native.Tests/CH.Native.Tests.csproj \
+            --no-build --configuration Release \
+            --filter "FullyQualifiedName~CH.Native.Tests.Integration" \
+            --settings "$COVERAGE_RUNSETTINGS" \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ./TestResults/integration \
+            --logger "trx;LogFileName=integration.trx"
+
+      - name: Upload integration coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-integration
+          path: TestResults/integration/**/coverage.cobertura.xml
+          if-no-files-found: warn
+
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testresults-integration
+          path: TestResults/integration/**/*.trx
+          if-no-files-found: warn
+
+  # Lightweight system-test categories that complete in <1 min and need only a
+  # single ClickHouse instance. Heavy categories (Cluster/Chaos/Resilience/
+  # Stress/VersionMatrix) run in the nightly system-tests workflow.
+  system-fast:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --no-restore --configuration Release
+
+      - name: System tests (fast categories)
+        run: |
+          dotnet test tests/CH.Native.SystemTests/CH.Native.SystemTests.csproj \
+            --no-build --configuration Release \
+            --filter "Category=Allocation|Category=Observability|Category=Cancellation|Category=DependencyInjection|Category=Security|Category=Linq|Category=Streams|Category=ServerFailures|Category=Suite" \
+            --settings "$COVERAGE_RUNSETTINGS" \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ./TestResults/system-fast \
+            --logger "trx;LogFileName=system-fast.trx"
+
+      - name: Upload system-fast coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-system-fast
+          path: TestResults/system-fast/**/coverage.cobertura.xml
+          if-no-files-found: warn
+
+      - name: Upload system-fast test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testresults-system-fast
+          path: TestResults/system-fast/**/*.trx
+          if-no-files-found: warn
+
+  coverage:
+    needs: [unit, integration, system-fast]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Download coverage artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: coverage-artifacts
+          pattern: coverage-*
+          merge-multiple: false
+
+      - name: Install ReportGenerator
+        run: dotnet tool install --global dotnet-reportgenerator-globaltool
+
+      - name: Merge coverage and generate report
+        run: |
+          # Cobertura merge + HTML/Markdown summary; tolerates missing inputs.
+          shopt -s globstar nullglob
+          inputs=(coverage-artifacts/**/coverage.cobertura.xml)
+          if [ ${#inputs[@]} -eq 0 ]; then
+            echo "No coverage files found — skipping merge."
+            exit 0
+          fi
+          reportgenerator \
+            "-reports:coverage-artifacts/**/coverage.cobertura.xml" \
+            "-targetdir:coverage-report" \
+            "-reporttypes:Cobertura;HtmlInline;MarkdownSummaryGithub" \
+            "-assemblyfilters:+CH.Native;+CH.Native.Dapper;+CH.Native.DependencyInjection;-*.Tests;-*.SystemTests;-*.SmokeTests"
+
+      - name: Publish coverage summary to job
+        if: hashFiles('coverage-report/SummaryGithub.md') != ''
+        run: cat coverage-report/SummaryGithub.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload merged coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage-report
+          if-no-files-found: warn
+
+      # Optional Codecov upload — only runs when CODECOV_TOKEN is configured.
+      - name: Upload to Codecov
+        if: env.CODECOV_TOKEN != ''
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage-report/Cobertura.xml
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
