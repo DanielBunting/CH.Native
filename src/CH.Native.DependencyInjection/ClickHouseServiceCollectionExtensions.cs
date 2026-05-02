@@ -38,10 +38,12 @@ public static class ClickHouseServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(section);
         var pocoSnapshot = section.Get<ClickHouseConnectionOptions>() ?? new ClickHouseConnectionOptions();
-        ClickHouseConnectionOptionsValidator.ValidateOrThrow(pocoSnapshot, (section as IConfigurationSection)?.Path);
+        var sectionPath = (section as IConfigurationSection)?.Path;
+        ClickHouseConnectionOptionsValidator.ValidateOrThrow(pocoSnapshot, sectionPath);
         return AddCore(services, serviceKey: null,
             builderFactory: _ => ClickHouseConnectionOptionsMapper.CreateBuilder(pocoSnapshot),
-            pocoSnapshot: pocoSnapshot);
+            pocoSnapshot: pocoSnapshot,
+            sectionPath: sectionPath);
     }
 
     /// <summary>Registers a DataSource configured via a fluent builder.</summary>
@@ -86,10 +88,12 @@ public static class ClickHouseServiceCollectionExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(serviceKey);
         ArgumentNullException.ThrowIfNull(section);
         var pocoSnapshot = section.Get<ClickHouseConnectionOptions>() ?? new ClickHouseConnectionOptions();
-        ClickHouseConnectionOptionsValidator.ValidateOrThrow(pocoSnapshot, (section as IConfigurationSection)?.Path);
+        var sectionPath = (section as IConfigurationSection)?.Path;
+        ClickHouseConnectionOptionsValidator.ValidateOrThrow(pocoSnapshot, sectionPath);
         return AddCore(services, serviceKey,
             builderFactory: _ => ClickHouseConnectionOptionsMapper.CreateBuilder(pocoSnapshot),
-            pocoSnapshot: pocoSnapshot);
+            pocoSnapshot: pocoSnapshot,
+            sectionPath: sectionPath);
     }
 
     /// <summary>Registers a keyed DataSource configured via a fluent builder.</summary>
@@ -115,7 +119,8 @@ public static class ClickHouseServiceCollectionExtensions
         IServiceCollection services,
         object? serviceKey,
         Func<IServiceProvider, ClickHouseConnectionSettingsBuilder> builderFactory,
-        ClickHouseConnectionOptions? pocoSnapshot = null)
+        ClickHouseConnectionOptions? pocoSnapshot = null,
+        string? sectionPath = null)
     {
         var dsBuilder = new ClickHouseDataSourceBuilder(services, serviceKey);
 
@@ -127,12 +132,12 @@ public static class ClickHouseServiceCollectionExtensions
         // async-first workloads.
         if (serviceKey is null)
         {
-            services.TryAddSingleton<ClickHouseDataSource>(sp => CreateDataSource(sp, dsBuilder, builderFactory, pocoSnapshot));
+            services.TryAddSingleton<ClickHouseDataSource>(sp => CreateDataSource(sp, dsBuilder, builderFactory, pocoSnapshot, sectionPath));
         }
         else
         {
             services.TryAddKeyedSingleton<ClickHouseDataSource>(serviceKey,
-                (sp, key) => CreateDataSource(sp, dsBuilder, builderFactory, pocoSnapshot));
+                (sp, key) => CreateDataSource(sp, dsBuilder, builderFactory, pocoSnapshot, sectionPath));
         }
 
         return dsBuilder;
@@ -142,8 +147,17 @@ public static class ClickHouseServiceCollectionExtensions
         IServiceProvider sp,
         ClickHouseDataSourceBuilder dsBuilder,
         Func<IServiceProvider, ClickHouseConnectionSettingsBuilder> builderFactory,
-        ClickHouseConnectionOptions? pocoSnapshot)
+        ClickHouseConnectionOptions? pocoSnapshot,
+        string? sectionPath = null)
     {
+        // Auth/credential pairing runs here, not at registration: by the time
+        // we resolve the DataSource the user's chained .WithJwtProvider<>()
+        // / .WithSshKeyProvider<>() calls have populated the builder, so the
+        // validator can accurately decide whether AuthMethod=Jwt/SshKey has
+        // a credential source.
+        if (pocoSnapshot is not null)
+            ClickHouseConnectionOptionsValidator.ValidateAuthCredentialsOrThrow(pocoSnapshot, dsBuilder, sectionPath);
+
         // Capture provider delegates once; invoked per physical connection creation.
         var jwt = dsBuilder.JwtProviderFactory?.Invoke(sp);
         var cert = dsBuilder.CertificateProviderFactory?.Invoke(sp);

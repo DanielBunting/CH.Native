@@ -1,19 +1,34 @@
 using CH.Native.Connection;
 using CH.Native.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace CH.Native.Tests.Unit.Connection;
 
 /// <summary>
-/// The DI-layer validator runs at registration time so misconfigured options
-/// fail fast (with a section path in the message) instead of surfacing as
-/// opaque <see cref="ArgumentOutOfRangeException"/>s on first use. These
-/// tests pin the failure surface — pool bounds, auth/credential pairings,
-/// port ranges — and confirm the consolidated error message includes the
-/// section path when supplied.
+/// The DI-layer validator is split: <see cref="ClickHouseConnectionOptionsValidator.ValidateOrThrow"/>
+/// pins shape errors (pool bounds, port ranges) at registration time;
+/// <c>ValidateAuthCredentialsOrThrow</c> pairs <c>AuthMethod</c> against the
+/// builder's chained provider state at first DataSource resolution. Both
+/// surfaces — including the consolidated message and section-path prefix —
+/// are pinned here.
 /// </summary>
 public class ClickHouseConnectionOptionsValidatorTests
 {
+    private static ClickHouseDataSourceBuilder NewBuilder() =>
+        new(new ServiceCollection(), serviceKey: null);
+
+    private sealed class FakeJwtProvider : IClickHouseJwtProvider
+    {
+        public ValueTask<string> GetTokenAsync(CancellationToken ct) => new("test.jwt.token");
+    }
+
+    private sealed class FakeSshKeyProvider : IClickHouseSshKeyProvider
+    {
+        public ValueTask<SshKeyMaterial> GetKeyAsync(CancellationToken ct) =>
+            new(new SshKeyMaterial(new byte[] { 0x00 }, Passphrase: null));
+    }
+
     [Fact]
     public void EmptyOptions_PassesValidation()
     {
@@ -84,47 +99,128 @@ public class ClickHouseConnectionOptionsValidatorTests
     }
 
     [Fact]
-    public void Auth_Jwt_WithoutToken_Fails()
+    public void ValidateOrThrow_DoesNotCheckAuthPairing()
     {
+        // ValidateOrThrow is shape-only — auth pairing is deferred to
+        // ValidateAuthCredentialsOrThrow so chained provider registrations
+        // get a chance to run on the builder first.
         var opts = new ClickHouseConnectionOptions
         {
-            AuthMethod = ClickHouseAuthMethod.Jwt,
+            AuthMethod = ClickHouseAuthMethod.Jwt,  // no token, no provider yet
         };
 
+        ClickHouseConnectionOptionsValidator.ValidateOrThrow(opts);  // does not throw
+    }
+
+    [Fact]
+    public void AuthCredentials_Jwt_WithoutTokenAndWithoutProvider_Fails()
+    {
+        var opts = new ClickHouseConnectionOptions { AuthMethod = ClickHouseAuthMethod.Jwt };
+        var builder = NewBuilder();
+
         var ex = Assert.Throws<ArgumentException>(() =>
-            ClickHouseConnectionOptionsValidator.ValidateOrThrow(opts));
+            ClickHouseConnectionOptionsValidator.ValidateAuthCredentialsOrThrow(opts, builder));
         Assert.Contains("Jwt", ex.Message);
         Assert.Contains("JwtToken", ex.Message);
     }
 
     [Fact]
-    public void Auth_Ssh_WithoutKeyPath_Fails()
+    public void AuthCredentials_Jwt_WithStaticToken_Passes()
     {
         var opts = new ClickHouseConnectionOptions
         {
-            AuthMethod = ClickHouseAuthMethod.SshKey,
+            AuthMethod = ClickHouseAuthMethod.Jwt,
+            JwtToken = "static.jwt.token",
         };
 
+        ClickHouseConnectionOptionsValidator.ValidateAuthCredentialsOrThrow(opts, NewBuilder());
+    }
+
+    [Fact]
+    public void AuthCredentials_Jwt_WithChainedProvider_Passes()
+    {
+        // The chained .WithJwtProvider<>() satisfies the requirement even
+        // when JwtToken is empty — this is the bug-fix path that the user
+        // can rely on going forward.
+        var opts = new ClickHouseConnectionOptions { AuthMethod = ClickHouseAuthMethod.Jwt };
+        var builder = NewBuilder();
+        builder.WithJwtProvider<FakeJwtProvider>();
+
+        ClickHouseConnectionOptionsValidator.ValidateAuthCredentialsOrThrow(opts, builder);
+    }
+
+    [Fact]
+    public void AuthCredentials_Ssh_WithoutPathAndWithoutProvider_Fails()
+    {
+        var opts = new ClickHouseConnectionOptions { AuthMethod = ClickHouseAuthMethod.SshKey };
+        var builder = NewBuilder();
+
         var ex = Assert.Throws<ArgumentException>(() =>
-            ClickHouseConnectionOptionsValidator.ValidateOrThrow(opts));
+            ClickHouseConnectionOptionsValidator.ValidateAuthCredentialsOrThrow(opts, builder));
         Assert.Contains("SshKey", ex.Message);
         Assert.Contains("SshPrivateKeyPath", ex.Message);
     }
 
     [Fact]
-    public void Auth_WithConnectionString_DefersValidation()
+    public void AuthCredentials_Ssh_WithStaticPath_Passes()
+    {
+        var opts = new ClickHouseConnectionOptions
+        {
+            AuthMethod = ClickHouseAuthMethod.SshKey,
+            SshPrivateKeyPath = "/etc/ch/key.pem",
+        };
+
+        ClickHouseConnectionOptionsValidator.ValidateAuthCredentialsOrThrow(opts, NewBuilder());
+    }
+
+    [Fact]
+    public void AuthCredentials_Ssh_WithChainedProvider_Passes()
+    {
+        var opts = new ClickHouseConnectionOptions { AuthMethod = ClickHouseAuthMethod.SshKey };
+        var builder = NewBuilder();
+        builder.WithSshKeyProvider<FakeSshKeyProvider>();
+
+        ClickHouseConnectionOptionsValidator.ValidateAuthCredentialsOrThrow(opts, builder);
+    }
+
+    [Fact]
+    public void AuthCredentials_WithConnectionString_DefersValidation()
     {
         // When a ConnectionString is supplied the validator skips the
         // auth/credential checks because the connection-string parser owns
-        // that responsibility. Pin so the deferral can't accidentally come
-        // back as a duplicate validation pass.
+        // that responsibility.
         var opts = new ClickHouseConnectionOptions
         {
             ConnectionString = "Host=localhost",
             AuthMethod = ClickHouseAuthMethod.Jwt,  // no token, but ConnectionString defers
         };
 
-        ClickHouseConnectionOptionsValidator.ValidateOrThrow(opts);  // does not throw
+        ClickHouseConnectionOptionsValidator.ValidateAuthCredentialsOrThrow(opts, NewBuilder());
+    }
+
+    [Fact]
+    public void AuthCredentials_PasswordAndCertificateMethods_NeverFailOnPairing()
+    {
+        // Empty password is a valid ClickHouse auth, and certificate auth
+        // is wired by WithCertificateProvider itself — neither gets a
+        // pairing rule.
+        ClickHouseConnectionOptionsValidator.ValidateAuthCredentialsOrThrow(
+            new ClickHouseConnectionOptions { AuthMethod = ClickHouseAuthMethod.Password },
+            NewBuilder());
+        ClickHouseConnectionOptionsValidator.ValidateAuthCredentialsOrThrow(
+            new ClickHouseConnectionOptions { AuthMethod = ClickHouseAuthMethod.TlsClientCertificate },
+            NewBuilder());
+    }
+
+    [Fact]
+    public void AuthCredentials_FailureIncludesSectionPath()
+    {
+        var opts = new ClickHouseConnectionOptions { AuthMethod = ClickHouseAuthMethod.Jwt };
+        var builder = NewBuilder();
+
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ClickHouseConnectionOptionsValidator.ValidateAuthCredentialsOrThrow(opts, builder, "ClickHouse:Primary"));
+        Assert.Contains("ClickHouse:Primary", ex.Message);
     }
 
     [Theory]
