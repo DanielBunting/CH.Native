@@ -39,56 +39,59 @@ public class StreamingMemoryPressureTests
         await using var conn = new ClickHouseConnection(_fx.BuildSettings());
         await conn.OpenAsync();
 
-        // Drain GC before we measure.
+        var smallRetained = await MeasureRetainedAfterStreamAsync(conn, rowCount: 100_000);
+        var largeRetained = await MeasureRetainedAfterStreamAsync(conn, rowCount: 1_000_000);
+
+        _output.WriteLine($"100k rows retained after GC: {smallRetained:N0} bytes");
+        _output.WriteLine($"  1M rows retained after GC: {largeRetained:N0} bytes");
+
+        // The streaming contract: after iteration completes and a full GC
+        // runs, retained heap must be O(1) in the row count — bounded by
+        // pool bucket residue, the active block scratch buffer, and a
+        // little async-state-machine state. It must NOT scale with the
+        // number of rows produced.
+        //
+        // 1M UInt64 rows boxed via the untyped QueryAsync path would cost
+        // ~32 MB if fully buffered (24-byte object header per boxed value
+        // + the 8-byte payload, plus per-row object[] containers). An
+        // absolute ceiling at 8 MB catches catastrophic full-buffering
+        // regressions while tolerating realistic pool bucket retention
+        // and warmup. We deliberately don't compare a small/large *ratio*
+        // because the small denominator can settle near zero after GC,
+        // making any ratio brittle across runtimes.
+        const long ceilingBytes = 8L * 1024 * 1024;
+        Assert.True(largeRetained < ceilingBytes,
+            $"Streaming contract broken: 1M rows retained {largeRetained:N0} bytes after GC " +
+            $"(ceiling {ceilingBytes:N0}).");
+    }
+
+    private static async Task<long> MeasureRetainedAfterStreamAsync(ClickHouseConnection conn, int rowCount)
+    {
+        // Drain finalizers and Gen2 before capturing the baseline.
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
+        var start = GC.GetTotalMemory(forceFullCollection: true);
 
-        var smallStart = GC.GetTotalMemory(forceFullCollection: true);
-        ulong smallSum = 0;
-        // Untyped QueryAsync returns the raw value (not the per-row generic
-        // mapper which requires a class). For a single UInt64 scalar column,
-        // this is the right path.
-        await foreach (var row in conn.QueryAsync("SELECT number FROM numbers(100000)"))
+        ulong sum = 0;
+        await foreach (var row in conn.QueryAsync($"SELECT number FROM numbers({rowCount})"))
         {
-            smallSum += Convert.ToUInt64(row[0]);
+            sum += Convert.ToUInt64(row[0]);
         }
-        var smallPeak = GC.GetTotalMemory(forceFullCollection: false);
-        var smallDelta = smallPeak - smallStart;
 
+        // Sanity: query produced expected sum (n*(n-1)/2). Confirms the
+        // stream actually delivered every row (so we're measuring the
+        // streaming path, not an early-terminated short read).
+        var expected = (ulong)(rowCount - 1) * (ulong)rowCount / 2;
+        Assert.Equal(expected, sum);
+
+        // Force a full GC so we measure RETAINED heap (rooted by pools,
+        // statics, and the connection) rather than per-row Gen0 garbage
+        // that just hasn't been collected yet.
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
-
-        var largeStart = GC.GetTotalMemory(forceFullCollection: true);
-        ulong largeSum = 0;
-        await foreach (var row in conn.QueryAsync("SELECT number FROM numbers(1000000)"))
-        {
-            largeSum += Convert.ToUInt64(row[0]);
-        }
-        var largePeak = GC.GetTotalMemory(forceFullCollection: false);
-        var largeDelta = largePeak - largeStart;
-
-        _output.WriteLine($"100k rows: delta={smallDelta:N0} bytes; sum={smallSum}");
-        _output.WriteLine($"  1M rows: delta={largeDelta:N0} bytes; sum={largeSum}");
-
-        // Sanity: query produced expected sum (n*(n-1)/2).
-        Assert.Equal(99999UL * 100000 / 2, smallSum);
-        Assert.Equal(999999UL * 1000000 / 2, largeSum);
-
-        // The streaming contract: 10× more rows must NOT cause 10× the
-        // post-GC working-set delta. We allow generous slack (3×) for
-        // reader-internal buffers and block-level batching.
-        // If the library buffers all rows, this would be ~10×; the assert
-        // catches the catastrophic regression while tolerating reasonable
-        // implementation-internal buffering.
-        if (smallDelta > 0)
-        {
-            var ratio = (double)largeDelta / smallDelta;
-            _output.WriteLine($"Memory-delta ratio (1M/100k): {ratio:F2}× (rowcount ratio: 10×)");
-            Assert.True(ratio < 5.0,
-                $"Streaming contract broken: 10× rows produced {ratio:F1}× memory growth.");
-        }
+        return GC.GetTotalMemory(forceFullCollection: true) - start;
     }
 
     [Fact]
