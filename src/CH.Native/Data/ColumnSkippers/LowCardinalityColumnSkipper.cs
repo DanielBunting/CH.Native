@@ -23,7 +23,11 @@ public sealed class LowCardinalityColumnSkipper : IColumnSkipper
         _typeName = $"LowCardinality({innerTypeName})";
     }
 
+    /// <inheritdoc />
+
     public string TypeName => _typeName;
+
+    /// <inheritdoc />
 
     public bool TrySkipColumn(ref ProtocolReader reader, int rowCount)
     {

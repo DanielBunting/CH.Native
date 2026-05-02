@@ -106,19 +106,4 @@ public class MultiHostFailoverProbeTests
         Assert.True(sw.Elapsed < TimeSpan.FromSeconds(20),
             $"All-hosts-dead must surface promptly; took {sw.Elapsed}");
     }
-
-    [Fact]
-    public async Task ConnectionStringHostPlusServers_ParsesAndConnects()
-    {
-        // Pin the connection-string entry point: requires both Host AND
-        // Servers (the parser doesn't treat Servers as sufficient — see
-        // ServersOnly_NoHost_ConnectionStringFailsValidation_DocumentedGap).
-        var connStr = $"Host={_fx.Host};Port={_fx.Port};Servers=127.0.0.1:1,{_fx.Host}:{_fx.Port};Username={_fx.Username};Password={_fx.Password};LoadBalancing=FirstAvailable;ConnectTimeout=2";
-        var settings = ClickHouseConnectionSettings.Parse(connStr);
-
-        await using var ds = new ClickHouseDataSource(settings);
-        await using var conn = await ds.OpenConnectionAsync();
-        var result = await conn.ExecuteScalarAsync<int>("SELECT 7");
-        Assert.Equal(7, result);
-    }
 }

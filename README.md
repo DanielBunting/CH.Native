@@ -36,6 +36,27 @@ See the [Getting Started Guide](docs/quickstart.md) for more examples.
 - **Telemetry** - OpenTelemetry-compatible tracing, metrics, and logging
 - **Type Safety** - Full support for all ClickHouse types with .NET mapping
 
+## Supported ClickHouse Types
+
+CH.Native supports the full ClickHouse type system across read, write, and bulk-insert paths. See [Data Types](docs/data-types.md) for the complete CLR-mapping reference.
+
+| Category | ClickHouse Types | .NET Mapping |
+|---|---|---|
+| **Signed integers** | `Int8`, `Int16`, `Int32`, `Int64`, `Int128`, `Int256` | `sbyte`, `short`, `int`, `long`, `Int128`, `BigInteger` |
+| **Unsigned integers** | `UInt8`, `UInt16`, `UInt32`, `UInt64`, `UInt128`, `UInt256` | `byte`, `ushort`, `uint`, `ulong`, `UInt128`, `BigInteger` |
+| **Floating point** | `Float32`, `Float64`, `BFloat16` | `float`, `double`, `float` |
+| **Fixed-point** | `Decimal32(S)`, `Decimal64(S)`, `Decimal128(S)`, `Decimal256(S)` | `decimal` (or `ClickHouseDecimal` for D128/256 wide range) |
+| **Boolean** | `Bool` | `bool` |
+| **Date / Time** | `Date`, `Date32`, `DateTime`, `DateTime('Tz')`, `DateTime64(P)`, `Time`, `Time64(P)` | `DateOnly`, `DateTime`, `DateTimeOffset`, `TimeOnly` |
+| **String** | `String`, `FixedString(N)` | `string`, `byte[]` |
+| **Network / IDs** | `UUID`, `IPv4`, `IPv6` | `Guid`, `IPAddress` |
+| **Enums** | `Enum8`, `Enum16` | `sbyte`, `short` (or your enum via cast) |
+| **Composites** | `Nullable(T)`, `Array(T)`, `Map(K,V)`, `Tuple(...)`, `Nested(...)`, `LowCardinality(T)` | `T?`, `T[]`, `Dictionary<K,V>`, `object[]`, `object[][]`, `T` (transparent) |
+| **Geospatial** | `Point`, `Ring`, `LineString`, `Polygon`, `MultiLineString`, `MultiPolygon` | `Point`, `Point[]`, `Point[][]`, `Point[][][]` |
+| **Semi-structured** | `JSON`, `Dynamic`, `Variant(T0, T1, ...)` | `string` / `JsonDocument`, `ClickHouseDynamic`, `VariantValue<T0, T1>` (boxing-free 2-arm) or `ClickHouseVariant` (boxed N-arm) |
+
+All types round-trip through both the read path (`ExecuteReaderAsync`, `QueryAsync<T>`) and the bulk-insert path (`CreateBulkInserter<T>`). `Nullable(...)` wraps any non-composite type. Composites compose freely (e.g. `Array(Nullable(LowCardinality(String)))`).
+
 ## Installation
 
 ```bash

@@ -36,6 +36,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     private int _totalRowsInserted;
     private bool _usedCachedSchema;
     private SchemaKey _schemaCacheKey;
+    private string? _effectiveQueryId;
 
     // Pooled column data arrays - reused across flushes (fallback path)
     private object?[][]? _pooledColumnData;
@@ -162,6 +163,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         // surfaced in the busy exception, sent on the wire, and logged by
         // the server.
         var effectiveQueryId = ClickHouseConnection.ResolveQueryIdInternal(_options.QueryId);
+        _effectiveQueryId = effectiveQueryId;
         _connection.EnterBusyForBulkInsert(effectiveQueryId);
         _slotClaimed = true;
 
@@ -226,9 +228,13 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         }
         catch
         {
-            // Any other failure leaves the inserter unusable; release the busy
-            // slot so the connection can be reused (e.g. for a different
-            // operation after the caller observes the throw).
+            // Any other failure leaves the inserter unusable. Server-side
+            // failures (table missing, etc.) arrive as a server-exception
+            // envelope without a trailing EndOfStream, so the read loop
+            // exits with _currentQueryId still set. Clear it here so the
+            // connection's pool eligibility recovers — otherwise CanBePooled
+            // returns false and a perfectly clean connection gets discarded.
+            _connection.ClearOwnedQueryId(effectiveQueryId);
             ReleaseSlotIfClaimed();
             throw;
         }
@@ -529,6 +535,16 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
 
             _totalRowsInserted += _buffer.Count;
             _connection.Logger.BulkInsertFlushed(_tableName, _buffer.Count);
+
+            // Emit the per-flush row count to the documented bulk-insert
+            // counter. Tags mirror the bulk-insert span attributes so consumers
+            // can correlate metrics with traces. The counter was previously
+            // defined but never incremented — pin via BulkInsertMetricsTests.
+            CH.Native.Telemetry.ClickHouseMeter.RowsWrittenTotal.Add(
+                _buffer.Count,
+                new KeyValuePair<string, object?>("db.system", "clickhouse"),
+                new KeyValuePair<string, object?>("db.name", _connection.Settings.Database),
+                new KeyValuePair<string, object?>("db.clickhouse.table", _tableName));
         }
         catch (OperationCanceledException ex) when (_connection.WasCancellationRequested)
         {
@@ -589,7 +605,11 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         // the original server/protocol exception).
         _completeStarted = true;
 
-        using var activity = ClickHouseActivitySource.StartBulkInsert(_tableName, _connection.Settings.Database, _connection.Settings.Telemetry);
+        using var activity = ClickHouseActivitySource.StartBulkInsert(
+            _tableName,
+            _connection.Settings.Database,
+            _effectiveQueryId,
+            _connection.Settings.Telemetry);
 
         using var registration = RegisterCancelHook(cancellationToken);
         try

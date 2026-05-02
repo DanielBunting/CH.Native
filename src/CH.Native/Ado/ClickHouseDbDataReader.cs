@@ -10,26 +10,39 @@ namespace CH.Native.Ado;
 /// </summary>
 public sealed class ClickHouseDbDataReader : DbDataReader
 {
-    private readonly ClickHouseDataReader _inner;
+    private readonly IClickHouseDataReader _inner;
     // Optional: when ExecuteDbDataReaderAsync sets up CommandTimeout, ownership
     // of the timeout CTS transfers to the reader so the timer stays armed
     // across ReadAsync iterations. Without this, the CTS would be disposed
     // when ExecuteDbDataReaderAsync returns and CommandTimeout would never fire.
     private readonly CancellationTokenSource? _timeoutCts;
+    // Optional: ADO.NET CommandBehavior.CloseConnection — the reader takes
+    // ownership of the connection lifetime and closes it on Dispose. Null
+    // when the caller did not request CloseConnection.
+    private readonly ClickHouseDbConnection? _connectionToClose;
     private bool _closed;
     private bool _initialized;
     private bool _hasFirstRow;
     private bool _firstRowConsumed;
 
-    internal ClickHouseDbDataReader(ClickHouseDataReader inner)
-        : this(inner, timeoutCts: null)
+    internal ClickHouseDbDataReader(IClickHouseDataReader inner)
+        : this(inner, timeoutCts: null, connectionToClose: null)
     {
     }
 
-    internal ClickHouseDbDataReader(ClickHouseDataReader inner, CancellationTokenSource? timeoutCts)
+    internal ClickHouseDbDataReader(IClickHouseDataReader inner, CancellationTokenSource? timeoutCts)
+        : this(inner, timeoutCts, connectionToClose: null)
+    {
+    }
+
+    internal ClickHouseDbDataReader(
+        IClickHouseDataReader inner,
+        CancellationTokenSource? timeoutCts,
+        ClickHouseDbConnection? connectionToClose)
     {
         _inner = inner;
         _timeoutCts = timeoutCts;
+        _connectionToClose = connectionToClose;
     }
 
     /// <summary>
@@ -172,6 +185,12 @@ public sealed class ClickHouseDbDataReader : DbDataReader
         {
             await _inner.DisposeAsync().ConfigureAwait(false);
             _closed = true;
+            // ADO contract: CommandBehavior.CloseConnection — the reader's
+            // dispose path closes the underlying DbConnection too.
+            if (_connectionToClose is not null)
+            {
+                await _connectionToClose.CloseAsync().ConfigureAwait(false);
+            }
         }
     }
 

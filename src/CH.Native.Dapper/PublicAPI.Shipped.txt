@@ -1,0 +1,7 @@
+#nullable enable
+CH.Native.Dapper.ClickHouseDapperArrayHandler<T>
+CH.Native.Dapper.ClickHouseDapperArrayHandler<T>.ClickHouseDapperArrayHandler() -> void
+CH.Native.Dapper.ClickHouseDapperIntegration
+override CH.Native.Dapper.ClickHouseDapperArrayHandler<T>.Parse(object? value) -> T[]?
+override CH.Native.Dapper.ClickHouseDapperArrayHandler<T>.SetValue(System.Data.IDbDataParameter! parameter, T[]? value) -> void
+static CH.Native.Dapper.ClickHouseDapperIntegration.Register() -> void

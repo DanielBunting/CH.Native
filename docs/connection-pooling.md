@@ -73,6 +73,33 @@ var version = await conn.ExecuteScalarAsync<string>("SELECT version()");
 
 Key invariant: `gate permits + busy connections == MaxPoolSize`. Idle connections don't consume permits, which is what lets a returned connection unblock a parked waiter.
 
+### Connection poison detection
+
+When a rented connection is returned, the pool inspects `CanBePooled` on the physical connection. If `true`, the connection goes back onto `_idle`. If `false`, the connection is disposed, `TotalEvicted` increments, and the next rent opens a fresh TCP session.
+
+`CanBePooled` returns `false` when any of the following holds:
+
+- the connection has been disposed or closed,
+- the connection's `_protocolFatal` flag is set,
+- a query is still in flight (`_busy` or `_currentQueryId` set),
+- a sticky role override has been applied that the pool cannot reset.
+
+**The poison rule:** `_protocolFatal` is set only when the wire is no longer in spec — never on a server-reported error. The four call sites are:
+
+- malformed bytes / `ClickHouseProtocolException` while reading a server message;
+- a drain timeout during cancellation recovery (server failed to acknowledge a cancel within budget);
+- trailing bytes after `EndOfStream` in the main read pump;
+- trailing bytes after EOS, or an unknown message type, in the bulk-insert read pump.
+
+**Corollary — server exceptions keep the connection poolable.** A well-formed `ExceptionMessage` from the server — `KILL QUERY` (the `QUERY_WAS_CANCELLED` code 394 ClickHouse returns to a killed query), a SQL error, OOM, quota breach, anything else the server can report mid-query — does **not** set `_protocolFatal`. The kill terminated the query, not the connection; the wire is in a clean state for the next message. The pool returns the connection to `_idle` and the next rent reuses it.
+
+This is intentional. Churning a fresh socket after every server-side error would be a meaningful throughput regression on workloads that legitimately probe the database for errors (e.g., `EXISTS`-style schema checks, idempotent retries, query-killed-by-watchdog patterns).
+
+The end-to-end contracts are pinned by tests:
+
+- `tests/CH.Native.SystemTests/Streams/PoolDiscardOnPoisonTests` — drives each `_protocolFatal` site against a mock server and verifies the pool discards on return + opens a fresh socket on the next rent.
+- `tests/CH.Native.SystemTests/Resilience/BrokenConnectionPoolReturnTests` — verifies that `KILL QUERY` and SQL errors keep the connection poolable and that the next rent reuses the same physical connection.
+
 ## Configuration reference
 
 All knobs are on `ClickHouseDataSourceOptions` (programmatic) or the `Pool` subsection of `ClickHouseConnectionOptions` (config binding).

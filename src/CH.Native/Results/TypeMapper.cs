@@ -153,12 +153,27 @@ internal sealed class TypeMapper<T>
         if (matchingProp is not null)
         {
             var propAttr = matchingProp.GetCustomAttribute<ClickHouseColumnAttribute>();
+            // Ignore=true on a property that mirrors a required ctor arg is
+            // a malformed POCO — silently substituting default(T) for the
+            // arg would corrupt user data. Surface a typed diagnostic so
+            // the misuse is loud at construction time.
+            if (propAttr?.Ignore == true)
+                throw new InvalidOperationException(
+                    $"Type '{t.FullName}' has [ClickHouseColumn(Ignore = true)] on " +
+                    $"property '{matchingProp.Name}' that backs constructor parameter " +
+                    $"'{param.Name}'. Ignored properties cannot also be required " +
+                    "constructor arguments — drop Ignore or remove the property from the ctor.");
             if (!string.IsNullOrEmpty(propAttr?.Name))
                 return propAttr.Name;
         }
 
         // Custom POCOs may attach the attribute directly to the ctor param.
         var paramAttr = param.GetCustomAttribute<ClickHouseColumnAttribute>();
+        if (paramAttr?.Ignore == true)
+            throw new InvalidOperationException(
+                $"Type '{t.FullName}' has [ClickHouseColumn(Ignore = true)] on " +
+                $"constructor parameter '{param.Name}'. Ignored parameters cannot " +
+                "be required ctor arguments — drop Ignore or remove the parameter.");
         if (!string.IsNullOrEmpty(paramAttr?.Name))
             return paramAttr.Name;
 
@@ -179,6 +194,13 @@ internal sealed class TypeMapper<T>
 
             // Honor [ClickHouseColumn(Name = "...")] on properties.
             var attr = prop.GetCustomAttribute<ClickHouseColumnAttribute>();
+            // [ClickHouseColumn(Ignore = true)] excludes the property from
+            // both write and read mapping — see attribute XML doc. Skip
+            // before the column-lookup so the property is invisible to the
+            // mapper regardless of whether a matching column exists.
+            if (attr?.Ignore == true)
+                continue;
+
             var lookupName = !string.IsNullOrEmpty(attr?.Name) ? attr.Name : prop.Name;
 
             var ordinal = TryGetOrdinal(reader, lookupName);

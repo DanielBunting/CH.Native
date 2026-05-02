@@ -207,19 +207,74 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
 
     void IColumnWriter.WriteColumn(ref ProtocolWriter writer, object?[] values)
     {
-        var typed = new T[values.Length];
+        // For non-nullable T, falling back to the typed WriteColumn is safe:
+        // the typed path can't represent null for value-type T, and reference-type
+        // T uses object identity so the existing null detection still works.
+        if (!_isNullable)
+        {
+            var typed = new T[values.Length];
+            for (int i = 0; i < values.Length; i++)
+            {
+                if (values[i] is null)
+                    throw NullAt(i);
+                if (values[i] is T v)
+                {
+                    typed[i] = v;
+                }
+                else
+                {
+                    throw new InvalidOperationException(
+                        $"LowCardinalityColumnWriter<{typeof(T).Name}> received unsupported value type " +
+                        $"{values[i]!.GetType().Name} at row {i}. Expected {typeof(T).Name}.");
+                }
+            }
+            WriteColumn(ref writer, typed);
+            return;
+        }
+
+        // Nullable wrapper + value-type T (int/long/DateTime/etc.) hits the
+        // collision: collapsing null → default(T) loses null info, and the
+        // typed WriteColumn then maps every default(T) row to slot 0 (NULL).
+        // Build the dictionary inline using an explicit nullness check so a
+        // real default(T) row doesn't get aliased to the null sentinel.
+        WriteNullableValuesFromObjects(ref writer, values);
+    }
+
+    private void WriteNullableValuesFromObjects(ref ProtocolWriter writer, object?[] values)
+    {
+        if (values.Length == 0)
+        {
+            writer.WriteUInt64(HasAdditionalKeysBit | NeedUpdateDictionary);
+            writer.WriteUInt64(0);
+            writer.WriteUInt64(0);
+            return;
+        }
+
+        var dictionary = new List<T>();
+        // Reserve dictionary slot 0 for the null sentinel — same convention
+        // as WriteColumn(T[]) above so the wire format is identical.
+        var slotZero = default(T) is null
+            ? _innerWriter.NullPlaceholder
+            : default!;
+        dictionary.Add(slotZero);
+
+#pragma warning disable CS8714
+        var indexMap = new Dictionary<T, int>(EqualityComparer<T>.Default);
+#pragma warning restore CS8714
+        var indices = new int[values.Length];
+
         for (int i = 0; i < values.Length; i++)
         {
             if (values[i] is null)
             {
-                if (!_isNullable)
-                    throw NullAt(i);
-                typed[i] = default!;
+                indices[i] = 0;
                 continue;
             }
+
+            T value;
             if (values[i] is T v)
             {
-                typed[i] = v;
+                value = v;
             }
             else
             {
@@ -227,8 +282,38 @@ public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
                     $"LowCardinalityColumnWriter<{typeof(T).Name}> received unsupported value type " +
                     $"{values[i]!.GetType().Name} at row {i}. Expected {typeof(T).Name}.");
             }
+
+            if (!indexMap.TryGetValue(value, out var index))
+            {
+                index = dictionary.Count;
+                dictionary.Add(value);
+                indexMap[value] = index;
+            }
+            indices[i] = index;
         }
-        WriteColumn(ref writer, typed);
+
+        var indexType = dictionary.Count <= 256 ? IndexTypeUInt8 :
+                        dictionary.Count <= 65536 ? IndexTypeUInt16 :
+                        dictionary.Count <= int.MaxValue ? IndexTypeUInt32 : IndexTypeUInt64;
+
+        writer.WriteUInt64((ulong)indexType | HasAdditionalKeysBit | NeedUpdateDictionary);
+        writer.WriteUInt64((ulong)dictionary.Count);
+        for (int i = 0; i < dictionary.Count; i++)
+        {
+            _innerWriter.WriteValue(ref writer, dictionary[i]);
+        }
+        writer.WriteUInt64((ulong)values.Length);
+        for (int i = 0; i < indices.Length; i++)
+        {
+            var idx = indices[i];
+            switch (indexType)
+            {
+                case IndexTypeUInt8: writer.WriteByte((byte)idx); break;
+                case IndexTypeUInt16: writer.WriteUInt16((ushort)idx); break;
+                case IndexTypeUInt32: writer.WriteUInt32((uint)idx); break;
+                case IndexTypeUInt64: writer.WriteUInt64((ulong)idx); break;
+            }
+        }
     }
 
     void IColumnWriter.WriteValue(ref ProtocolWriter writer, object? value)

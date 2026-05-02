@@ -150,13 +150,21 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
     private Expression VisitTake(MethodCallExpression node)
     {
         var count = GetConstantValue<int>(node.Arguments[1]);
-        _sql.Limit(count);
+        // Match Enumerable.Take semantics: negative ⇒ empty. Without this,
+        // LINQ-to-CH emitted LIMIT -N which ClickHouse parses inconsistently
+        // across versions.
+        _sql.Limit(Math.Max(0, count));
         return node;
     }
 
     private Expression VisitSkip(MethodCallExpression node)
     {
         var count = GetConstantValue<int>(node.Arguments[1]);
+        if (count < 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(node),
+                count,
+                "Skip count must be non-negative.");
         _sql.Offset(count);
         return node;
     }
@@ -360,6 +368,18 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
 
     private void VisitBinaryPredicate(BinaryExpression binary)
     {
+        // x ?? y → coalesce(x, y). Translated as a function call rather than an
+        // infix operator because ClickHouse SQL has no `??` form.
+        if (binary.NodeType == ExpressionType.Coalesce)
+        {
+            _currentExpression.Append("coalesce(");
+            VisitPredicate(binary.Left);
+            _currentExpression.Append(", ");
+            VisitPredicate(binary.Right);
+            _currentExpression.Append(')');
+            return;
+        }
+
         // Handle null comparisons specially
         if (IsNullConstant(binary.Right))
         {

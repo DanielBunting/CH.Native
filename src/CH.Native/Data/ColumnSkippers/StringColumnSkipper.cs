@@ -36,6 +36,8 @@ public sealed class FixedStringColumnSkipper : IColumnSkipper
 
     public string TypeName => $"FixedString({_length})";
 
+    /// <inheritdoc />
+
     public bool TrySkipColumn(ref ProtocolReader reader, int rowCount)
     {
         return reader.TrySkipBytes((long)rowCount * _length);

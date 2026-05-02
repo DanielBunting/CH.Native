@@ -31,6 +31,16 @@ internal sealed class SchemaCache
     /// <summary>
     /// Evicts all entries for the given table (across all column fingerprints).
     /// </summary>
+    /// <remarks>
+    /// **Case-sensitive.** ClickHouse table identifiers are byte-equal compared,
+    /// so callers must invalidate using the exact casing the entry was inserted
+    /// with. <c>InvalidateTable("MyTable")</c> does <b>not</b> evict an entry
+    /// stored under <c>"mytable"</c>; on a case-insensitive filesystem or
+    /// catalog wrapper this can leave stale schema metadata in the cache. If
+    /// your code paths reference the same table with mixed casing, normalise
+    /// table names at a single boundary before calling either <see cref="Set"/>
+    /// or <see cref="InvalidateTable"/>.
+    /// </remarks>
     public void InvalidateTable(string tableName)
     {
         foreach (var key in _entries.Keys)

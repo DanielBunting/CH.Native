@@ -7,17 +7,24 @@ using Xunit.Abstractions;
 namespace CH.Native.SystemTests.Resilience;
 
 /// <summary>
-/// Probes whether a connection broken by a server-side <c>KILL QUERY</c> or
-/// other in-flight failure correctly flips its <c>CanBePooled</c> flag so the
-/// pool discards it on return. The danger if it doesn't: the broken connection
-/// silently goes back into the pool, the next unrelated rent gets it, and
-/// that caller sees a cryptic protocol failure on a query that should have
-/// worked. This is the classic "poisoned pool" bug.
+/// Pins the positive contract that a server-side <c>KILL QUERY</c> or any
+/// other well-formed <see cref="ClickHouseServerException"/> mid-query keeps
+/// the connection poolable: the wire stays in spec, only the query was
+/// terminated, so the pool reuses the connection on the next rent.
 ///
 /// <para>
-/// Existing <see cref="PoolDiscardOnPoisonTests"/> covers some scenarios via
-/// the protocol layer; this file specifically covers the user-visible
-/// <c>KILL QUERY</c> path and the immediate-after-rent state.
+/// <c>_protocolFatal</c> is reserved for genuine wire corruption (malformed
+/// bytes, unknown message types, trailing bytes after EOS, drain timeouts).
+/// Those modes are exercised end-to-end against a mock server in
+/// <see cref="Streams.PoolDiscardOnPoisonTests"/>; this file's job is the
+/// inverse — proving server exceptions do <i>not</i> trip the poison latch.
+/// </para>
+///
+/// <para>
+/// Why it matters: silently churning a fresh socket after every server-side
+/// error (a kill, a bad SQL, an OOM, a quota breach) would be a meaningful
+/// throughput regression. The classic "poisoned pool" failure mode lives on
+/// the protocol-fatal side, not the server-exception side.
 /// </para>
 /// </summary>
 [Collection("SingleNode")]
@@ -34,15 +41,18 @@ public class BrokenConnectionPoolReturnTests
     }
 
     [Fact]
-    public async Task QueryKilledByServer_ReturnedConnectionIsDiscarded_NextRentGetsCleanConnection()
+    public async Task QueryKilledByServer_ConnectionRemainsPoolable_AndIsReusedOnNextRent()
     {
-        // Pool with a single physical connection — if the broken one isn't
-        // discarded, the next rent has nowhere to fall back and would
-        // surface the bug very loudly.
+        // After the server kills a query, ClickHouse sends a well-formed
+        // ExceptionMessage (typically QUERY_WAS_CANCELLED, code 394). The
+        // wire stays in spec — the kill terminated the query, not the
+        // connection — so _protocolFatal stays false, CanBePooled stays
+        // true, and the pool reuses the same physical connection on the
+        // next rent. This test pins that contract.
         await using var ds = new ClickHouseDataSource(new ClickHouseDataSourceOptions
         {
             Settings = _fx.BuildSettings(),
-            MaxPoolSize = 1,
+            MaxPoolSize = 2,
         });
 
         var queryId = Guid.NewGuid().ToString("N");
@@ -72,16 +82,23 @@ public class BrokenConnectionPoolReturnTests
         }
         await slowTask;
 
-        // Return rent1. The pool should observe CanBePooled = false and discard.
+        var canBePooledAfterKill = rent1.CanBePooled;
+        var statsBeforeReturn = ds.GetStatistics();
+        Assert.True(canBePooledAfterKill,
+            "server-side KILL must NOT poison the connection — the wire stays in spec");
+
         await rent1.DisposeAsync();
 
-        // Next rent — must get a working connection (a fresh socket, not the
-        // poisoned one).
+        // Next rent — must reuse the same physical connection (no new socket).
         await using (var rent2 = await ds.OpenConnectionAsync())
         {
-            var result = await rent2.ExecuteScalarAsync<int>("SELECT 42");
-            Assert.Equal(42, result);
+            // The reused connection is still usable.
+            Assert.Equal(42, await rent2.ExecuteScalarAsync<int>("SELECT 42"));
         }
+
+        var statsAfter = ds.GetStatistics();
+        Assert.Equal(statsBeforeReturn.TotalCreated, statsAfter.TotalCreated);
+        Assert.Equal(0, statsAfter.TotalEvicted);
     }
 
     [Fact]

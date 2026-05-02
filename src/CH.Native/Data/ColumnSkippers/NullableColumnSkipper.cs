@@ -17,7 +17,11 @@ public sealed class NullableColumnSkipper : IColumnSkipper
         _typeName = $"Nullable({innerTypeName})";
     }
 
+    /// <inheritdoc />
+
     public string TypeName => _typeName;
+
+    /// <inheritdoc />
 
     public bool TrySkipColumn(ref ProtocolReader reader, int rowCount)
     {

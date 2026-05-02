@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Runtime.CompilerServices;
 
 namespace CH.Native.Data;
 
@@ -89,7 +90,10 @@ public sealed class TypedColumn<T> : ITypedColumn
     {
         if (_pool != null && _values != null)
         {
-            _pool.Return(_values);
+            // Clear references on return so the previous renter's objects don't
+            // stay rooted in the pool's freelist; skip the cost when T is a pure
+            // value type with no reference fields.
+            _pool.Return(_values, clearArray: RuntimeHelpers.IsReferenceOrContainsReferences<T>());
         }
         _values = null;
     }

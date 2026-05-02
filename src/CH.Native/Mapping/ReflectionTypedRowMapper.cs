@@ -22,6 +22,12 @@ public sealed class ReflectionTypedRowMapper<T> : ITypedRowMapper<T> where T : n
     {
         var properties = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.CanWrite)
+            // [ClickHouseColumn(Ignore = true)] excludes the property from
+            // read-side mapping — same contract as the bulk-insert side and
+            // the slow-path TypeMapper. Without this, the typed fast-path
+            // would silently populate properties the user explicitly opted
+            // out of.
+            .Where(p => p.GetCustomAttribute<ClickHouseColumnAttribute>()?.Ignore != true)
             .ToDictionary(p => GetColumnName(p), StringComparer.OrdinalIgnoreCase);
 
         _setters = new Action<T, ITypedColumn[], int>[columnNames.Length];

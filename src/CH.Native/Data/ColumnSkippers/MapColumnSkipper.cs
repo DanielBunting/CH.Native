@@ -19,7 +19,11 @@ public sealed class MapColumnSkipper : IColumnSkipper
         _typeName = $"Map({keyTypeName}, {valueTypeName})";
     }
 
+    /// <inheritdoc />
+
     public string TypeName => _typeName;
+
+    /// <inheritdoc />
 
     public bool TrySkipColumn(ref ProtocolReader reader, int rowCount)
     {

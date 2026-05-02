@@ -13,7 +13,7 @@ namespace CH.Native.Results;
 /// <summary>
 /// Provides a way to read a forward-only stream of rows from a ClickHouse query result.
 /// </summary>
-public sealed class ClickHouseDataReader : IAsyncDisposable
+public sealed class ClickHouseDataReader : IClickHouseDataReader
 {
     private readonly IAsyncEnumerator<object> _messageEnumerator;
     private readonly ClickHouseConnection? _connection;

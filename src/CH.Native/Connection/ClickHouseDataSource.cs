@@ -367,18 +367,23 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
         }
 
         var age = DateTime.UtcNow - createdAt;
-        if (age > _options.ConnectionLifetime || !conn.CanBePooled)
+        // Cheap pre-checks that reset can't fix: protocol-fatal, busy, etc.
+        // Role state (_rolesExplicitlySet) is intentionally not gated here
+        // because ResetSessionStateAsync below clears it via SET ROLE DEFAULT;
+        // checking CanBePooled before reset would discard every connection
+        // that ever issued SET ROLE (the audit's high-severity finding #1).
+        if (age > _options.ConnectionLifetime || !conn.CanBePooledBeforeReset)
         {
             await DiscardAsync(conn).ConfigureAwait(false);
             return;
         }
 
         // Reset session-scoped state (SET settings, USE database, temp
-        // tables) before returning to the idle stack. ClickHouse persists
-        // these for the session; without reset, the next renter inherits
-        // the previous renter's state. Best-effort: a reset failure
-        // discards the connection rather than leaking state to the next
-        // renter.
+        // tables, role) before returning to the idle stack. ClickHouse
+        // persists these for the session; without reset, the next renter
+        // inherits the previous renter's state. Best-effort: a reset
+        // failure discards the connection rather than leaking state to the
+        // next renter.
         if (_options.ResetSessionStateOnReturn)
         {
             try
@@ -390,6 +395,14 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
                 await DiscardAsync(conn).ConfigureAwait(false);
                 return;
             }
+        }
+
+        // Final eligibility check after reset — covers any latch reset
+        // failed to clear.
+        if (!conn.CanBePooled)
+        {
+            await DiscardAsync(conn).ConfigureAwait(false);
+            return;
         }
 
         _idle.Push(new PoolEntry(conn, createdAt, DateTime.UtcNow));

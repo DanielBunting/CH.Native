@@ -75,6 +75,32 @@ public sealed class RestartableSingleNodeFixture : IAsyncLifetime
     public Task StopContainerAsync() => _container.StopAsync();
 
     /// <summary>
+    /// Hard-kills the underlying container (SIGKILL to PID 1) — the equivalent of
+    /// <c>docker kill --signal=KILL</c>. Distinct from <see cref="StopContainerAsync"/>
+    /// (graceful SIGTERM): callers exercise the path where ClickHouse can't flush
+    /// in-flight queries, can't drain TCP queues, and the kernel hands the client
+    /// RST instead of FIN. Use to probe pool / reader behaviour under abrupt loss.
+    /// </summary>
+    public async Task KillContainerAsync()
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("docker", $"kill --signal=KILL {_container.Id}")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        using var p = System.Diagnostics.Process.Start(psi)
+            ?? throw new InvalidOperationException("Could not start docker CLI");
+        await p.WaitForExitAsync();
+        if (p.ExitCode != 0)
+        {
+            var err = await p.StandardError.ReadToEndAsync();
+            throw new InvalidOperationException(
+                $"docker kill --signal=KILL {_container.Id} exited {p.ExitCode}: {err}");
+        }
+    }
+
+    /// <summary>
     /// (Re)starts the container and waits for the ClickHouse server to accept a
     /// fresh handshake. The fixed host-port binding is preserved across stop/start,
     /// so callers' cached <see cref="ClickHouseConnectionSettings"/> remain valid.

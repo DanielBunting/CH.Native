@@ -1,10 +1,15 @@
 using CH.Native.Ado;
 using CH.Native.Connection;
+using CH.Native.Dapper;
 using Dapper;
 
-// Dapper maps columns to properties by name — enable underscore matching
-// so that e.g. "in_stock" maps to the InStock property.
-Dapper.DefaultTypeMap.MatchNamesWithUnderscores = true;
+// Wires up CH.Native's Dapper integration. As of the parity work for
+// finding #2, this also flips Dapper.DefaultTypeMap.MatchNamesWithUnderscores
+// to true so that snake_case columns (e.g. "in_stock") map to PascalCase
+// properties (InStock) without per-property attributes — matching the
+// snake_case fallback in CH.Native's typed read path. Callers who want
+// raw-name mapping can override the property back to false after this call.
+ClickHouseDapperIntegration.Register();
 
 var connectionString = args.Length > 0 ? args[0] : "Host=localhost;Port=9000";
 var tableName = $"sample_products_{Guid.NewGuid():N}";

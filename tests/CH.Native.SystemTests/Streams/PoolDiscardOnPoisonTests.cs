@@ -7,17 +7,27 @@ using Xunit;
 namespace CH.Native.SystemTests.Streams;
 
 /// <summary>
-/// End-to-end pin: when the bulk-insert pump (or main pump) sets
-/// <c>_protocolFatal</c>, the next pool checkout must return a fresh connection,
-/// not the poisoned one. The pump-level tests already verify
-/// <c>conn.CanBePooled == false</c>; these tests verify the pool actually consults
-/// that flag and discards on return.
+/// End-to-end pin for both directions of the pool's poison contract:
+///
+/// <list type="bullet">
+/// <item><description><b>Discard side.</b> When the bulk-insert pump (or main pump)
+/// sets <c>_protocolFatal</c>, the next pool checkout must return a fresh
+/// connection. The pump-level tests already verify <c>conn.CanBePooled == false</c>;
+/// these tests verify the pool actually consults that flag and discards on
+/// return.</description></item>
+/// <item><description><b>Reuse side.</b> A well-formed server <c>ExceptionMessage</c>
+/// arriving mid-stream — the wire-shape analogue of a server-side <c>KILL QUERY</c>
+/// landing while data is flowing — must <i>not</i> trip <c>_protocolFatal</c>.
+/// The pool reuses the same TCP session on the next rent.</description></item>
+/// </list>
 ///
 /// <para>
-/// Without this guarantee the bulk-insert hardening (L1/L3/L4 in
+/// Without the discard guarantee the bulk-insert hardening (L1/L3/L4 in
 /// <c>ReceiveEndOfStreamAsync</c>) would set the poison flag but the pool would
 /// happily reuse the corrupted-stream connection — a much subtler failure mode
-/// than a deadlock.
+/// than a deadlock. Without the reuse guarantee, every server-reported error
+/// would burn a fresh socket — a meaningful throughput regression on workloads
+/// that legitimately probe the database for errors.
 /// </para>
 /// </summary>
 [Trait(Categories.Name, Categories.Streams)]
@@ -170,6 +180,87 @@ public class PoolDiscardOnPoisonTests
             new Random(0xC0FFEE).NextBytes(junk);
             w.WriteBytes(junk);
         }
+        return bw.WrittenMemory.ToArray();
+    }
+
+    [Fact]
+    public async Task KillMidStream_ConnectionRemainsPoolable_PoolReusesSameSocket()
+    {
+        // Pin the streaming-mid-flight contract: the server delivers some Data
+        // blocks, then a well-formed ExceptionMessage in lieu of the next
+        // message — the wire-shape analogue of a real KILL QUERY landing while
+        // results are streaming. The pump throws ClickHouseServerException to
+        // the caller but does NOT set _protocolFatal, so CanBePooled stays true
+        // and the pool reuses the same TCP session on the next rent.
+        await using var mock = new MockClickHouseServer();
+        mock.Start();
+
+        var options = new ClickHouseDataSourceOptions { Settings = mock.BuildSettings() };
+        await using var dataSource = new ClickHouseDataSource(options);
+
+        var conn1 = await dataSource.OpenConnectionAsync();
+        var session1 = await mock.AcceptNextSessionAsync()
+            .AsTask().WaitAsync(AntiHangTimeout);
+        await session1.HandshakeCompleted.WaitAsync(AntiHangTimeout);
+
+        // Two empty Data blocks then an Exception — no EOS. Mirrors what real
+        // ClickHouse does when a query is killed mid-result-stream: it stops
+        // sending data and surfaces the cancellation as a server exception.
+        session1.EnqueueBytes(BuildEmptyBlocksPlusException(
+            blockCount: 2,
+            errorCode: 394,
+            name: "DB::Exception",
+            message: "Query was cancelled."));
+
+        await Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        {
+            await foreach (var _ in conn1.QueryAsync<int>("SELECT 1")) { }
+        });
+
+        Assert.True(conn1.CanBePooled,
+            "kill mid-stream must NOT poison the connection — the wire stayed in spec");
+
+        await conn1.DisposeAsync();
+
+        // Next rent must reuse the same TCP session — no new accept on the mock.
+        var conn2 = await dataSource.OpenConnectionAsync();
+
+        using var noNewCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        {
+            await mock.AcceptNextSessionAsync(noNewCts.Token);
+        });
+
+        await conn2.DisposeAsync();
+    }
+
+    private static byte[] BuildEmptyBlocksPlusException(
+        int blockCount,
+        int errorCode,
+        string name,
+        string message)
+    {
+        var bw = new System.Buffers.ArrayBufferWriter<byte>();
+        var w = new ProtocolWriter(bw);
+
+        for (int i = 0; i < blockCount; i++)
+        {
+            w.WriteVarInt((ulong)Protocol.ServerMessageType.Data);
+            w.WriteString(string.Empty);
+            Data.BlockInfo.Default.Write(ref w);
+            w.WriteVarInt(0);
+            w.WriteVarInt(0);
+        }
+
+        // ExceptionMessage layout — keep in sync with ExceptionMessage.Read:
+        // Int32 code, String name, String message, String stackTrace, Byte hasNested.
+        w.WriteVarInt((ulong)Protocol.ServerMessageType.Exception);
+        w.WriteInt32(errorCode);
+        w.WriteString(name);
+        w.WriteString(message);
+        w.WriteString(string.Empty);
+        w.WriteByte(0);
+
         return bw.WrittenMemory.ToArray();
     }
 }

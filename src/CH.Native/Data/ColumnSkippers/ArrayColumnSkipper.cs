@@ -11,14 +11,21 @@ public sealed class ArrayColumnSkipper : IColumnSkipper
     private readonly IColumnSkipper _elementSkipper;
     private readonly string _typeName;
 
+    /// <summary>
+    /// Creates an Array skipper that delegates to the element skipper for each value.
+    /// </summary>
+    /// <param name="elementSkipper">Skipper for the array's element type.</param>
+    /// <param name="elementTypeName">ClickHouse element type name, used to render <see cref="TypeName"/>.</param>
     public ArrayColumnSkipper(IColumnSkipper elementSkipper, string elementTypeName)
     {
         _elementSkipper = elementSkipper;
         _typeName = $"Array({elementTypeName})";
     }
 
+    /// <inheritdoc />
     public string TypeName => _typeName;
 
+    /// <inheritdoc />
     public bool TrySkipColumn(ref ProtocolReader reader, int rowCount)
     {
         if (rowCount == 0)

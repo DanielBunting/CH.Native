@@ -62,6 +62,20 @@ public sealed class DateTime64ColumnWriter : IColumnWriter<DateTime>
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// <see cref="DateTimeKind"/> handling:
+    /// <list type="bullet">
+    ///   <item><description><c>Utc</c> — written verbatim.</description></item>
+    ///   <item><description><c>Local</c> — converted to UTC before encoding.</description></item>
+    ///   <item><description><c>Unspecified</c> — treated as already-UTC. <b>Silent</b>:
+    ///     legacy code, JSON deserializers, or EF projections that hand back an
+    ///     unspecified-kind DateTime representing local time will be inserted at
+    ///     the wrong instant by the local UTC offset. Callers uncertain about
+    ///     kind should normalise via <c>DateTime.SpecifyKind(value, DateTimeKind.Utc)</c>
+    ///     (if the value really is UTC) or <c>DateTime.SpecifyKind(value, DateTimeKind.Local).ToUniversalTime()</c>
+    ///     (if it represents local wall-clock time) before binding.</description></item>
+    /// </list>
+    /// </remarks>
     public void WriteValue(ref ProtocolWriter writer, DateTime value)
     {
         var utcValue = value.Kind == DateTimeKind.Local ? value.ToUniversalTime() : value;

@@ -77,6 +77,20 @@ public sealed partial class ClickHouseLogger
         Message = "Progress handler threw and was suppressed to keep the wire well-defined: {ErrorMessage}")]
     public partial void ProgressHandlerThrew(string errorMessage, Exception? exception);
 
+    /// <summary>
+    /// Logs that <c>AllowInsecureTls</c> is enabled on a connection that just opened.
+    /// Defence-in-depth audit warning: the flag silently disables certificate
+    /// validation, which is fine for development but a production footgun.
+    /// Emitted once per <see cref="ClickHouseConnection"/> on successful open
+    /// (a fresh instance can open at most once, so the call site is naturally
+    /// single-shot per connection).
+    /// </summary>
+    [LoggerMessage(
+        EventId = 6,
+        Level = LogLevel.Warning,
+        Message = "AllowInsecureTls is enabled for {Host}:{Port} — TLS certificate validation is disabled. Do not use in production.")]
+    public partial void AllowInsecureTlsEnabled(string host, int port);
+
     #endregion
 
     #region Query Events
