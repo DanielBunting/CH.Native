@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
+using CH.Native.Commands;
 using CH.Native.Connection;
 using CH.Native.Numerics;
 using CH.Native.Results;
@@ -168,6 +169,22 @@ public sealed class ClickHouseQueryable<T> : IQueryable<T>, IOrderedQueryable<T>
     {
         var (sql, parameters) = _provider.TranslateToSqlWithParameters(_expression);
         return SqlLiteralFormatter.RenderInline(sql, parameters);
+    }
+
+    /// <summary>
+    /// Returns the SQL that the executor will actually send to ClickHouse, with
+    /// captured constants emitted as <c>{name:Type}</c> placeholders bound to a
+    /// parallel <see cref="ClickHouseParameterCollection"/>. This is the form
+    /// used at execution time (server-side parameter substitution), and the
+    /// SQL-injection-safe shape regardless of value contents.
+    /// </summary>
+    /// <returns>
+    /// The placeholder-bearing SQL plus the parameter collection that resolves
+    /// each placeholder.
+    /// </returns>
+    public (string Sql, ClickHouseParameterCollection Parameters) ToParameterizedSql()
+    {
+        return _provider.TranslateToSqlWithParameters(_expression);
     }
 }
 

@@ -32,26 +32,8 @@ public class BulkInsertBackpressureTests : IAsyncLifetime
         _output = output;
     }
 
-    public Task InitializeAsync() => SafeRemoveAllToxicsAsync();
-    public Task DisposeAsync() => SafeRemoveAllToxicsAsync();
-
-    // Toxiproxy's admin endpoint can briefly return 503 after a heavy chaos
-    // test; cleanup is best-effort with bounded retry.
-    private async Task SafeRemoveAllToxicsAsync()
-    {
-        for (int attempt = 0; attempt < 5; attempt++)
-        {
-            try
-            {
-                await _proxy.Client.RemoveAllToxicsAsync(ToxiproxyFixture.ProxyName);
-                return;
-            }
-            catch (System.Net.Http.HttpRequestException) when (attempt < 4)
-            {
-                await Task.Delay(200);
-            }
-        }
-    }
+    public Task InitializeAsync() => _proxy.ResetProxyAsync();
+    public Task DisposeAsync() => _proxy.ResetProxyAsync();
 
     private const int RowCount = 2_000_000;
     private const int BandwidthBytesPerSec = 4 * 1024 * 1024; // 4 MB/s — fast enough for CI, slow enough to throttle
@@ -111,7 +93,7 @@ public class BulkInsertBackpressureTests : IAsyncLifetime
         }
         finally
         {
-            await SafeRemoveAllToxicsAsync();
+            await _proxy.ResetProxyAsync();
             await harness.DisposeAsync();
         }
     }
@@ -160,7 +142,7 @@ public class BulkInsertBackpressureTests : IAsyncLifetime
             // toxic gates writes — if the cancel propagation deadlocked, this
             // wait would time out at the test framework's level; assertion here
             // just pins the upper bound.
-            await SafeRemoveAllToxicsAsync();
+            await _proxy.ResetProxyAsync();
 
             // A fresh connection still works against the same table.
             await using var fresh = new ClickHouseConnection(_proxy.BuildSettings());
@@ -175,19 +157,28 @@ public class BulkInsertBackpressureTests : IAsyncLifetime
         }
         finally
         {
-            await SafeRemoveAllToxicsAsync();
+            await _proxy.ResetProxyAsync();
             await harness.DisposeAsync();
         }
     }
 
     private static async IAsyncEnumerable<BackpressureRow> GenerateRowsAsync(int count)
     {
-        // Yield with a fast producer (no awaits) — but we still need IAsyncEnumerable
-        // so the inserter takes the streaming path. A trivial Task.Yield keeps the
-        // method genuinely async without throttling the producer.
+        // The payload must be incompressible per row, otherwise LZ4 (the default
+        // compression) collapses an identical-string corpus to a few MB on the wire
+        // and the bandwidth toxic never gates the stream. We mix a per-row random
+        // suffix into a fixed prefix so the row shape stays uniform but each row's
+        // bytes differ.
+        var rng = new Random(42);
+        var suffix = new byte[40];
         for (int i = 0; i < count; i++)
         {
-            yield return new BackpressureRow { Id = i, Payload = "x_payload_value_for_backpressure_test" };
+            rng.NextBytes(suffix);
+            yield return new BackpressureRow
+            {
+                Id = i,
+                Payload = "x_" + Convert.ToHexString(suffix),
+            };
             if ((i & 0xFFFF) == 0) await Task.Yield();
         }
     }

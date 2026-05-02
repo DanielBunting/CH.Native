@@ -32,23 +32,19 @@ public class ClosureCaptureTests : IAsyncLifetime
     [Fact]
     public async Task Closure_CapturedScalar_BecomesParameter()
     {
-        // The markdown specifies that captured scalars should be PARAMETERISED
-        // (no inline value in the SQL). The current implementation inlines them as
-        // escaped literals (ClickHouseExpressionVisitor.cs constant emit). This
-        // test pins the markdown's expected behaviour and is therefore EXPECTED
-        // TO FAIL until the implementation switches to parameter binding.
-        // See: /Users/db/.claude/plans/can-you-investigate-users-db-src-danielb-inherited-tarjan.md
+        // Captured scalars must hit the wire as ClickHouse parameters
+        // ({name:Type} placeholders + a bound parameter collection), never as
+        // inlined literals. ToParameterizedSql() exposes the form the executor
+        // actually sends; ToSql() is a separate human-readable accessor that
+        // keeps inlining for diagnostic display.
         int min = 5;
         var query = _conn.Table<LinqFactRow>(_facts.TableName).Where(x => x.Id == min);
-        string sql = query.ToSql();
+        var (sql, parameters) = ((ClickHouseQueryable<LinqFactRow>)query).ToParameterizedSql();
 
-        // Expected: the SQL contains a parameter placeholder, not the literal "5".
         Assert.DoesNotContain(" 5", sql);
-        Assert.True(
-            sql.Contains("?", StringComparison.Ordinal) ||
-            sql.Contains("@", StringComparison.Ordinal) ||
-            sql.Contains("{", StringComparison.Ordinal),
-            $"Expected parameter placeholder in SQL, got: {sql}");
+        Assert.Contains("{", sql, StringComparison.Ordinal);
+        Assert.Equal(1, parameters.Count);
+        Assert.Equal(5, parameters[0].Value);
 
         // And it must still execute correctly.
         var rows = await query.ToListAsync();

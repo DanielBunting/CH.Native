@@ -87,6 +87,15 @@ public class ToxiproxyFixture : IAsyncLifetime
         }
     }
 
+    /// <summary>
+    /// Recreates the proxy from scratch (DELETE + POST). This kicks any stale connections
+    /// and wipes server-side toxic goroutine state. Without this between tests, partially-
+    /// drained connections from earlier chaos toxics (bandwidth, latency, slow_close) hold
+    /// the proxy mutex and the admin API hangs until Go's WriteTimeout cuts in with 503.
+    /// </summary>
+    public Task ResetProxyAsync() =>
+        Client.EnsureProxyAsync(ProxyName, $"0.0.0.0:{InternalProxyPort}", "clickhouse:9000");
+
     public ClickHouseConnectionSettings BuildSettings(
         Action<ClickHouseConnectionSettingsBuilder>? configure = null)
     {

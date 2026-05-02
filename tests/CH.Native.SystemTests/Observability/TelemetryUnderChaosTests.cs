@@ -32,28 +32,8 @@ public class TelemetryUnderChaosTests : IAsyncLifetime
         _output = output;
     }
 
-    public Task InitializeAsync() => SafeRemoveAllToxicsAsync();
-    public Task DisposeAsync() => SafeRemoveAllToxicsAsync();
-
-    // Toxiproxy's admin endpoint can briefly return 503 after a heavy chaos
-    // test (the upstream ClickHouse container takes a moment to recover from
-    // reset_peer). Cleanup is best-effort — retry a few times so a transient
-    // hiccup doesn't cascade through the whole class.
-    private async Task SafeRemoveAllToxicsAsync()
-    {
-        for (int attempt = 0; attempt < 5; attempt++)
-        {
-            try
-            {
-                await _proxy.Client.RemoveAllToxicsAsync(ToxiproxyFixture.ProxyName);
-                return;
-            }
-            catch (HttpRequestException) when (attempt < 4)
-            {
-                await Task.Delay(200);
-            }
-        }
-    }
+    public Task InitializeAsync() => _proxy.ResetProxyAsync();
+    public Task DisposeAsync() => _proxy.ResetProxyAsync();
 
     [Fact]
     public async Task MidStreamConnectionDrop_ProducesSpanWithErrorStatus()
@@ -102,7 +82,7 @@ public class TelemetryUnderChaosTests : IAsyncLifetime
         catch (Exception ex) { caught = ex; }
         finally
         {
-            await SafeRemoveAllToxicsAsync();
+            await _proxy.ResetProxyAsync();
         }
 
         Assert.NotNull(caught);
@@ -153,7 +133,7 @@ public class TelemetryUnderChaosTests : IAsyncLifetime
         }
         finally
         {
-            await SafeRemoveAllToxicsAsync();
+            await _proxy.ResetProxyAsync();
         }
 
         // Lifecycle balance: every started activity stopped — no leaks.

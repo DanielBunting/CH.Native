@@ -33,22 +33,8 @@ public class HealthCheckTimingProbeTests : IAsyncLifetime
         _output = output;
     }
 
-    public Task InitializeAsync() => SafeRemoveAllToxicsAsync();
-    public Task DisposeAsync() => SafeRemoveAllToxicsAsync();
-
-    private async Task SafeRemoveAllToxicsAsync()
-    {
-        for (int i = 0; i < 5; i++)
-        {
-            try
-            {
-                await _fx.Client.RemoveAllToxicsAsync(_fx.ProxyAName);
-                await _fx.Client.RemoveAllToxicsAsync(_fx.ProxyBName);
-                return;
-            }
-            catch (System.Net.Http.HttpRequestException) when (i < 4) { await Task.Delay(200); }
-        }
-    }
+    public Task InitializeAsync() => _fx.ResetProxiesAsync();
+    public Task DisposeAsync() => _fx.ResetProxiesAsync();
 
     [Fact]
     public async Task HealthCheckInterval_2Seconds_RecoveryLandsWithinAFewIntervals()
@@ -81,7 +67,7 @@ public class HealthCheckTimingProbeTests : IAsyncLifetime
         // Restore B; from this moment until the next health-check probe succeeds,
         // queries should keep landing on A. Measure how long until B is in rotation
         // again.
-        await SafeRemoveAllToxicsAsync();
+        await _fx.ResetProxiesAsync();
         var watch = Stopwatch.StartNew();
 
         // Poll for a B-landing query. Cap at 6× interval so a regression (interval
@@ -160,7 +146,7 @@ public class HealthCheckTimingProbeTests : IAsyncLifetime
         }
         finally
         {
-            await SafeRemoveAllToxicsAsync();
+            await _fx.ResetProxiesAsync();
         }
     }
 }

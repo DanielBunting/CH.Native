@@ -26,8 +26,8 @@ public class PoolValidateOnRentTests : IAsyncLifetime
         _output = output;
     }
 
-    public Task InitializeAsync() => _fx.Client.RemoveAllToxicsAsync(ToxiproxyFixture.ProxyName);
-    public Task DisposeAsync() => _fx.Client.RemoveAllToxicsAsync(ToxiproxyFixture.ProxyName);
+    public Task InitializeAsync() => _fx.ResetProxyAsync();
+    public Task DisposeAsync() => _fx.ResetProxyAsync();
 
     [Fact]
     public async Task ValidateOnRent_True_HealthyConnection_RentsSuccessfully()

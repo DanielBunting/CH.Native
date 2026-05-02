@@ -25,25 +25,8 @@ public class LoadBalancingDistributionProbeTests : IAsyncLifetime
         _output = output;
     }
 
-    public Task InitializeAsync() => SafeRemoveAllToxicsAsync();
-    public Task DisposeAsync() => SafeRemoveAllToxicsAsync();
-
-    private async Task SafeRemoveAllToxicsAsync()
-    {
-        for (int attempt = 0; attempt < 5; attempt++)
-        {
-            try
-            {
-                await _fx.Client.RemoveAllToxicsAsync(_fx.ProxyAName);
-                await _fx.Client.RemoveAllToxicsAsync(_fx.ProxyBName);
-                return;
-            }
-            catch (System.Net.Http.HttpRequestException) when (attempt < 4)
-            {
-                await Task.Delay(200);
-            }
-        }
-    }
+    public Task InitializeAsync() => _fx.ResetProxiesAsync();
+    public Task DisposeAsync() => _fx.ResetProxiesAsync();
 
     [Fact]
     public async Task LoadBalancing_AfterTransientFailure_RecoversToBalanced()
@@ -78,7 +61,7 @@ public class LoadBalancingDistributionProbeTests : IAsyncLifetime
         }
         _output.WriteLine($"Phase 1 (B reset_peer): A={phase1A}, B={phase1B}");
 
-        await SafeRemoveAllToxicsAsync();
+        await _fx.ResetProxiesAsync();
         await Task.Delay(500);
 
         // Phase 2: B back. Probe the recovery — log distribution. Don't pin the exact
@@ -212,7 +195,7 @@ public class LoadBalancingDistributionProbeTests : IAsyncLifetime
         }
         finally
         {
-            await SafeRemoveAllToxicsAsync();
+            await _fx.ResetProxiesAsync();
         }
     }
 }

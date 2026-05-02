@@ -36,8 +36,8 @@ public class BulkInsertBufferSurvivalTests : IAsyncLifetime
         _output = output;
     }
 
-    public Task InitializeAsync() => _proxy.Client.RemoveAllToxicsAsync(ToxiproxyFixture.ProxyName);
-    public Task DisposeAsync() => _proxy.Client.RemoveAllToxicsAsync(ToxiproxyFixture.ProxyName);
+    public Task InitializeAsync() => _proxy.ResetProxyAsync();
+    public Task DisposeAsync() => _proxy.ResetProxyAsync();
 
     [Fact]
     public async Task Flush_RowMapperException_BufferRetainsRows()

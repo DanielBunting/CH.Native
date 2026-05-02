@@ -21,10 +21,11 @@ public class NetworkChaosTests : IAsyncLifetime
         _proxy = proxy;
     }
 
-    // Reset toxics before AND after each test. A failing assertion can short-circuit a
-    // test before its finally block, leaving toxics in place that poison the next test.
-    public Task InitializeAsync() => _proxy.Client.RemoveAllToxicsAsync(ToxiproxyFixture.ProxyName);
-    public Task DisposeAsync() => _proxy.Client.RemoveAllToxicsAsync(ToxiproxyFixture.ProxyName);
+    // Recreate the proxy before and after each test. RemoveAllToxics alone leaks server-side
+    // goroutine state (bandwidth/latency/slow_close toxics with stale connections) that
+    // eventually deadlocks the proxy mutex, surfacing as Go-net/http WriteTimeout 503s.
+    public Task InitializeAsync() => _proxy.ResetProxyAsync();
+    public Task DisposeAsync() => _proxy.ResetProxyAsync();
 
     [Fact]
     public async Task Latency_DownstreamSlowdown_QueriesStillSucceed()

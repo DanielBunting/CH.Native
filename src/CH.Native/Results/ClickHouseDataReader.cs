@@ -132,9 +132,12 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
                 advanced = await MoveToNextBlockAsync(cancellationToken);
             }
         }
-        catch
+        catch (Exception ex)
         {
             _failed = true;
+            // Streaming-query activity is owned by this reader, so error attribution
+            // must happen here — the caller's catch never sees the activity.
+            ClickHouseActivitySource.SetError(_activity, ex);
             throw;
         }
 

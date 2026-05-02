@@ -1,3 +1,4 @@
 #nullable enable
+CH.Native.Linq.ClickHouseQueryable<T>.ToParameterizedSql() -> (string! Sql, CH.Native.Commands.ClickHouseParameterCollection! Parameters)
 CH.Native.Telemetry.ClickHouseLogger.AllowInsecureTlsEnabled(string! host, int port) -> void
 static CH.Native.Telemetry.ClickHouseActivitySource.StartBulkInsert(string! tableName, string? database, string? queryId, CH.Native.Telemetry.TelemetrySettings? settings) -> System.Diagnostics.Activity?

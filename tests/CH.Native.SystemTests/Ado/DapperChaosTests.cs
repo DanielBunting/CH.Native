@@ -34,24 +34,8 @@ public class DapperChaosTests : IAsyncLifetime
         _output = output;
     }
 
-    public Task InitializeAsync() => SafeRemoveAllToxicsAsync();
-    public Task DisposeAsync() => SafeRemoveAllToxicsAsync();
-
-    private async Task SafeRemoveAllToxicsAsync()
-    {
-        for (int attempt = 0; attempt < 5; attempt++)
-        {
-            try
-            {
-                await _proxy.Client.RemoveAllToxicsAsync(ToxiproxyFixture.ProxyName);
-                return;
-            }
-            catch (System.Net.Http.HttpRequestException) when (attempt < 4)
-            {
-                await Task.Delay(200);
-            }
-        }
-    }
+    public Task InitializeAsync() => _proxy.ResetProxyAsync();
+    public Task DisposeAsync() => _proxy.ResetProxyAsync();
 
     private string ConnectionString =>
         $"Host={_proxy.ProxyHost};Port={_proxy.ProxyPort};Username={ToxiproxyFixture.Username};Password={ToxiproxyFixture.Password}";
@@ -100,7 +84,7 @@ public class DapperChaosTests : IAsyncLifetime
             finally
             {
                 await injectTask;
-                await SafeRemoveAllToxicsAsync();
+                await _proxy.ResetProxyAsync();
             }
 
             Assert.NotNull(caught);

@@ -24,6 +24,7 @@ public sealed class BulkInsertAndRetryTelemetryProbeTests
     private const string SourceName = "CH.Native";
 
     [Collection("RestartableSingleNode")]
+    [Trait(Categories.Name, Categories.Observability)]
     public sealed class BulkInsert : IAsyncLifetime
     {
         private readonly RestartableSingleNodeFixture _fixture;
@@ -134,6 +135,7 @@ public sealed class BulkInsertAndRetryTelemetryProbeTests
     }
 
     [Collection("MultiToxiproxy")]
+    [Trait(Categories.Name, Categories.Observability)]
     public sealed class RetryTracePropagation : IAsyncLifetime
     {
         private readonly MultiToxiproxyFixture _fx;
@@ -145,22 +147,8 @@ public sealed class BulkInsertAndRetryTelemetryProbeTests
             _output = output;
         }
 
-        public Task InitializeAsync() => SafeRemoveAllToxicsAsync();
-        public Task DisposeAsync() => SafeRemoveAllToxicsAsync();
-
-        private async Task SafeRemoveAllToxicsAsync()
-        {
-            for (int i = 0; i < 5; i++)
-            {
-                try
-                {
-                    await _fx.Client.RemoveAllToxicsAsync(_fx.ProxyAName);
-                    await _fx.Client.RemoveAllToxicsAsync(_fx.ProxyBName);
-                    return;
-                }
-                catch (System.Net.Http.HttpRequestException) when (i < 4) { await Task.Delay(200); }
-            }
-        }
+        public Task InitializeAsync() => _fx.ResetProxiesAsync();
+        public Task DisposeAsync() => _fx.ResetProxiesAsync();
 
         [Fact]
         public async Task RetryActivities_ShareTraceId_AcrossFailoverAttempts()
@@ -202,7 +190,7 @@ public sealed class BulkInsertAndRetryTelemetryProbeTests
             }
             finally
             {
-                await SafeRemoveAllToxicsAsync();
+                await _fx.ResetProxiesAsync();
             }
 
             var clickhouseSpans = stopped.ToList();
