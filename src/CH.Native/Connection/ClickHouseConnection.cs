@@ -837,10 +837,25 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// <summary>
     /// Closes the connection gracefully.
     /// </summary>
-    public async Task CloseAsync()
+    public Task CloseAsync() => CloseAsync(CancellationToken.None);
+
+    /// <summary>
+    /// Closes the connection gracefully.
+    /// </summary>
+    /// <param name="cancellationToken">
+    /// Checked once at entry; if signalled this throws
+    /// <see cref="OperationCanceledException"/> before any teardown runs. The
+    /// teardown itself (PipeWriter/PipeReader.CompleteAsync, SslStream.DisposeAsync,
+    /// TcpClient.Dispose) is uncancellable by API surface, so once close starts
+    /// it always completes — the token cannot interrupt mid-flight without
+    /// leaking the underlying TCP/SSL handles.
+    /// </param>
+    public async Task CloseAsync(CancellationToken cancellationToken)
     {
         if (!_isOpen)
             return;
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         ClickHouseMeter.DecrementConnections();
         _logger.ConnectionClosed(_settings.Host);
@@ -856,7 +871,20 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// The query method will throw an OperationCanceledException after cancellation.
     /// The connection remains usable for subsequent queries after cancellation.
     /// </remarks>
-    public async Task CancelCurrentQueryAsync()
+    public Task CancelCurrentQueryAsync() => CancelCurrentQueryAsync(CancellationToken.None);
+
+    /// <summary>
+    /// Cancels the currently executing query on the server.
+    /// If no query is executing, this method does nothing.
+    /// </summary>
+    /// <param name="cancellationToken">
+    /// Token applied to the Cancel-packet write. If it fires mid-write the
+    /// underlying <see cref="System.IO.Pipelines.PipeWriter"/> flush throws
+    /// <see cref="OperationCanceledException"/>, which <see cref="SendCancelAsync"/>
+    /// swallows under its best-effort contract — the connection is left in the
+    /// state the partial write produced and should be discarded.
+    /// </param>
+    public async Task CancelCurrentQueryAsync(CancellationToken cancellationToken)
     {
         string? queryId;
         lock (_queryLock)
@@ -867,7 +895,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         if (queryId == null)
             return; // No query to cancel
 
-        await SendCancelAsync();
+        await SendCancelAsync(cancellationToken);
     }
 
     /// <summary>
@@ -2446,7 +2474,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// Sends a cancel message to the server to abort the current query.
     /// This is an internal method called when cancellation is requested.
     /// </summary>
-    internal async Task SendCancelAsync()
+    /// <param name="cancellationToken">
+    /// Optional token applied to the Cancel-packet write. Default is
+    /// <see cref="CancellationToken.None"/> because the existing
+    /// <c>cancellationToken.Register(() =&gt; _ = SendCancelAsync())</c>
+    /// callers fire this *from* a token that is already cancelled — passing it
+    /// in would short-circuit the very write that performs the cancel.
+    /// </param>
+    internal async Task SendCancelAsync(CancellationToken cancellationToken = default)
     {
         if (_pipeWriter == null || !_isOpen)
             return;
@@ -2457,7 +2492,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             var writer = new ProtocolWriter(bufferWriter);
             CancelMessage.Write(ref writer);
 
-            await WriteAndFlushAsync(bufferWriter.WrittenMemory, CancellationToken.None);
+            await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
 
             _cancellationRequested = true;
         }

@@ -1,4 +1,7 @@
 #nullable enable
+CH.Native.Connection.ClickHouseConnection.CancelCurrentQueryAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
+CH.Native.Connection.ClickHouseConnection.CloseAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 CH.Native.Linq.ClickHouseQueryable<T>.ToParameterizedSql() -> (string! Sql, CH.Native.Commands.ClickHouseParameterCollection! Parameters)
+CH.Native.Resilience.ResilientConnection.CloseAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 CH.Native.Telemetry.ClickHouseLogger.AllowInsecureTlsEnabled(string! host, int port) -> void
 static CH.Native.Telemetry.ClickHouseActivitySource.StartBulkInsert(string! tableName, string? database, string? queryId, CH.Native.Telemetry.TelemetrySettings? settings) -> System.Diagnostics.Activity?

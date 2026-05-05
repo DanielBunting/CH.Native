@@ -337,9 +337,19 @@ public sealed class ResilientConnection : IAsyncDisposable
     /// <summary>
     /// Closes the current connection.
     /// </summary>
-    public async Task CloseAsync()
+    public Task CloseAsync() => CloseAsync(CancellationToken.None);
+
+    /// <summary>
+    /// Closes the current connection.
+    /// </summary>
+    /// <param name="cancellationToken">
+    /// Token to abort waiting on the connection lock. Honored before the lock
+    /// is acquired; once acquired the close runs to completion to avoid
+    /// leaving the resilient wrapper in a half-closed state.
+    /// </param>
+    public async Task CloseAsync(CancellationToken cancellationToken)
     {
-        await _connectionLock.WaitAsync().ConfigureAwait(false);
+        await _connectionLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             await CloseCurrentConnectionAsync().ConfigureAwait(false);

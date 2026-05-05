@@ -94,9 +94,15 @@ public sealed class ClickHouseDbConnection : DbConnection
     public override ConnectionState State => _state;
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Dispatched via <see cref="Task.Run(Func{Task})"/> so a captured
+    /// single-threaded <see cref="SynchronizationContext"/> (UI / classic
+    /// ASP.NET) cannot deadlock against the handshake's async continuation.
+    /// Async callers should prefer <see cref="OpenAsync(CancellationToken)"/>.
+    /// </remarks>
     public override void Open()
     {
-        OpenAsync(CancellationToken.None).GetAwaiter().GetResult();
+        Task.Run(() => OpenAsync(CancellationToken.None)).GetAwaiter().GetResult();
     }
 
     /// <inheritdoc />
@@ -123,9 +129,15 @@ public sealed class ClickHouseDbConnection : DbConnection
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Dispatched via <see cref="Task.Run(Func{Task})"/> so a captured
+    /// single-threaded <see cref="SynchronizationContext"/> (UI / classic
+    /// ASP.NET) cannot deadlock against the close handshake's async continuation.
+    /// Async callers should prefer <see cref="CloseAsync()"/>.
+    /// </remarks>
     public override void Close()
     {
-        CloseAsync().GetAwaiter().GetResult();
+        Task.Run(() => CloseAsync()).GetAwaiter().GetResult();
     }
 
     /// <inheritdoc />

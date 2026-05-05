@@ -144,9 +144,15 @@ public sealed class ClickHouseDbCommand : DbCommand
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Dispatched via <see cref="Task.Run{TResult}(Func{Task{TResult}})"/> so a
+    /// captured single-threaded <see cref="SynchronizationContext"/> (UI / classic
+    /// ASP.NET) cannot deadlock against the async continuation. Async callers
+    /// should prefer <see cref="ExecuteNonQueryAsync(CancellationToken)"/>.
+    /// </remarks>
     public override int ExecuteNonQuery()
     {
-        return ExecuteNonQueryAsync(CancellationToken.None).GetAwaiter().GetResult();
+        return Task.Run(() => ExecuteNonQueryAsync(CancellationToken.None)).GetAwaiter().GetResult();
     }
 
     /// <inheritdoc />
@@ -174,9 +180,15 @@ public sealed class ClickHouseDbCommand : DbCommand
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Dispatched via <see cref="Task.Run{TResult}(Func{Task{TResult}})"/> so a
+    /// captured single-threaded <see cref="SynchronizationContext"/> (UI / classic
+    /// ASP.NET) cannot deadlock against the async continuation. Async callers
+    /// should prefer <see cref="ExecuteScalarAsync(CancellationToken)"/>.
+    /// </remarks>
     public override object? ExecuteScalar()
     {
-        return ExecuteScalarAsync(CancellationToken.None).GetAwaiter().GetResult();
+        return Task.Run(() => ExecuteScalarAsync(CancellationToken.None)).GetAwaiter().GetResult();
     }
 
     /// <inheritdoc />
@@ -204,9 +216,15 @@ public sealed class ClickHouseDbCommand : DbCommand
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Dispatched via <see cref="Task.Run{TResult}(Func{Task{TResult}})"/> so a
+    /// captured single-threaded <see cref="SynchronizationContext"/> (UI / classic
+    /// ASP.NET) cannot deadlock against the async continuation. Async callers
+    /// should prefer <see cref="DbCommand.ExecuteReaderAsync(CommandBehavior, CancellationToken)"/>.
+    /// </remarks>
     protected override DbDataReader ExecuteDbDataReader(CommandBehavior behavior)
     {
-        return ExecuteDbDataReaderAsync(behavior, CancellationToken.None)
+        return Task.Run(() => ExecuteDbDataReaderAsync(behavior, CancellationToken.None))
             .GetAwaiter().GetResult();
     }
 
