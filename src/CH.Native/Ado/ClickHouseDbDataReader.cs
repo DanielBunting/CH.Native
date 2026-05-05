@@ -56,13 +56,18 @@ public sealed class ClickHouseDbDataReader : DbDataReader
     /// The underlying reader requires ReadAsync() to be called to get schema.
     /// We eagerly init and track the first row so ADO.NET semantics are correct.
     /// </summary>
+    /// <remarks>
+    /// Called from sync property getters (FieldCount, HasRows, GetOrdinal, …) so the
+    /// inner ReadAsync is dispatched via <see cref="Task.Run{TResult}(Func{Task{TResult}})"/>
+    /// to escape any captured single-threaded <see cref="SynchronizationContext"/>
+    /// — without that hop a UI / classic-ASP.NET caller would deadlock the first
+    /// time it touched a schema property.
+    /// </remarks>
     private void EnsureInitialized()
     {
         if (!_initialized)
         {
-            // Synchronously initialize - this is needed for ADO.NET compatibility
-            // where FieldCount, GetName, etc. must work before Read() is called
-            _hasFirstRow = _inner.ReadAsync().GetAwaiter().GetResult();
+            _hasFirstRow = Task.Run(() => _inner.ReadAsync().AsTask()).GetAwaiter().GetResult();
             _initialized = true;
         }
     }
@@ -112,9 +117,15 @@ public sealed class ClickHouseDbDataReader : DbDataReader
     public override object this[string name] => GetValue(GetOrdinal(name));
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Dispatched via <see cref="Task.Run{TResult}(Func{Task{TResult}})"/> so a
+    /// captured single-threaded <see cref="SynchronizationContext"/> (UI / classic
+    /// ASP.NET) cannot deadlock against the async continuation. Async callers
+    /// should prefer <see cref="ReadAsync(CancellationToken)"/>.
+    /// </remarks>
     public override bool Read()
     {
-        return ReadAsync(CancellationToken.None).GetAwaiter().GetResult();
+        return Task.Run(() => ReadAsync(CancellationToken.None)).GetAwaiter().GetResult();
     }
 
     /// <inheritdoc />
@@ -173,9 +184,15 @@ public sealed class ClickHouseDbDataReader : DbDataReader
         => Task.FromResult(false);
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Dispatched via <see cref="Task.Run(Func{Task})"/> so a captured
+    /// single-threaded <see cref="SynchronizationContext"/> (UI / classic
+    /// ASP.NET) cannot deadlock against the inner reader's async dispose.
+    /// Async callers should prefer <see cref="CloseAsync()"/>.
+    /// </remarks>
     public override void Close()
     {
-        CloseAsync().GetAwaiter().GetResult();
+        Task.Run(() => CloseAsync()).GetAwaiter().GetResult();
     }
 
     /// <inheritdoc />

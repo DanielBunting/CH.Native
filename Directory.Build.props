@@ -7,6 +7,11 @@
     <!-- Reproducible builds: identical sources produce byte-identical assemblies. -->
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <!-- PublicApiAnalyzer drift breaks the build instead of hiding in the warning
+         pile. Without this, RS0016 (symbol missing from PublicAPI.{Shipped,Unshipped}.txt)
+         and RS0017 (symbol listed but no longer in code) ship at warning severity
+         and CI passes silently — surface entries can be forgotten on PRs. -->
+    <WarningsAsErrors>$(WarningsAsErrors);RS0016;RS0017;RS0024;RS0025;RS0026;RS0027;RS0036;RS0037;RS0041</WarningsAsErrors>
   </PropertyGroup>
 
   <!-- NuGet Package Configuration -->
