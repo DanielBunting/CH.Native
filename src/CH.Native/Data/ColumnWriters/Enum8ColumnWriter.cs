@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Column writer for Enum8 values.
 /// Enum8 is stored as Int8 (sbyte).
 /// </summary>
-public sealed class Enum8ColumnWriter : IColumnWriter<sbyte>
+internal sealed class Enum8ColumnWriter : IColumnWriter<sbyte>
 {
     /// <inheritdoc />
     public string TypeName => "Enum8";

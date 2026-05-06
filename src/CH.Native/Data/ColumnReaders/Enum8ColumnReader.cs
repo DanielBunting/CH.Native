@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Column reader for Enum8 values.
 /// Enum8 is stored as an Int8 (sbyte) on the wire.
 /// </summary>
-public sealed class Enum8ColumnReader : IColumnReader<sbyte>
+internal sealed class Enum8ColumnReader : IColumnReader<sbyte>
 {
     /// <inheritdoc />
     public string TypeName => "Enum8";

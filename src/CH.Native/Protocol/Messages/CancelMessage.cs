@@ -3,7 +3,7 @@ namespace CH.Native.Protocol.Messages;
 /// <summary>
 /// Cancel message sent to abort a running query on the server.
 /// </summary>
-public static class CancelMessage
+internal static class CancelMessage
 {
     /// <summary>
     /// Writes the cancel message to the protocol writer.

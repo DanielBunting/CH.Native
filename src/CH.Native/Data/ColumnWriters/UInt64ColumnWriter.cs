@@ -5,7 +5,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for UInt64 (ulong) values.
 /// </summary>
-public sealed class UInt64ColumnWriter : IColumnWriter<ulong>
+internal sealed class UInt64ColumnWriter : IColumnWriter<ulong>
 {
     /// <inheritdoc />
     public string TypeName => "UInt64";

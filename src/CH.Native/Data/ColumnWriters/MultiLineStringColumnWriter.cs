@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for MultiLineString values (alias over Array(Array(Point))).
 /// </summary>
-public sealed class MultiLineStringColumnWriter : IColumnWriter<Point[][]>
+internal sealed class MultiLineStringColumnWriter : IColumnWriter<Point[][]>
 {
     private readonly ArrayColumnWriter<Point[]> _inner =
         new(new ArrayColumnWriter<Point>(new PointColumnWriter()));

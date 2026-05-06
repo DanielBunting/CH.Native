@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// ClickHouse stores UUID as 16 bytes with each 8-byte half reversed.
 /// This writer handles the byte order transformation from .NET Guid to ClickHouse wire format.
 /// </summary>
-public sealed class UuidColumnWriter : IColumnWriter<Guid>
+internal sealed class UuidColumnWriter : IColumnWriter<Guid>
 {
     /// <inheritdoc />
     public string TypeName => "UUID";

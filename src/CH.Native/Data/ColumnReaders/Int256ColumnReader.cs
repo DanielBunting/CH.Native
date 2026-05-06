@@ -10,7 +10,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Since .NET doesn't have a native 256-bit integer type,
 /// BigInteger is used to represent Int256 values.
 /// </remarks>
-public sealed class Int256ColumnReader : IColumnReader<BigInteger>
+internal sealed class Int256ColumnReader : IColumnReader<BigInteger>
 {
     /// <inheritdoc />
     public string TypeName => "Int256";

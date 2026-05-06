@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Column reader for Decimal32 values.
 /// Decimal32 is stored as Int32 with a scale factor.
 /// </summary>
-public sealed class Decimal32ColumnReader : IColumnReader<decimal>
+internal sealed class Decimal32ColumnReader : IColumnReader<decimal>
 {
     private readonly int _scale;
     private readonly decimal _divisor;

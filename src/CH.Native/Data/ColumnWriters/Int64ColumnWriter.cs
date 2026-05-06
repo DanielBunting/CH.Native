@@ -5,7 +5,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for Int64 (long) values.
 /// </summary>
-public sealed class Int64ColumnWriter : IColumnWriter<long>
+internal sealed class Int64ColumnWriter : IColumnWriter<long>
 {
     /// <inheritdoc />
     public string TypeName => "Int64";

@@ -23,7 +23,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Null values are rejected — JSON columns are non-nullable on the wire.
 /// </para>
 /// </remarks>
-public sealed class JsonColumnWriter : IColumnWriter<JsonDocument>
+internal sealed class JsonColumnWriter : IColumnWriter<JsonDocument>
 {
     // JsonStringSerializationVersion (1) — tells the server the column data that
     // follows is per-row length-prefixed UTF-8 JSON strings, not the flattened

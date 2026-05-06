@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for UInt16 (ushort) values.
 /// </summary>
-public sealed class UInt16ColumnReader : IColumnReader<ushort>
+internal sealed class UInt16ColumnReader : IColumnReader<ushort>
 {
     /// <inheritdoc />
     public string TypeName => "UInt16";

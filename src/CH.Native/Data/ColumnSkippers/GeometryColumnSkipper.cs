@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnSkippers;
 /// Column skipper for Geometry. Reads discriminators to determine per-arm row counts,
 /// then delegates to each arm skipper in global arm order.
 /// </summary>
-public sealed class GeometryColumnSkipper : IColumnSkipper
+internal sealed class GeometryColumnSkipper : IColumnSkipper
 {
     private const int ArmCount = 6;
     private const byte NullDiscriminator = 0xFF;

@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for UInt32 (uint) values.
 /// </summary>
-public sealed class UInt32ColumnReader : IColumnReader<uint>
+internal sealed class UInt32ColumnReader : IColumnReader<uint>
 {
     /// <inheritdoc />
     public string TypeName => "UInt32";

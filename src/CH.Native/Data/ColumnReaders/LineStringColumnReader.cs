@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for LineString values (alias over Array(Point), wire-identical to Ring).
 /// </summary>
-public sealed class LineStringColumnReader : IColumnReader<Point[]>
+internal sealed class LineStringColumnReader : IColumnReader<Point[]>
 {
     private readonly ArrayColumnReader<Point> _inner = new(new PointColumnReader());
 

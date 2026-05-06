@@ -15,7 +15,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <c>[0x01, 0x02, 0x03, 0x04]</c> before being passed to
 /// <see cref="IPAddress(ReadOnlySpan{byte})"/>.
 /// </remarks>
-public sealed class IPv4ColumnReader : IColumnReader<IPAddress>
+internal sealed class IPv4ColumnReader : IColumnReader<IPAddress>
 {
     /// <inheritdoc />
     public string TypeName => "IPv4";

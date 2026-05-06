@@ -3,7 +3,7 @@ namespace CH.Native.Protocol.Messages;
 /// <summary>
 /// Server exception message containing error details.
 /// </summary>
-public sealed record ExceptionMessage
+internal sealed record ExceptionMessage
 {
     /// <summary>
     /// Gets the error code.

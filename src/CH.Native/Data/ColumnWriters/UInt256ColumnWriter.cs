@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for UInt256 values (stored as BigInteger).
 /// </summary>
-public sealed class UInt256ColumnWriter : IColumnWriter<BigInteger>
+internal sealed class UInt256ColumnWriter : IColumnWriter<BigInteger>
 {
     /// <inheritdoc />
     public string TypeName => "UInt256";

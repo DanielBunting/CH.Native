@@ -11,7 +11,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// 2. All element values concatenated
 /// </remarks>
 /// <typeparam name="T">The element type.</typeparam>
-public sealed class ArrayColumnWriter<T> : IColumnWriter<T[]>
+internal sealed class ArrayColumnWriter<T> : IColumnWriter<T[]>
 {
     private readonly IColumnWriter<T> _elementWriter;
 

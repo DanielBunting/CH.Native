@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnSkippers;
 /// Column skipper for LowCardinality(T) values.
 /// Wire format: version, flags/indexType, dictSize, dict values, indexCount, indices.
 /// </summary>
-public sealed class LowCardinalityColumnSkipper : IColumnSkipper
+internal sealed class LowCardinalityColumnSkipper : IColumnSkipper
 {
     private readonly IColumnSkipper _innerSkipper;
     private readonly string _typeName;

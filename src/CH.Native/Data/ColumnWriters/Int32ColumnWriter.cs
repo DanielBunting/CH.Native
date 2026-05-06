@@ -5,7 +5,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for Int32 (int) values.
 /// </summary>
-public sealed class Int32ColumnWriter : IColumnWriter<int>
+internal sealed class Int32ColumnWriter : IColumnWriter<int>
 {
     /// <inheritdoc />
     public string TypeName => "Int32";

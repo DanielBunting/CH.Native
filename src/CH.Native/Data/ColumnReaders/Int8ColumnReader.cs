@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for Int8 (sbyte) values.
 /// </summary>
-public sealed class Int8ColumnReader : IColumnReader<sbyte>
+internal sealed class Int8ColumnReader : IColumnReader<sbyte>
 {
     /// <inheritdoc />
     public string TypeName => "Int8";

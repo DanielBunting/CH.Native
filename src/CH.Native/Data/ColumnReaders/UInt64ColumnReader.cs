@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for UInt64 (ulong) values.
 /// </summary>
-public sealed class UInt64ColumnReader : IColumnReader<ulong>
+internal sealed class UInt64ColumnReader : IColumnReader<ulong>
 {
     /// <inheritdoc />
     public string TypeName => "UInt64";

@@ -169,7 +169,7 @@ public static class ClickHouseActivitySource
     /// </summary>
     /// <param name="activity">The Activity to update.</param>
     /// <param name="serverInfo">The ServerHello response containing server information.</param>
-    public static void SetServerInfo(Activity? activity, ServerHello serverInfo)
+    internal static void SetServerInfo(Activity? activity, ServerHello serverInfo)
     {
         if (activity == null)
             return;

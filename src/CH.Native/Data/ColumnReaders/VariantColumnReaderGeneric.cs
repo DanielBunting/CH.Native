@@ -12,7 +12,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// so primitive arm values are stored unboxed. The wire format is identical to
 /// <see cref="VariantColumnReader"/>.
 /// </remarks>
-public sealed class VariantColumnReader<T0, T1> : IColumnReader<VariantValue<T0, T1>>
+internal sealed class VariantColumnReader<T0, T1> : IColumnReader<VariantValue<T0, T1>>
 {
     private const ulong DiscriminatorVersion0 = 0;
 

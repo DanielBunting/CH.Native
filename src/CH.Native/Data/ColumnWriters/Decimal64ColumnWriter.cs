@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Column writer for Decimal64 values.
 /// Decimal64 is stored as Int64 with a scale factor.
 /// </summary>
-public sealed class Decimal64ColumnWriter : IColumnWriter<decimal>
+internal sealed class Decimal64ColumnWriter : IColumnWriter<decimal>
 {
     private readonly int _scale;
     private readonly decimal _multiplier;

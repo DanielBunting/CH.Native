@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Column reader for Polygon values (alias over Array(Ring), wire-identical to MultiLineString).
 /// Outer array is rings; first ring is the outer boundary, subsequent are holes.
 /// </summary>
-public sealed class PolygonColumnReader : IColumnReader<Point[][]>
+internal sealed class PolygonColumnReader : IColumnReader<Point[][]>
 {
     private readonly ArrayColumnReader<Point[]> _inner =
         new(new ArrayColumnReader<Point>(new PointColumnReader()));

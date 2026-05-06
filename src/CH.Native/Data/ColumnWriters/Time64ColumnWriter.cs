@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Column writer for Time64 values.
 /// Time64 stores high-precision time-of-day as Int64 sub-seconds since 00:00:00 with configurable precision (0-9).
 /// </summary>
-public sealed class Time64ColumnWriter : IColumnWriter<TimeOnly>
+internal sealed class Time64ColumnWriter : IColumnWriter<TimeOnly>
 {
     private readonly int _precision;
     private readonly long _ticksPerUnit;

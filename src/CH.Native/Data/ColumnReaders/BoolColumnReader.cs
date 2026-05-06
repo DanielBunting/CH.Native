@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Column reader for Bool values.
 /// Bool in ClickHouse is stored as UInt8 (0 = false, non-zero = true).
 /// </summary>
-public sealed class BoolColumnReader : IColumnReader<bool>
+internal sealed class BoolColumnReader : IColumnReader<bool>
 {
     /// <inheritdoc />
     public string TypeName => "Bool";

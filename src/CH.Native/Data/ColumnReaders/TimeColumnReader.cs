@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Column reader for Time values.
 /// Time in ClickHouse is stored as Int32 seconds since 00:00:00 (wall-clock, no date).
 /// </summary>
-public sealed class TimeColumnReader : IColumnReader<TimeOnly>
+internal sealed class TimeColumnReader : IColumnReader<TimeOnly>
 {
     private const int SecondsPerDay = 86_400;
 

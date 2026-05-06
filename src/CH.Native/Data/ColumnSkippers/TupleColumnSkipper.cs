@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnSkippers;
 /// Column skipper for Tuple(T1, T2, ...) values.
 /// Wire format: Each element type's data concatenated.
 /// </summary>
-public sealed class TupleColumnSkipper : IColumnSkipper
+internal sealed class TupleColumnSkipper : IColumnSkipper
 {
     private readonly IColumnSkipper[] _elementSkippers;
     private readonly string _typeName;
@@ -39,7 +39,7 @@ public sealed class TupleColumnSkipper : IColumnSkipper
 /// Column skipper for Nested(name1 Type1, name2 Type2, ...) values.
 /// Same wire format as Tuple - each element type's data concatenated.
 /// </summary>
-public sealed class NestedColumnSkipper : IColumnSkipper
+internal sealed class NestedColumnSkipper : IColumnSkipper
 {
     private readonly IColumnSkipper[] _elementSkippers;
     private readonly string _typeName;

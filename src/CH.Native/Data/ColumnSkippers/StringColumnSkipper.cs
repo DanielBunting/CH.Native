@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnSkippers;
 /// Column skipper for String values.
 /// Reads varint length prefix for each string and skips the bytes.
 /// </summary>
-public sealed class StringColumnSkipper : IColumnSkipper
+internal sealed class StringColumnSkipper : IColumnSkipper
 {
     public string TypeName => "String";
 
@@ -25,7 +25,7 @@ public sealed class StringColumnSkipper : IColumnSkipper
 /// Column skipper for FixedString(N) values.
 /// Each row is exactly N bytes.
 /// </summary>
-public sealed class FixedStringColumnSkipper : IColumnSkipper
+internal sealed class FixedStringColumnSkipper : IColumnSkipper
 {
     private readonly int _length;
 

@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for Polygon values (alias over Array(Ring), wire-identical to MultiLineString).
 /// </summary>
-public sealed class PolygonColumnWriter : IColumnWriter<Point[][]>
+internal sealed class PolygonColumnWriter : IColumnWriter<Point[][]>
 {
     private readonly ArrayColumnWriter<Point[]> _inner =
         new(new ArrayColumnWriter<Point>(new PointColumnWriter()));

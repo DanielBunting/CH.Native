@@ -18,7 +18,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Returns object[][] where each row is an array of (fieldValue1[], fieldValue2[], ...).
 /// Each fieldValue is an array because Nested represents repeated structured data.
 /// </remarks>
-public sealed class NestedColumnReader : IColumnReader<object[]>
+internal sealed class NestedColumnReader : IColumnReader<object[]>
 {
     private readonly IColumnReader[] _fieldReaders;
     private readonly string[] _fieldNames;

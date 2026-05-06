@@ -18,7 +18,7 @@ namespace CH.Native.Compression;
 /// <item><term>CompressedData</term><description>[varies] Compressed payload</description></item>
 /// </list>
 /// </remarks>
-public static class CompressedBlock
+internal static class CompressedBlock
 {
     private const int ChecksumSize = 16;
     private const int HeaderSize = 9; // Algorithm (1) + CompressedSize (4) + UncompressedSize (4)
@@ -349,7 +349,7 @@ public static class CompressedBlock
 /// Represents a compressed block result using a pooled byte array.
 /// Must be disposed after use to return the buffer to the pool.
 /// </summary>
-public readonly struct CompressedResult : IDisposable
+internal readonly struct CompressedResult : IDisposable
 {
     private readonly byte[] _buffer;
 
@@ -390,7 +390,7 @@ public readonly struct CompressedResult : IDisposable
 /// Represents a decompressed block result using a pooled byte array.
 /// Must be disposed after use to return the buffer to the pool.
 /// </summary>
-public readonly struct DecompressedResult : IDisposable
+internal readonly struct DecompressedResult : IDisposable
 {
     private readonly byte[] _buffer;
 
@@ -431,7 +431,7 @@ public readonly struct DecompressedResult : IDisposable
 /// Represents compressed block data read from a ProtocolReader, using a pooled byte array.
 /// Must be disposed after use to return the buffer to the pool.
 /// </summary>
-public readonly struct PooledCompressedData : IDisposable
+internal readonly struct PooledCompressedData : IDisposable
 {
     private readonly byte[] _buffer;
 

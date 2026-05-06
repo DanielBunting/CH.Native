@@ -8,7 +8,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Time64 stores high-precision time-of-day as Int64 sub-seconds since 00:00:00 with configurable precision (0-9).
 /// Always returns TimeOnly; values at precision 8/9 are truncated to 100ns ticks (mirrors DateTime64 behaviour).
 /// </summary>
-public sealed class Time64ColumnReader : IColumnReader<TimeOnly>
+internal sealed class Time64ColumnReader : IColumnReader<TimeOnly>
 {
     private const long SecondsPerDay = 86_400;
 

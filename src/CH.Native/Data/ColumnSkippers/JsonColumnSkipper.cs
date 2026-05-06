@@ -13,7 +13,7 @@ namespace CH.Native.Data.ColumnSkippers;
 /// </list>
 /// Version 3 (typed paths + Dynamic sub-column) is not yet fully implemented.
 /// </remarks>
-public sealed class JsonColumnSkipper : IColumnSkipper
+internal sealed class JsonColumnSkipper : IColumnSkipper
 {
     private const ulong JsonDeprecatedObjectSerializationVersion = 0;
     private const ulong JsonStringSerializationVersion = 1;

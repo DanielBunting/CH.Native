@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Column reader for Date values.
 /// Date in ClickHouse is stored as UInt16 representing days since 1970-01-01.
 /// </summary>
-public sealed class DateColumnReader : IColumnReader<DateOnly>
+internal sealed class DateColumnReader : IColumnReader<DateOnly>
 {
     private static readonly DateOnly UnixEpoch = new(1970, 1, 1);
 

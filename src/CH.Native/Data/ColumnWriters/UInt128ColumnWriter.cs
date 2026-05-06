@@ -5,7 +5,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for UInt128 values.
 /// </summary>
-public sealed class UInt128ColumnWriter : IColumnWriter<UInt128>
+internal sealed class UInt128ColumnWriter : IColumnWriter<UInt128>
 {
     /// <inheritdoc />
     public string TypeName => "UInt128";

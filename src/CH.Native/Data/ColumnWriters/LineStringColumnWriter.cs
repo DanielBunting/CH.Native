@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for LineString values (alias over Array(Point), wire-identical to Ring).
 /// </summary>
-public sealed class LineStringColumnWriter : IColumnWriter<Point[]>
+internal sealed class LineStringColumnWriter : IColumnWriter<Point[]>
 {
     private readonly ArrayColumnWriter<Point> _inner = new(new PointColumnWriter());
 

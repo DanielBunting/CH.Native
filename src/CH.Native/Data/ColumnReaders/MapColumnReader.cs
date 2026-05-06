@@ -13,7 +13,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// </remarks>
 /// <typeparam name="TKey">The key type.</typeparam>
 /// <typeparam name="TValue">The value type.</typeparam>
-public sealed class MapColumnReader<TKey, TValue> : IColumnReader<Dictionary<TKey, TValue>>
+internal sealed class MapColumnReader<TKey, TValue> : IColumnReader<Dictionary<TKey, TValue>>
     where TKey : notnull
 {
     private readonly IColumnReader<TKey> _keyReader;

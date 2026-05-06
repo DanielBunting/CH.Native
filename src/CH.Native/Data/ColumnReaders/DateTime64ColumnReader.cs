@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Column reader for DateTime64 values.
 /// DateTime64 stores high-precision timestamps as Int64 with configurable precision (0-9).
 /// </summary>
-public sealed class DateTime64ColumnReader : IColumnReader<DateTime>
+internal sealed class DateTime64ColumnReader : IColumnReader<DateTime>
 {
     private static readonly DateTime UnixEpoch = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 

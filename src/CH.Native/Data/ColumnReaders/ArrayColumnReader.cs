@@ -13,7 +13,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// 2. All element values concatenated
 /// </remarks>
 /// <typeparam name="T">The element type.</typeparam>
-public sealed class ArrayColumnReader<T> : IColumnReader<T[]>
+internal sealed class ArrayColumnReader<T> : IColumnReader<T[]>
 {
     private readonly IColumnReader<T> _elementReader;
 

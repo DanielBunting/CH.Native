@@ -24,7 +24,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// </code>
 /// NULL rows consume a discriminator byte (0xFF) but contribute no arm data.
 /// </remarks>
-public sealed class GeometryColumnReader : IColumnReader<Geometry>
+internal sealed class GeometryColumnReader : IColumnReader<Geometry>
 {
     private const int ArmCount = 6;
     private const byte NullDiscriminator = 0xFF;

@@ -5,7 +5,7 @@ namespace CH.Native.Compression;
 /// <summary>
 /// Zstandard compressor implementation for ClickHouse native protocol.
 /// </summary>
-public sealed class ZstdCompressor : ICompressor
+internal sealed class ZstdCompressor : ICompressor
 {
     /// <summary>
     /// Gets the singleton instance of the Zstd compressor.

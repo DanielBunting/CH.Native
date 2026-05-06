@@ -22,7 +22,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// for disposing returned documents.
 /// </para>
 /// </remarks>
-public sealed class JsonColumnReader : IColumnReader<JsonDocument>
+internal sealed class JsonColumnReader : IColumnReader<JsonDocument>
 {
     private const ulong JsonDeprecatedObjectSerializationVersion = 0;
     private const ulong JsonStringSerializationVersion = 1;

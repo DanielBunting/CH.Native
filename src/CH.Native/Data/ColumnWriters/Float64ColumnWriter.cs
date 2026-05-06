@@ -5,7 +5,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for Float64 (double) values.
 /// </summary>
-public sealed class Float64ColumnWriter : IColumnWriter<double>
+internal sealed class Float64ColumnWriter : IColumnWriter<double>
 {
     /// <inheritdoc />
     public string TypeName => "Float64";

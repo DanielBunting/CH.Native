@@ -5,7 +5,7 @@ namespace CH.Native.Data.ColumnSkippers;
 /// <summary>
 /// Column skipper for Point (Tuple(Float64, Float64)) — 16 bytes per row.
 /// </summary>
-public sealed class PointColumnSkipper : FixedSizeColumnSkipper
+internal sealed class PointColumnSkipper : FixedSizeColumnSkipper
 {
     public PointColumnSkipper() : base(16) { }
     public override string TypeName => "Point";
@@ -14,7 +14,7 @@ public sealed class PointColumnSkipper : FixedSizeColumnSkipper
 /// <summary>
 /// Column skipper for Ring (Array(Point)).
 /// </summary>
-public sealed class RingColumnSkipper : IColumnSkipper
+internal sealed class RingColumnSkipper : IColumnSkipper
 {
     private readonly ArrayColumnSkipper _inner = new(new PointColumnSkipper(), "Point");
     public string TypeName => "Ring";
@@ -25,7 +25,7 @@ public sealed class RingColumnSkipper : IColumnSkipper
 /// <summary>
 /// Column skipper for LineString (Array(Point), wire-identical to Ring).
 /// </summary>
-public sealed class LineStringColumnSkipper : IColumnSkipper
+internal sealed class LineStringColumnSkipper : IColumnSkipper
 {
     private readonly ArrayColumnSkipper _inner = new(new PointColumnSkipper(), "Point");
     public string TypeName => "LineString";
@@ -36,7 +36,7 @@ public sealed class LineStringColumnSkipper : IColumnSkipper
 /// <summary>
 /// Column skipper for MultiLineString (Array(Array(Point))).
 /// </summary>
-public sealed class MultiLineStringColumnSkipper : IColumnSkipper
+internal sealed class MultiLineStringColumnSkipper : IColumnSkipper
 {
     private readonly ArrayColumnSkipper _inner =
         new(new ArrayColumnSkipper(new PointColumnSkipper(), "Point"), "Array(Point)");
@@ -49,7 +49,7 @@ public sealed class MultiLineStringColumnSkipper : IColumnSkipper
 /// <summary>
 /// Column skipper for Polygon (Array(Ring), wire-identical to MultiLineString).
 /// </summary>
-public sealed class PolygonColumnSkipper : IColumnSkipper
+internal sealed class PolygonColumnSkipper : IColumnSkipper
 {
     private readonly ArrayColumnSkipper _inner =
         new(new ArrayColumnSkipper(new PointColumnSkipper(), "Point"), "Ring");
@@ -62,7 +62,7 @@ public sealed class PolygonColumnSkipper : IColumnSkipper
 /// <summary>
 /// Column skipper for MultiPolygon (Array(Polygon)).
 /// </summary>
-public sealed class MultiPolygonColumnSkipper : IColumnSkipper
+internal sealed class MultiPolygonColumnSkipper : IColumnSkipper
 {
     private readonly ArrayColumnSkipper _inner =
         new(new ArrayColumnSkipper(

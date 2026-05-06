@@ -8,7 +8,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Column writer for Decimal128 values.
 /// Decimal128 is stored as Int128 with a scale factor.
 /// </summary>
-public sealed class Decimal128ColumnWriter : IColumnWriter<ClickHouseDecimal>
+internal sealed class Decimal128ColumnWriter : IColumnWriter<ClickHouseDecimal>
 {
     private readonly int _scale;
 

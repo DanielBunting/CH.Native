@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for Float32 (float) values.
 /// </summary>
-public sealed class Float32ColumnReader : IColumnReader<float>
+internal sealed class Float32ColumnReader : IColumnReader<float>
 {
     /// <inheritdoc />
     public string TypeName => "Float32";

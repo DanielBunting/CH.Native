@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Column writer for BFloat16 (brain float) values.
 /// Truncates the low 16 mantissa bits of the float32 to match the ClickHouse server-side cast and clickhouse-cs.
 /// </summary>
-public sealed class BFloat16ColumnWriter : IColumnWriter<float>
+internal sealed class BFloat16ColumnWriter : IColumnWriter<float>
 {
     /// <inheritdoc />
     public string TypeName => "BFloat16";

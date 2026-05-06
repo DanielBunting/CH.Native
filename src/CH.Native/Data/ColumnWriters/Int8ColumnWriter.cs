@@ -5,7 +5,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for Int8 (sbyte) values.
 /// </summary>
-public sealed class Int8ColumnWriter : IColumnWriter<sbyte>
+internal sealed class Int8ColumnWriter : IColumnWriter<sbyte>
 {
     /// <inheritdoc />
     public string TypeName => "Int8";

@@ -15,7 +15,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Returns System.Tuple instances to match the reference ClickHouse driver behavior.
 /// Supports named tuples like Tuple(id UInt64, name String) where field names are preserved.
 /// </remarks>
-public sealed class TupleColumnReader : IColumnReader<object>
+internal sealed class TupleColumnReader : IColumnReader<object>
 {
     private readonly IColumnReader[] _elementReaders;
     private readonly string[]? _fieldNames;

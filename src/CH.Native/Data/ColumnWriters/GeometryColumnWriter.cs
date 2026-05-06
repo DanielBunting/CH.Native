@@ -12,7 +12,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// BASIC mode is always used on write — the server accepts it regardless of its internal
 /// granule strategy. The reader handles both BASIC and COMPACT modes for completeness.
 /// </remarks>
-public sealed class GeometryColumnWriter : IColumnWriter<Geometry>
+internal sealed class GeometryColumnWriter : IColumnWriter<Geometry>
 {
     private const int ArmCount = 6;
     private const byte NullDiscriminator = 0xFF;

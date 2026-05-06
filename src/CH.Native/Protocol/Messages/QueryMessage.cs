@@ -3,7 +3,7 @@ namespace CH.Native.Protocol.Messages;
 /// <summary>
 /// Query message sent to execute SQL on the server.
 /// </summary>
-public readonly struct QueryMessage
+internal readonly struct QueryMessage
 {
     /// <summary>
     /// Query stage: 0 = FetchColumns, 1 = WithMergeableState, 2 = Complete.

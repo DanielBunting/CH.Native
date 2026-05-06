@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for Ring values (alias over Array(Point)).
 /// </summary>
-public sealed class RingColumnWriter : IColumnWriter<Point[]>
+internal sealed class RingColumnWriter : IColumnWriter<Point[]>
 {
     private readonly ArrayColumnWriter<Point> _inner = new(new PointColumnWriter());
 

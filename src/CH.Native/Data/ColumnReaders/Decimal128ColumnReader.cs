@@ -10,7 +10,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Decimal128 is stored as Int128 with a scale factor.
 /// Returns <see cref="ClickHouseDecimal"/> to preserve full 38-digit precision.
 /// </summary>
-public sealed class Decimal128ColumnReader : IColumnReader<ClickHouseDecimal>
+internal sealed class Decimal128ColumnReader : IColumnReader<ClickHouseDecimal>
 {
     private readonly int _scale;
 

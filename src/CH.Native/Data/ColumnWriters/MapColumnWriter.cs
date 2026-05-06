@@ -13,7 +13,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// </remarks>
 /// <typeparam name="TKey">The key type.</typeparam>
 /// <typeparam name="TValue">The value type.</typeparam>
-public sealed class MapColumnWriter<TKey, TValue> : IColumnWriter<Dictionary<TKey, TValue>>
+internal sealed class MapColumnWriter<TKey, TValue> : IColumnWriter<Dictionary<TKey, TValue>>
     where TKey : notnull
 {
     private readonly IColumnWriter<TKey> _keyWriter;

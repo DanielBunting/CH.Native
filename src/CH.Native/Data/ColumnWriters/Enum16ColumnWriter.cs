@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Column writer for Enum16 values.
 /// Enum16 is stored as Int16 (short).
 /// </summary>
-public sealed class Enum16ColumnWriter : IColumnWriter<short>
+internal sealed class Enum16ColumnWriter : IColumnWriter<short>
 {
     /// <inheritdoc />
     public string TypeName => "Enum16";

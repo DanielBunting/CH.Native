@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnSkippers;
 /// Column skipper for Map(K, V) values.
 /// Wire format: offsets array (UInt64 per row), then all keys, then all values.
 /// </summary>
-public sealed class MapColumnSkipper : IColumnSkipper
+internal sealed class MapColumnSkipper : IColumnSkipper
 {
     private readonly IColumnSkipper _keySkipper;
     private readonly IColumnSkipper _valueSkipper;

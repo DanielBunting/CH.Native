@@ -5,7 +5,7 @@ namespace CH.Native.Compression;
 /// <summary>
 /// LZ4 compressor implementation for ClickHouse native protocol.
 /// </summary>
-public sealed class Lz4Compressor : ICompressor
+internal sealed class Lz4Compressor : ICompressor
 {
     /// <summary>
     /// Gets the singleton instance of the LZ4 compressor.

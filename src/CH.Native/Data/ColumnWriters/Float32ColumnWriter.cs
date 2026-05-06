@@ -5,7 +5,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for Float32 (float) values.
 /// </summary>
-public sealed class Float32ColumnWriter : IColumnWriter<float>
+internal sealed class Float32ColumnWriter : IColumnWriter<float>
 {
     /// <inheritdoc />
     public string TypeName => "Float32";

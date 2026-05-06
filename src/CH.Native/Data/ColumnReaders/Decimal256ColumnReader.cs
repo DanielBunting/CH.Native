@@ -10,7 +10,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Decimal256 is stored as a 256-bit integer with a scale factor.
 /// Returns <see cref="ClickHouseDecimal"/> to preserve full 76-digit precision.
 /// </summary>
-public sealed class Decimal256ColumnReader : IColumnReader<ClickHouseDecimal>
+internal sealed class Decimal256ColumnReader : IColumnReader<ClickHouseDecimal>
 {
     private readonly int _scale;
 
