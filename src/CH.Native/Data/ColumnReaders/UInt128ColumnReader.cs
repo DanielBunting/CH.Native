@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for UInt128 values.
 /// </summary>
-public sealed class UInt128ColumnReader : IColumnReader<UInt128>
+internal sealed class UInt128ColumnReader : IColumnReader<UInt128>
 {
     /// <inheritdoc />
     public string TypeName => "UInt128";

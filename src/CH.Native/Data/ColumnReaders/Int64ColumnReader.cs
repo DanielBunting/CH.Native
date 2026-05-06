@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for Int64 (long) values.
 /// </summary>
-public sealed class Int64ColumnReader : IColumnReader<long>
+internal sealed class Int64ColumnReader : IColumnReader<long>
 {
     /// <inheritdoc />
     public string TypeName => "Int64";

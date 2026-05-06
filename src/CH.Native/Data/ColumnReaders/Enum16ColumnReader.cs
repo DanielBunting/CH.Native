@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Column reader for Enum16 values.
 /// Enum16 is stored as an Int16 (short) on the wire.
 /// </summary>
-public sealed class Enum16ColumnReader : IColumnReader<short>
+internal sealed class Enum16ColumnReader : IColumnReader<short>
 {
     /// <inheritdoc />
     public string TypeName => "Enum16";

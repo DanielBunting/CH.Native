@@ -13,7 +13,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Expects object[] because the tuple arity and element types are not known at compile time.
 /// Supports named tuples like Tuple(id UInt64, name String) where field names are preserved.
 /// </remarks>
-public sealed class TupleColumnWriter : IColumnWriter<object[]>
+internal sealed class TupleColumnWriter : IColumnWriter<object[]>
 {
     private readonly IColumnWriter[] _elementWriters;
     private readonly string[]? _fieldNames;

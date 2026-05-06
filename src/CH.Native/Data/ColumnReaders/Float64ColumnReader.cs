@@ -8,7 +8,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for Float64 (double) values.
 /// </summary>
-public sealed class Float64ColumnReader : IColumnReader<double>
+internal sealed class Float64ColumnReader : IColumnReader<double>
 {
     /// <inheritdoc />
     public string TypeName => "Float64";

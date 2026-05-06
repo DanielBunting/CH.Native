@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Column writer for Time values.
 /// Time in ClickHouse is stored as Int32 seconds since 00:00:00 (wall-clock, no date).
 /// </summary>
-public sealed class TimeColumnWriter : IColumnWriter<TimeOnly>
+internal sealed class TimeColumnWriter : IColumnWriter<TimeOnly>
 {
     /// <inheritdoc />
     public string TypeName => "Time";

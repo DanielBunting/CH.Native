@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for MultiPolygon values (alias over Array(Polygon) = Array(Array(Array(Point)))).
 /// </summary>
-public sealed class MultiPolygonColumnReader : IColumnReader<Point[][][]>
+internal sealed class MultiPolygonColumnReader : IColumnReader<Point[][][]>
 {
     private readonly ArrayColumnReader<Point[][]> _inner =
         new(new ArrayColumnReader<Point[]>(

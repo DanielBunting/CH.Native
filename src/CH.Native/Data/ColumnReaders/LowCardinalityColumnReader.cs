@@ -23,7 +23,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// The CLR type returned is the same as the inner type (dictionary encoding is transparent).
 /// </remarks>
 /// <typeparam name="T">The underlying type.</typeparam>
-public sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
+internal sealed class LowCardinalityColumnReader<T> : IColumnReader<T>
 {
     private readonly IColumnReader<T> _innerReader;
     private readonly bool _isNullable;

@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for UInt8 (byte) values.
 /// </summary>
-public sealed class UInt8ColumnReader : IColumnReader<byte>
+internal sealed class UInt8ColumnReader : IColumnReader<byte>
 {
     /// <inheritdoc />
     public string TypeName => "UInt8";

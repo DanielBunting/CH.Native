@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for Int16 (short) values.
 /// </summary>
-public sealed class Int16ColumnReader : IColumnReader<short>
+internal sealed class Int16ColumnReader : IColumnReader<short>
 {
     /// <inheritdoc />
     public string TypeName => "Int16";

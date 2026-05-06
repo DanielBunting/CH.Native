@@ -3,7 +3,7 @@ namespace CH.Native.Protocol.Messages;
 /// <summary>
 /// Client hello message sent to initiate the connection handshake.
 /// </summary>
-public readonly struct ClientHello
+internal readonly struct ClientHello
 {
     /// <summary>
     /// Gets the client name sent to the server.

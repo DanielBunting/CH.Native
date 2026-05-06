@@ -5,7 +5,7 @@ namespace CH.Native.Data.ColumnSkippers;
 /// <summary>
 /// Column skipper for FLATTENED <c>Dynamic</c> values (structure version 3, ClickHouse 25.6+).
 /// </summary>
-public sealed class DynamicColumnSkipper : IColumnSkipper
+internal sealed class DynamicColumnSkipper : IColumnSkipper
 {
     private const ulong StructureVersionFlattened = 3;
 

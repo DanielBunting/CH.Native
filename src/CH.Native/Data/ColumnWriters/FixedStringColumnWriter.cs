@@ -14,7 +14,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// substitutes <see cref="NullPlaceholder"/> (an empty <c>byte[]</c> that
 /// <see cref="WriteValue"/> pads to N zero bytes) for null slots.
 /// </remarks>
-public sealed class FixedStringColumnWriter : IColumnWriter<byte[]>
+internal sealed class FixedStringColumnWriter : IColumnWriter<byte[]>
 {
     private readonly int _length;
 

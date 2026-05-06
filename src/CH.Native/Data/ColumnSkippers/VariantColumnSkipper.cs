@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnSkippers;
 /// <summary>
 /// Column skipper for <c>Variant(T1, T2, …, Tn)</c> values.
 /// </summary>
-public sealed class VariantColumnSkipper : IColumnSkipper
+internal sealed class VariantColumnSkipper : IColumnSkipper
 {
     private readonly IColumnSkipper[] _innerSkippers;
     private readonly string _typeName;

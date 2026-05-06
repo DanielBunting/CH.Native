@@ -5,7 +5,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for Int16 (short) values.
 /// </summary>
-public sealed class Int16ColumnWriter : IColumnWriter<short>
+internal sealed class Int16ColumnWriter : IColumnWriter<short>
 {
     /// <inheritdoc />
     public string TypeName => "Int16";

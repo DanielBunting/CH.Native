@@ -5,7 +5,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for UInt8 (byte) values.
 /// </summary>
-public sealed class UInt8ColumnWriter : IColumnWriter<byte>
+internal sealed class UInt8ColumnWriter : IColumnWriter<byte>
 {
     /// <inheritdoc />
     public string TypeName => "UInt8";

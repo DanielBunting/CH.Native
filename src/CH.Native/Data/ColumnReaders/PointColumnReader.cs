@@ -10,7 +10,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <remarks>
 /// Wire format matches the tuple: all X values, then all Y values (columnar layout).
 /// </remarks>
-public sealed class PointColumnReader : IColumnReader<Point>
+internal sealed class PointColumnReader : IColumnReader<Point>
 {
     private readonly Float64ColumnReader _inner = new();
 

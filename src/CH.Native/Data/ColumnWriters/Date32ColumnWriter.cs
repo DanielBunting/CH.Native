@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Date32 in ClickHouse is stored as Int32 representing days since 1970-01-01.
 /// This allows for dates before 1970 (negative values) and dates beyond 2149.
 /// </summary>
-public sealed class Date32ColumnWriter : IColumnWriter<DateOnly>
+internal sealed class Date32ColumnWriter : IColumnWriter<DateOnly>
 {
     private static readonly DateOnly UnixEpoch = new(1970, 1, 1);
 

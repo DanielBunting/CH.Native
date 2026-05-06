@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Column reader for Decimal64 values.
 /// Decimal64 is stored as Int64 with a scale factor.
 /// </summary>
-public sealed class Decimal64ColumnReader : IColumnReader<decimal>
+internal sealed class Decimal64ColumnReader : IColumnReader<decimal>
 {
     private readonly int _scale;
     private readonly decimal _divisor;

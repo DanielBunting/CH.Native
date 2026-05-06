@@ -18,7 +18,7 @@ namespace CH.Native.Data.ColumnWriters;
 ///     column data concatenated in declared order.</description></item>
 /// </list>
 /// </remarks>
-public sealed class DynamicColumnWriter : IColumnWriter<ClickHouseDynamic>
+internal sealed class DynamicColumnWriter : IColumnWriter<ClickHouseDynamic>
 {
     private const ulong StructureVersionFlattened = 3;
 

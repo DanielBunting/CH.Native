@@ -5,7 +5,7 @@ namespace CH.Native.Protocol.Messages;
 /// <summary>
 /// Server data message containing a block of query results.
 /// </summary>
-public sealed class DataMessage
+internal sealed class DataMessage
 {
     /// <summary>
     /// Gets the typed data block.

@@ -11,7 +11,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// 2. All values (default values written for null slots)
 /// </remarks>
 /// <typeparam name="T">The underlying value type.</typeparam>
-public sealed class NullableColumnWriter<T> : IColumnWriter<T?>
+internal sealed class NullableColumnWriter<T> : IColumnWriter<T?>
     where T : struct
 {
     private readonly IColumnWriter<T> _innerWriter;
@@ -124,7 +124,7 @@ public sealed class NullableColumnWriter<T> : IColumnWriter<T?>
 /// 2. All values (default values written for null slots)
 /// </remarks>
 /// <typeparam name="T">The underlying reference type.</typeparam>
-public sealed class NullableRefColumnWriter<T> : IColumnWriter<T?>
+internal sealed class NullableRefColumnWriter<T> : IColumnWriter<T?>
     where T : class
 {
     private readonly IColumnWriter<T> _innerWriter;

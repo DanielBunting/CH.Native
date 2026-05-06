@@ -5,7 +5,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for UInt16 (ushort) values.
 /// </summary>
-public sealed class UInt16ColumnWriter : IColumnWriter<ushort>
+internal sealed class UInt16ColumnWriter : IColumnWriter<ushort>
 {
     /// <inheritdoc />
     public string TypeName => "UInt16";

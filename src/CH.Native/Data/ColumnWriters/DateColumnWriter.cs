@@ -19,7 +19,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <see cref="Date32ColumnWriter"/>.
 /// </para>
 /// </remarks>
-public sealed class DateColumnWriter : IColumnWriter<DateOnly>
+internal sealed class DateColumnWriter : IColumnWriter<DateOnly>
 {
     private static readonly DateOnly UnixEpoch = new(1970, 1, 1);
     private static readonly DateOnly Saturation = UnixEpoch.AddDays(ushort.MaxValue); // 2149-06-06

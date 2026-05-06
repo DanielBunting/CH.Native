@@ -22,7 +22,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <para>Requires <c>SET output_format_native_use_flattened_dynamic_and_json_serialization = 1</c>
 /// on the server session (CH.Native injects this by default on ClickHouse 25.6+).</para>
 /// </remarks>
-public sealed class DynamicColumnReader : IColumnReader
+internal sealed class DynamicColumnReader : IColumnReader
 {
     private const ulong StructureVersionFlattened = 3;
 

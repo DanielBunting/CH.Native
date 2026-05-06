@@ -11,7 +11,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Also accepts Tuple&lt;double,double&gt; and ValueTuple&lt;double,double&gt; for interop
 /// with other drivers' surface.
 /// </remarks>
-public sealed class PointColumnWriter : IColumnWriter<Point>
+internal sealed class PointColumnWriter : IColumnWriter<Point>
 {
     /// <inheritdoc />
     public string TypeName => "Point";

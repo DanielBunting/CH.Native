@@ -65,7 +65,7 @@ public class ClickHouseServerException : ClickHouseException
     /// <param name="exceptionMessage">The exception message from the server.</param>
     /// <returns>A typed exception — <see cref="ClickHouseAuthenticationException"/>
     /// for auth codes, <see cref="ClickHouseServerException"/> otherwise.</returns>
-    public static ClickHouseException FromExceptionMessage(ExceptionMessage exceptionMessage)
+    internal static ClickHouseException FromExceptionMessage(ExceptionMessage exceptionMessage)
     {
         var inner = exceptionMessage.Nested != null
             ? FromExceptionMessage(exceptionMessage.Nested)

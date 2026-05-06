@@ -8,7 +8,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// BFloat16 is the high 16 bits of IEEE-754 binary32 — 1 sign bit, 8 exponent bits, 7 mantissa bits.
 /// Returned as float by zero-extending the low 16 mantissa bits.
 /// </summary>
-public sealed class BFloat16ColumnReader : IColumnReader<float>
+internal sealed class BFloat16ColumnReader : IColumnReader<float>
 {
     /// <inheritdoc />
     public string TypeName => "BFloat16";

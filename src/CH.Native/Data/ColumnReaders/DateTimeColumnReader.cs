@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Column reader for DateTime values.
 /// DateTime in ClickHouse is stored as a 32-bit Unix timestamp (seconds since epoch).
 /// </summary>
-public sealed class DateTimeColumnReader : IColumnReader<DateTime>
+internal sealed class DateTimeColumnReader : IColumnReader<DateTime>
 {
     private static readonly DateTime UnixEpoch = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 

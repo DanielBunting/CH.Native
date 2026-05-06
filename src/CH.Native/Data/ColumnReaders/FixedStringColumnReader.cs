@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Column reader for FixedString(N) values.
 /// FixedString stores exactly N bytes per value, padded with null bytes if needed.
 /// </summary>
-public sealed class FixedStringColumnReader : IColumnReader<byte[]>
+internal sealed class FixedStringColumnReader : IColumnReader<byte[]>
 {
     private readonly int _length;
 

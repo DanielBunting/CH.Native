@@ -15,7 +15,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <see cref="WriteValue"/> throws.
 /// </para>
 /// </remarks>
-public sealed class VariantColumnWriter : IColumnWriter<ClickHouseVariant>
+internal sealed class VariantColumnWriter : IColumnWriter<ClickHouseVariant>
 {
     private const ulong DiscriminatorVersion0 = 0;
 

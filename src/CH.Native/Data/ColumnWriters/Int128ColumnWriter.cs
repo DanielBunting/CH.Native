@@ -5,7 +5,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for Int128 values.
 /// </summary>
-public sealed class Int128ColumnWriter : IColumnWriter<Int128>
+internal sealed class Int128ColumnWriter : IColumnWriter<Int128>
 {
     /// <inheritdoc />
     public string TypeName => "Int128";

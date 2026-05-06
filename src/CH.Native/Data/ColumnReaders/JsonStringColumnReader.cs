@@ -26,7 +26,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <see cref="ColumnReaderRegistry"/> with this reader registered for the "JSON" type.
 /// </para>
 /// </remarks>
-public sealed class JsonStringColumnReader : IColumnReader<string>
+internal sealed class JsonStringColumnReader : IColumnReader<string>
 {
     /// <summary>
     /// Thread-local pooled dictionary for string interning.

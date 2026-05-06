@@ -21,7 +21,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <see cref="IPAddress.IsIPv4MappedToIPv6"/>, or call
 /// <see cref="IPAddress.MapToIPv4"/> on the read result.
 /// </remarks>
-public sealed class IPv6ColumnWriter : IColumnWriter<IPAddress>
+internal sealed class IPv6ColumnWriter : IColumnWriter<IPAddress>
 {
     /// <inheritdoc />
     public string TypeName => "IPv6";

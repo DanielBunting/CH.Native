@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnSkippers;
 /// Column skipper for Array(T) values.
 /// Wire format: offsets array (UInt64 per row), then all element values.
 /// </summary>
-public sealed class ArrayColumnSkipper : IColumnSkipper
+internal sealed class ArrayColumnSkipper : IColumnSkipper
 {
     private readonly IColumnSkipper _elementSkipper;
     private readonly string _typeName;

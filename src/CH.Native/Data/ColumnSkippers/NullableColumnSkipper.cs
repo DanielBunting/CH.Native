@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnSkippers;
 /// Column skipper for Nullable(T) values.
 /// Wire format: null bitmap (1 byte per row), then all values (including null slots).
 /// </summary>
-public sealed class NullableColumnSkipper : IColumnSkipper
+internal sealed class NullableColumnSkipper : IColumnSkipper
 {
     private readonly IColumnSkipper _innerSkipper;
     private readonly string _typeName;

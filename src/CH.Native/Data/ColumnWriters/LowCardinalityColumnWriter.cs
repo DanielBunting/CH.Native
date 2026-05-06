@@ -22,7 +22,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// The CLR type accepted is the same as the inner type (dictionary encoding is transparent).
 /// </remarks>
 /// <typeparam name="T">The underlying type.</typeparam>
-public sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
+internal sealed class LowCardinalityColumnWriter<T> : IColumnWriter<T>
 {
     private readonly IColumnWriter<T> _innerWriter;
     private readonly bool _isNullable;

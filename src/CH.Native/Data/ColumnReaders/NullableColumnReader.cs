@@ -12,7 +12,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// 2. All values (including slots for null rows, which have undefined content)
 /// </remarks>
 /// <typeparam name="T">The underlying value type.</typeparam>
-public sealed class NullableColumnReader<T> : IColumnReader<T?>
+internal sealed class NullableColumnReader<T> : IColumnReader<T?>
     where T : struct
 {
     private readonly IColumnReader<T> _innerReader;
@@ -133,7 +133,7 @@ public sealed class NullableColumnReader<T> : IColumnReader<T?>
 /// 2. All values (including slots for null rows)
 /// </remarks>
 /// <typeparam name="T">The underlying reference type.</typeparam>
-public sealed class NullableRefColumnReader<T> : IColumnReader<T?>
+internal sealed class NullableRefColumnReader<T> : IColumnReader<T?>
     where T : class
 {
     private readonly IColumnReader<T> _innerReader;

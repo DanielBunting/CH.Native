@@ -5,7 +5,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for Bool values.
 /// </summary>
-public sealed class BoolColumnWriter : IColumnWriter<bool>
+internal sealed class BoolColumnWriter : IColumnWriter<bool>
 {
     /// <inheritdoc />
     public string TypeName => "Bool";

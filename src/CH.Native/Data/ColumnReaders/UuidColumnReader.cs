@@ -8,7 +8,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// ClickHouse stores UUID as 16 bytes with each 8-byte half reversed.
 /// This reader handles the byte order transformation to produce correct .NET Guid values.
 /// </summary>
-public sealed class UuidColumnReader : IColumnReader<Guid>
+internal sealed class UuidColumnReader : IColumnReader<Guid>
 {
     /// <inheritdoc />
     public string TypeName => "UUID";

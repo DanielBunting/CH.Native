@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for MultiLineString values (alias over Array(Array(Point))).
 /// </summary>
-public sealed class MultiLineStringColumnReader : IColumnReader<Point[][]>
+internal sealed class MultiLineStringColumnReader : IColumnReader<Point[][]>
 {
     private readonly ArrayColumnReader<Point[]> _inner =
         new(new ArrayColumnReader<Point>(new PointColumnReader()));

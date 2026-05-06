@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// <summary>
 /// Column writer for MultiPolygon values (alias over Array(Polygon) = Array(Array(Array(Point)))).
 /// </summary>
-public sealed class MultiPolygonColumnWriter : IColumnWriter<Point[][][]>
+internal sealed class MultiPolygonColumnWriter : IColumnWriter<Point[][][]>
 {
     private readonly ArrayColumnWriter<Point[][]> _inner =
         new(new ArrayColumnWriter<Point[]>(

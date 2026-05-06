@@ -11,7 +11,7 @@ namespace CH.Native.Compression;
 /// Ported from: https://github.com/ClickHouse/ClickHouse/blob/master/contrib/cityhash102/src/city.cc
 /// Original copyright: Copyright (c) 2011 Google, Inc. (MIT License)
 /// </remarks>
-public static class CityHash128
+internal static class CityHash128
 {
     // Constants from CityHash v1.0.2
     private const ulong K0 = 0xc3a5c85c97cb3127UL;

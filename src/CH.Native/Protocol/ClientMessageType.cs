@@ -3,7 +3,7 @@ namespace CH.Native.Protocol;
 /// <summary>
 /// Message types sent from client to server.
 /// </summary>
-public enum ClientMessageType : byte
+internal enum ClientMessageType : byte
 {
     /// <summary>
     /// Initial hello handshake message.

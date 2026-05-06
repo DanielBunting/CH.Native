@@ -5,7 +5,7 @@ namespace CH.Native.Protocol.Messages;
 /// <summary>
 /// Server progress message containing query execution statistics.
 /// </summary>
-public readonly struct ProgressMessage
+internal readonly struct ProgressMessage
 {
     /// <summary>
     /// Gets the number of rows processed.

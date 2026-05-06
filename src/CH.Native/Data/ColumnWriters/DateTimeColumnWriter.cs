@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Column writer for DateTime values.
 /// DateTime in ClickHouse is stored as a 32-bit Unix timestamp (seconds since epoch).
 /// </summary>
-public sealed class DateTimeColumnWriter : IColumnWriter<DateTime>
+internal sealed class DateTimeColumnWriter : IColumnWriter<DateTime>
 {
     private static readonly DateTime UnixEpoch = new(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 

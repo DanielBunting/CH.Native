@@ -8,7 +8,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// In lazy mode, the non-generic ReadTypedColumn returns a <see cref="RawStringColumn"/>
 /// that defers UTF-8 decoding until GetValue() is called.
 /// </summary>
-public sealed class StringColumnReader : IColumnReader<string>
+internal sealed class StringColumnReader : IColumnReader<string>
 {
     /// <summary>
     /// Thread-local pooled dictionary for string interning.

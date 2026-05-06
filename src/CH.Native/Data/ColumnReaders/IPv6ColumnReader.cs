@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Column reader for IPv6 values.
 /// IPv6 in ClickHouse is stored as 16 bytes.
 /// </summary>
-public sealed class IPv6ColumnReader : IColumnReader<IPAddress>
+internal sealed class IPv6ColumnReader : IColumnReader<IPAddress>
 {
     /// <inheritdoc />
     public string TypeName => "IPv6";

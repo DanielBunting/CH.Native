@@ -12,7 +12,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Wire format is the same as DateTime (UInt32 Unix timestamp),
 /// but values are interpreted in the specified timezone.
 /// </remarks>
-public sealed class DateTimeWithTimezoneColumnReader : IColumnReader<DateTimeOffset>
+internal sealed class DateTimeWithTimezoneColumnReader : IColumnReader<DateTimeOffset>
 {
     private readonly TimeZoneInfo _timezone;
     private readonly string _originalTimezone;

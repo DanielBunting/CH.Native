@@ -12,7 +12,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// the bitmap and substitutes <see cref="NullPlaceholder"/> (the empty string)
 /// for null slots before delegating here.
 /// </remarks>
-public sealed class StringColumnWriter : IColumnWriter<string>
+internal sealed class StringColumnWriter : IColumnWriter<string>
 {
     /// <inheritdoc />
     public string TypeName => "String";

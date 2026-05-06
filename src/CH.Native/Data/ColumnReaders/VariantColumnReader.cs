@@ -20,7 +20,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// Callers on the hot path should prefer <see cref="VariantTypedColumn.GetTyped{T0,T1}"/>
 /// or <see cref="VariantTypedColumn.GetArm{T}"/> to avoid boxing.</para>
 /// </remarks>
-public sealed class VariantColumnReader : IColumnReader
+internal sealed class VariantColumnReader : IColumnReader
 {
     private const ulong DiscriminatorVersion0 = 0;
 

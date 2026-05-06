@@ -6,7 +6,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// Column writer for DateTime values with timezone parameter.
 /// Wire format is the same as DateTime (UInt32 Unix timestamp).
 /// </summary>
-public sealed class DateTimeWithTimezoneColumnWriter : IColumnWriter<DateTimeOffset>
+internal sealed class DateTimeWithTimezoneColumnWriter : IColumnWriter<DateTimeOffset>
 {
     private readonly string _timezone;
 

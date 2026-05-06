@@ -7,7 +7,7 @@ namespace CH.Native.Data.ColumnReaders;
 /// <summary>
 /// Column reader for Int32 (int) values.
 /// </summary>
-public sealed class Int32ColumnReader : IColumnReader<int>
+internal sealed class Int32ColumnReader : IColumnReader<int>
 {
     /// <inheritdoc />
     public string TypeName => "Int32";

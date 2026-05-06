@@ -3,7 +3,7 @@ namespace CH.Native.Protocol.Messages;
 /// <summary>
 /// Marker message indicating the end of the server response stream.
 /// </summary>
-public sealed class EndOfStreamMessage
+internal sealed class EndOfStreamMessage
 {
     /// <summary>
     /// Singleton instance.
