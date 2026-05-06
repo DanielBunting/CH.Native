@@ -55,7 +55,7 @@ CH.Native creates spans for database operations using `System.Diagnostics.Activi
 ### Activity Source
 
 - **Name:** `CH.Native`
-- **Operations:** `clickhouse.query`, `clickhouse.connect`, `clickhouse.bulk_insert`
+- **Operations:** `clickhouse.query`, `clickhouse.connect`, `clickhouse.bulk_insert`, `clickhouse.cancel`
 
 ### Span Attributes
 
@@ -115,16 +115,25 @@ CH.Native records metrics using `System.Diagnostics.Metrics.Meter`.
 
 ### Available Metrics
 
+Instrument names follow OpenTelemetry/Prometheus snake_case conventions; `Counter` instruments end in `_total`. Durations are recorded in seconds (OTel-canonical `s`).
+
 | Metric | Type | Unit | Description |
 |--------|------|------|-------------|
-| `ch.native.queries` | Counter | queries | Total queries executed |
-| `ch.native.query.duration` | Histogram | ms | Query execution duration |
-| `ch.native.connections.active` | UpDownCounter | connections | Active connections |
-| `ch.native.bytes.sent` | Counter | bytes | Bytes sent to server |
-| `ch.native.bytes.received` | Counter | bytes | Bytes received from server |
-| `ch.native.errors` | Counter | errors | Total errors |
-| `ch.native.retries` | Counter | retries | Retry attempts |
-| `ch.native.circuit_breaker.transitions` | Counter | transitions | Circuit breaker state changes |
+| `ch_native_queries_total` | Counter | `{queries}` | Total queries executed |
+| `ch_native_query_duration` | Histogram | `s` | Query execution duration |
+| `ch_native_rows_read_total` | Counter | `{rows}` | Total rows read from server |
+| `ch_native_rows_written_total` | Counter | `{rows}` | Total rows written to server |
+| `ch_native_bytes_sent_total` | Counter | `By` | Bytes sent to server |
+| `ch_native_bytes_received_total` | Counter | `By` | Bytes received from server |
+| `ch_native_errors_total` | Counter | `{errors}` | Total errors |
+| `ch_native_connect_duration` | Histogram | `s` | Connection establishment duration |
+| `ch_native_connections_active` | ObservableGauge | `{connections}` | Currently active connections |
+| `ch_native_retry_attempts_total` | Counter | `{attempts}` | Retry attempts (tagged with `attempt`, `error.type`) |
+| `ch_native_retry_delay` | Histogram | `s` | Delay before retry attempt |
+| `ch_native_circuit_breaker_state_changes_total` | Counter | `{changes}` | Circuit breaker state transitions |
+| `ch_native_circuit_breaker_state` | ObservableGauge | `{state}` | Current state per server (0=Closed, 1=HalfOpen, 2=Open) |
+
+Tags emitted on query metrics: `db.name`, `status` (`success` / `error`). Retry metrics bucket the triggering exception into a fixed `error.type` set (`network`, `timeout`, `server`, `cancelled`, `client`, `other`) to bound series cardinality. Circuit-breaker metrics carry `server.address`.
 
 ### OpenTelemetry Integration
 
@@ -141,20 +150,22 @@ var meterProvider = Sdk.CreateMeterProviderBuilder()
 
 ### Prometheus Example
 
-With OpenTelemetry Prometheus exporter:
+With OpenTelemetry Prometheus exporter (durations are seconds):
 
 ```
 # HELP ch_native_queries_total Total queries executed
 # TYPE ch_native_queries_total counter
-ch_native_queries_total{db_name="default"} 1234
+ch_native_queries_total{db_name="default",status="success"} 1234
 
-# HELP ch_native_query_duration_ms Query execution duration
-# TYPE ch_native_query_duration_ms histogram
-ch_native_query_duration_ms_bucket{le="10"} 500
-ch_native_query_duration_ms_bucket{le="50"} 900
-ch_native_query_duration_ms_bucket{le="100"} 1100
-ch_native_query_duration_ms_bucket{le="+Inf"} 1234
+# HELP ch_native_query_duration_seconds Query execution duration
+# TYPE ch_native_query_duration_seconds histogram
+ch_native_query_duration_seconds_bucket{le="0.01"} 500
+ch_native_query_duration_seconds_bucket{le="0.05"} 900
+ch_native_query_duration_seconds_bucket{le="0.1"} 1100
+ch_native_query_duration_seconds_bucket{le="+Inf"} 1234
 ```
+
+(The OpenTelemetry Prometheus exporter appends the unit suffix `_seconds` to histograms with unit `s`.)
 
 ## Logging
 
@@ -286,9 +297,9 @@ Example Grafana dashboard queries for CH.Native metrics:
 rate(ch_native_queries_total[5m])
 ```
 
-**Average Query Duration:**
+**Average Query Duration (seconds):**
 ```promql
-rate(ch_native_query_duration_ms_sum[5m]) / rate(ch_native_query_duration_ms_count[5m])
+rate(ch_native_query_duration_seconds_sum[5m]) / rate(ch_native_query_duration_seconds_count[5m])
 ```
 
 **Error Rate:**

@@ -17,6 +17,10 @@ Host=localhost;Port=9000;Database=default;Username=default;Password=secret
 | **Database** | Db | string | default | Database name |
 | **Username** | User, Uid | string | default | Authentication username |
 | **Password** | Pwd | string | *(empty)* | Authentication password |
+| **Jwt** | Token, AccessToken, BearerToken, Bearer | string | - | JWT bearer token (sets auth method to `Jwt`) |
+| **Roles** | Role | string | - | Comma-separated default roles (`SET ROLE …` per query) |
+| **SshKeyPath** | SshPrivateKeyPath, SshKeyFile | string | - | Path to SSH private key (PEM/OpenSSH; sets auth method to `SshKey`) |
+| **SshKeyPassphrase** | SshPassphrase | string | - | Passphrase for an encrypted SSH key |
 | **Timeout** | ConnectTimeout | int | 30 | Connection timeout in seconds |
 | **Compress** | Compression | bool | true | Enable compression |
 | **CompressionMethod** | - | enum | Lz4 | Lz4 or Zstd |
@@ -63,12 +67,23 @@ await using var connection = new ClickHouseConnection(settings);
 | `WithCredentials(user, password)` | Set authentication credentials |
 | `WithUsername(user)` | Set username only |
 | `WithPassword(password)` | Set password only |
+| `WithJwt(token)` / `WithBearerToken(token)` | JWT bearer-token auth |
+| `WithSshKey(bytes, passphrase?)` | SSH key auth from in-memory key bytes |
+| `WithSshKeyPath(path, passphrase?)` | SSH key auth from a key file |
+| `WithRoles(...)` | Default roles activated on every query |
+| `WithAuthMethod(method)` | Explicitly select `Password`, `Jwt`, `SshKey`, or `TlsClientCertificate` |
 | `WithConnectTimeout(timeout)` | Set connection timeout |
 | `WithCompression(enabled)` | Enable/disable compression |
 | `WithCompressionMethod(method)` | Set compression method (Lz4/Zstd) |
 | `WithClientName(name)` | Set client name for server identification |
 | `WithReceiveBufferSize(size)` | Set socket receive buffer size |
 | `WithSendBufferSize(size)` | Set socket send buffer size |
+| `WithTls(enabled)` / `WithTlsPort(port)` | Enable TLS and pick the TLS port |
+| `WithAllowInsecureTls(allow)` | Skip cert validation (testing only) |
+| `WithTlsCaCertificate(path)` | Trust a private-CA root |
+| `WithTlsClientCertificate(cert)` / `WithTlsClientCertificate(path, password?)` | mTLS client cert |
+
+JWT, SSH, role activation, and mTLS each get a dedicated walkthrough — see [Authentication](authentication.md).
 
 ## TLS/SSL Configuration
 

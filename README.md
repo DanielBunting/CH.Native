@@ -130,10 +130,14 @@ var users = await connection.QueryAsync<User>("SELECT * FROM users");
 |-------|-------------|
 | [Quick Start](docs/quickstart.md) | Get up and running in minutes |
 | [Configuration](docs/configuration.md) | Connection strings, settings, TLS, multi-server |
+| [Authentication](docs/authentication.md) | Password, JWT, SSH key, mTLS, role activation |
+| [Connection Pooling](docs/connection-pooling.md) | `ClickHouseDataSource`, sizing, observability |
+| [Dependency Injection](docs/dependency-injection.md) | `AddClickHouse`, keyed services, providers, health checks |
 | [Data Types](docs/data-types.md) | ClickHouse to .NET type mapping reference |
 | [Resilience](docs/resilience.md) | Retry policies, circuit breakers, load balancing |
 | [Bulk Insert](docs/bulk-insert.md) | High-performance data loading |
 | [ADO.NET & Dapper](docs/ado-net-dapper.md) | Standard provider and ORM integration |
+| [LINQ Provider](docs/linq-provider.md) | `connection.Table<T>()`, operators, modifiers |
 | [Telemetry](docs/telemetry.md) | Tracing, metrics, and logging |
 
 ## Performance

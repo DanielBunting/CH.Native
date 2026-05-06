@@ -224,9 +224,7 @@ var users = await connection.QueryAsync<User>(
 
 ## LINQ Provider
 
-CH.Native includes a basic LINQ provider for simple queries.
-
-### Setup
+CH.Native includes a typed LINQ provider for simple queries:
 
 ```csharp
 using CH.Native.Connection;
@@ -235,63 +233,16 @@ using CH.Native.Linq;
 await using var connection = new ClickHouseConnection("Host=localhost;Port=9000");
 await connection.OpenAsync();
 
-var query = ClickHouseQueryable.Create<User>(connection);
-```
-
-### Supported Operations
-
-```csharp
-// Where
-await foreach (var user in query.Where(u => u.Age > 18))
+await foreach (var user in connection.Table<User>()
+    .Where(u => u.Age > 18)
+    .OrderBy(u => u.Name)
+    .AsAsyncEnumerable())
 {
     Console.WriteLine(user.Name);
 }
-
-// Select
-var names = query.Select(u => u.Name);
-
-// OrderBy
-var ordered = query.OrderBy(u => u.Name);
-
-// Multiple conditions
-var adults = query
-    .Where(u => u.Age >= 18)
-    .Where(u => u.Status == "active")
-    .OrderBy(u => u.Name);
-
-await foreach (var user in adults)
-{
-    Console.WriteLine($"{user.Name}: {user.Age}");
-}
 ```
 
-### Debugging Queries
-
-View the generated SQL:
-
-```csharp
-var query = ClickHouseQueryable.Create<User>(connection)
-    .Where(u => u.Age > 18)
-    .OrderBy(u => u.Name);
-
-string sql = query.ToSql();
-Console.WriteLine(sql);
-// Output: SELECT * FROM users WHERE age > 18 ORDER BY name
-```
-
-### Limitations
-
-The LINQ provider supports basic operations only:
-
-| Supported | Not Supported |
-|-----------|---------------|
-| Where | Join |
-| Select | GroupBy |
-| OrderBy/OrderByDescending | Aggregate functions |
-| Take/Skip | Union/Intersect |
-| First/FirstOrDefault | Complex subqueries |
-
-For complex queries, use raw SQL with `QueryAsync<T>()`.
+The entry point is the `connection.Table<T>()` extension (or `connection.Table<T>("table_name")` to override the table). See **[LINQ Provider](linq-provider.md)** for the full operator list, modifiers (`Final()`, `Sample()`, `WithQueryId()`), async-execution extensions, `ToSql()` debugging, and limitations.
 
 ## Comparison: ADO.NET vs Native API
 

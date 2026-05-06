@@ -22,6 +22,8 @@ var settings = ClickHouseConnectionSettings.CreateBuilder()
     .Build();
 ```
 
+`ResilienceOptions.WithAllDefaults()` wires up all three pillars at once: retry (`RetryOptions.Default` — 3 attempts, 100 ms base delay, 2× backoff, 30 s cap), circuit breaker (`CircuitBreakerOptions.Default` — 5 failures, 30 s open duration), and a 10-second health-check interval with a 5-second per-probe timeout. Use the callback overload (`WithResilience(opts => …)`) when you need to override any individual knob.
+
 Or via connection string:
 
 ```
@@ -172,15 +174,24 @@ var settings = ClickHouseConnectionSettings.CreateBuilder()
 
 ### Circuit Breaker Events
 
-Monitor state transitions:
+Monitor state transitions and successful recoveries:
 
 ```csharp
 var circuitBreaker = new CircuitBreaker(options);
+
 circuitBreaker.OnStateChanged += (sender, args) =>
 {
     Console.WriteLine($"Circuit breaker: {args.OldState} -> {args.NewState}");
 };
+
+// Fires every time the breaker resets to Closed after a successful probe.
+circuitBreaker.OnReset += (sender, args) =>
+{
+    Console.WriteLine($"Circuit recovered after {args.OpenDuration.TotalSeconds:F1}s open");
+};
 ```
+
+`OnStateChanged` fires for every transition between Closed/HalfOpen/Open. `OnReset` is the narrower hook for the HalfOpen → Closed transition that signals "service is back" — useful for clearing alerts.
 
 ## Load Balancing
 
@@ -228,6 +239,7 @@ Background monitoring of server health.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | HealthCheckInterval | TimeSpan | 10s | Interval between health checks |
+| HealthCheckTimeout | TimeSpan | 5s | Timeout for an individual probe |
 
 ### Example
 
@@ -238,11 +250,12 @@ var settings = ClickHouseConnectionSettings.CreateBuilder()
     .WithResilience(opts =>
     {
         opts.WithHealthCheckInterval(TimeSpan.FromSeconds(15));
+        opts.WithHealthCheckTimeout(TimeSpan.FromSeconds(3));
     })
     .Build();
 ```
 
-Health checks execute `SELECT 1` against each server to verify connectivity.
+Health checks execute `SELECT 1` against each server to verify connectivity. Set `HealthCheckTimeout` shorter than `HealthCheckInterval` so a stuck probe cannot block the next round.
 
 ## Using ResilientConnection
 
@@ -307,10 +320,12 @@ var settings = ClickHouseConnectionSettings.CreateBuilder()
 
 Resilience events are recorded as metrics when telemetry is enabled:
 
-- `ch.native.retries` - Retry attempts
-- `ch.native.circuit_breaker.transitions` - Circuit breaker state changes
+- `ch_native_retry_attempts_total` — retry attempts (tagged `attempt`, `error.type`)
+- `ch_native_retry_delay` — histogram of pre-retry sleep, in seconds
+- `ch_native_circuit_breaker_state_changes_total` — transitions (tagged `from_state`, `to_state`, `server.address`)
+- `ch_native_circuit_breaker_state` — observable gauge of the current state per server
 
-See [Telemetry](telemetry.md) for more details.
+See [Telemetry](telemetry.md) for the full metric and tag reference.
 
 ## See Also
 

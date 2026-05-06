@@ -47,8 +47,15 @@ When reading data, CH.Native automatically converts ClickHouse types to their .N
 | Array(T) | T[] | |
 | Map(K, V) | Dictionary<K, V> | |
 | Tuple(...) | object[] | |
+| Nested(...) | object[][] | Equivalent to parallel `Array(T)` columns |
 | LowCardinality(T) | T | Dictionary encoded |
-| JSON | JsonDocument | ClickHouse 25.6+ required |
+| JSON | JsonDocument / string | ClickHouse 25.6+ required |
+| Dynamic | ClickHouseDynamic | Per-row type discriminator |
+| Variant(T0, T1, ...) | VariantValue<T0, T1> / ClickHouseVariant | Boxing-free up to 2 arms |
+| Point | (X, Y) record struct | |
+| Ring, LineString | Point[] | |
+| Polygon, MultiLineString | Point[][] | |
+| MultiPolygon | Point[][][] | |
 
 ## Numeric Types
 
@@ -152,6 +159,8 @@ var t = await connection.ExecuteScalarAsync<TimeOnly>("SELECT CAST('13:37:42' AS
 ```
 
 Reads outside `[0, 86400)` (or `[0, 86400 × 10^P)` for `Time64`) throw `OverflowException` — `TimeOnly` cannot represent negative or overflow values. Power users wanting raw nanoseconds at `Time64(8/9)` can use the low-level `IColumnReader<long>` path.
+
+`Time` and `Time64(P)` are also supported for **bulk insert**: a `TimeOnly` property maps directly to either column (precision is read from the column definition). The same ClickHouse 25.10+ requirement applies on the server side.
 
 ## String Types
 
@@ -296,15 +305,35 @@ CREATE TABLE logs (
 var level = await connection.ExecuteScalarAsync<string>("SELECT level FROM logs LIMIT 1");
 ```
 
+### Nested
+
+`Nested(col1 T1, col2 T2, …)` is shorthand for parallel `Array(T)` columns of equal length. CH.Native materialises each row as a jagged `object[][]` whose outer array indexes the named subcolumns and inner arrays are the per-row values:
+
+```sql
+CREATE TABLE events (
+    id UInt64,
+    items Nested(name String, quantity UInt32)
+) ENGINE = Memory
+```
+
+```csharp
+var rows = await connection.QueryAsync(
+    "SELECT items.name, items.quantity FROM events"
+).ToListAsync();
+```
+
+You can also project each subcolumn directly (`items.name`, `items.quantity`) and read it as `string[]` / `uint[]` — that is usually the more ergonomic shape and is what most queries against `Nested` use in practice.
+
 ### JSON
 
 **Requires ClickHouse 25.6+**
 
-The JSON type stores semi-structured data and maps to `System.Text.Json.JsonDocument`:
+The JSON type stores semi-structured data. CH.Native exposes two reader paths:
 
 | ClickHouse Type | .NET Type | Notes |
 |-----------------|-----------|-------|
 | JSON | JsonDocument | Requires disposal |
+| JSON | string | Set `output_format_native_write_json_as_string=1` to receive the raw JSON text |
 | Nullable(JSON) | JsonDocument? | |
 | Array(JSON) | JsonDocument[] | |
 
@@ -377,6 +406,62 @@ if (data != null)
 }
 ```
 
+### Dynamic
+
+The `Dynamic` type stores a value plus a per-row type discriminator — different rows in the same column can hold different concrete types. Maps to `CH.Native.Data.Dynamic.ClickHouseDynamic`:
+
+```csharp
+await foreach (var row in connection.QueryAsync(
+    "SELECT value FROM dynamic_events"))
+{
+    var dyn = row.GetFieldValue<ClickHouseDynamic>("value");
+    if (dyn.TryGetAs<long>(out var i)) Console.WriteLine($"int: {i}");
+    else if (dyn.TryGetAs<string>(out var s)) Console.WriteLine($"str: {s}");
+    else Console.WriteLine($"declared as {dyn.DeclaredTypeName}, raw: {dyn.Value}");
+}
+```
+
+`IsNull`, `Discriminator`, `DeclaredTypeName`, and `TryGetAs<T>(out T)` cover the common access patterns. For bulk insert, construct `ClickHouseDynamic(discriminator, value, declaredTypeName)` directly.
+
+### Variant
+
+`Variant(T0, T1, …)` is a closed set of alternatives chosen at write time per row. CH.Native exposes two shapes:
+
+- **`VariantValue<T0, T1>`** — boxing-free 2-arm variant. Use when you have exactly two arms and want zero allocations on the read path.
+- **`ClickHouseVariant`** — N-arm variant (boxes the value). Use for ≥3 arms or when arms are heterogeneous enough that the typed shape doesn't fit.
+
+```csharp
+// 2-arm: int | string
+var v = await connection.ExecuteScalarAsync<VariantValue<long, string>>(
+    "SELECT CAST(42 AS Variant(Int64, String))");
+// v.Discriminator picks the active arm; v.Arm0 / v.Arm1 access the value.
+
+// N-arm
+var any = await connection.ExecuteScalarAsync<ClickHouseVariant>(
+    "SELECT CAST(3.14 AS Variant(Int64, String, Float64))");
+if (any.TryGetAs<double>(out var d)) Console.WriteLine(d);
+```
+
+### Geospatial
+
+ClickHouse's WKT-style geometry types map to nested arrays of `Point` (a `(double X, double Y)` record struct in `CH.Native.Data.Geo`):
+
+| ClickHouse Type | .NET Type |
+|-----------------|-----------|
+| Point | Point |
+| Ring | Point[] |
+| LineString | Point[] |
+| Polygon | Point[][] (outer ring + holes) |
+| MultiLineString | Point[][] |
+| MultiPolygon | Point[][][] |
+
+```csharp
+var poly = await connection.ExecuteScalarAsync<Point[][]>(
+    "SELECT [[(0,0),(0,1),(1,1),(1,0),(0,0)]]::Polygon");
+```
+
+All geospatial types round-trip through bulk insert as well.
+
 ## Custom Type Mapping
 
 Use attributes to customize how your classes map to ClickHouse tables:
@@ -397,7 +482,7 @@ public class User
     [ClickHouseColumn(Order = 2)]
     public DateTime CreatedAt { get; set; }
 
-    [ClickHouseIgnore]
+    [ClickHouseColumn(Ignore = true)]
     public string TempData { get; set; } = ""; // Not mapped
 }
 ```
@@ -406,9 +491,7 @@ public class User
 
 | Attribute | Target | Properties |
 |-----------|--------|------------|
-| `ClickHouseColumn` | Property | `Name` (column name), `Order` (column order), `ClickHouseType` (type override) |
-| `ClickHouseIgnore` | Property | Excludes property from mapping |
-| `ClickHouseTable` | Class | `TableName` (table name for source generators) |
+| `ClickHouseColumn` | Property | `Name` (column name), `Order` (column order), `Ignore` (skip property), `ClickHouseType` (type override) |
 
 ### Column Order
 
