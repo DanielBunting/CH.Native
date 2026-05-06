@@ -44,6 +44,10 @@ await inserter.AddAsync(new Event
 var events = new List<Event> { /* ... */ };
 await inserter.AddRangeAsync(events);
 
+// For very large or async sources, stream them so only one batch is in memory
+// at a time (see Streaming Insert below):
+//   await inserter.AddRangeStreamingAsync(GenerateEvents());
+
 // Flush any remaining data and finalize
 await inserter.CompleteAsync();
 ```
@@ -62,7 +66,7 @@ await connection.BulkInsertAsync("events", events);
 The bulk insert lifecycle:
 
 ```
-CreateBulkInserter<T>() -> InitAsync() -> Add/AddRange -> [FlushAsync] -> CompleteAsync()
+CreateBulkInserter<T>() -> InitAsync() -> Add / AddRange / AddRangeStreaming -> [FlushAsync] -> CompleteAsync()
 ```
 
 | Method | Description |
@@ -70,9 +74,13 @@ CreateBulkInserter<T>() -> InitAsync() -> Add/AddRange -> [FlushAsync] -> Comple
 | `CreateBulkInserter<T>(table)` | Creates inserter for table |
 | `InitAsync()` | Sends INSERT query, receives column schema |
 | `AddAsync(item)` | Adds single item to buffer |
-| `AddRangeAsync(items)` | Adds multiple items to buffer |
+| `AddRangeAsync(IEnumerable<T>)` | Adds multiple items to buffer (whole sequence is held by the caller) |
+| `AddRangeStreamingAsync(IAsyncEnumerable<T>)` | Pulls items from an async source, flushing per batch — preferred for large or unbounded inputs |
+| `AddRangeStreamingAsync(IEnumerable<T>)` | Same streaming-with-flush behaviour for synchronous sources (lazy iterators, file readers) |
 | `FlushAsync()` | Sends current buffer to server (automatic at batch size) |
 | `CompleteAsync()` | Sends final block, receives confirmation |
+
+`AddRangeAsync` accumulates inside the inserter's buffer and only flushes when the batch fills up. `AddRangeStreamingAsync` is the right call when you don't want the source to be held alongside the buffer — it consumes one batch at a time.
 
 ## Configuration
 
@@ -146,7 +154,7 @@ public class Event
 
 ### Ignoring Properties
 
-Exclude properties from mapping:
+Exclude properties from mapping using `Ignore = true`:
 
 ```csharp
 public class User
@@ -154,7 +162,7 @@ public class User
     public uint Id { get; set; }
     public string Name { get; set; } = "";
 
-    [ClickHouseIgnore]
+    [ClickHouseColumn(Ignore = true)]
     public string TempData { get; set; } = ""; // Not inserted
 }
 ```
@@ -181,43 +189,50 @@ async IAsyncEnumerable<Event> GenerateEvents()
 await connection.BulkInsertAsync("events", GenerateEvents());
 ```
 
-Or with manual control:
+Or with manual control via `AddRangeStreamingAsync` — this is what `BulkInsertAsync` uses internally and is the path you want for large or unbounded sources:
 
 ```csharp
 await using var inserter = connection.CreateBulkInserter<Event>("events");
 await inserter.InitAsync();
 
-await foreach (var evt in GenerateEvents())
-{
-    await inserter.AddAsync(evt);
-}
+await inserter.AddRangeStreamingAsync(GenerateEvents());
 
 await inserter.CompleteAsync();
 ```
 
+`AddRangeStreamingAsync` flushes each batch as soon as it fills, so memory stays bounded at one `BatchSize`-worth of rows regardless of how long the source runs.
+
 ## Supported Types
 
-All standard ClickHouse types are supported for bulk insert:
+Bulk insert covers the same type system as the read path. The common .NET → ClickHouse mappings:
 
 | .NET Type | ClickHouse Type |
 |-----------|-----------------|
 | sbyte, short, int, long | Int8, Int16, Int32, Int64 |
+| Int128, BigInteger | Int128, Int256 |
 | byte, ushort, uint, ulong | UInt8, UInt16, UInt32, UInt64 |
-| Int128, UInt128 | Int128, UInt128 |
+| UInt128, BigInteger | UInt128, UInt256 |
 | float, double | Float32, Float64 |
-| decimal | Decimal32/64/128/256 |
+| float | BFloat16 (mantissa truncated; ClickHouse 24.12+) |
+| decimal, ClickHouseDecimal | Decimal32/64/128/256 |
 | bool | Bool (UInt8) |
 | string | String |
 | byte[] | FixedString(N) |
 | DateTime | DateTime, DateTime64 |
+| DateTimeOffset | DateTime('TZ') |
 | DateOnly | Date, Date32 |
-| TimeOnly | Time, Time64(P) |
-| DateTimeOffset | DateTime with timezone |
+| TimeOnly | Time, Time64(P) (ClickHouse 25.10+) |
 | Guid | UUID |
 | IPAddress | IPv4, IPv6 |
 | T? | Nullable(T) |
 | T[] | Array(T) |
 | Dictionary<K,V> | Map(K, V) |
+| string / JsonDocument | JSON (ClickHouse 25.6+) |
+| ClickHouseDynamic | Dynamic |
+| ClickHouseVariant, VariantValue<T0,T1> | Variant(T0, T1, …) |
+| Point, Point[], Point[][], Point[][][] | Point, Ring/LineString, Polygon/MultiLineString, MultiPolygon |
+
+`Nullable(...)` wraps any non-composite type, and composites compose freely (`Array(Nullable(LowCardinality(String)))` round-trips). See [Data Types](data-types.md) for the full reference.
 
 ## Best Practices
 
