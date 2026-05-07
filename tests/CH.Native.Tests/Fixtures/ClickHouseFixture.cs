@@ -17,8 +17,15 @@ public class ClickHouseFixture : IAsyncLifetime
         .WithImage("clickhouse/clickhouse-server:26.2")
         .WithUsername(TestUsername)
         .WithPassword(TestPassword)
+        // Two-step readiness: TCP port + a successful query as the test user.
+        // Port-only is too early in the boot sequence; under CI parallel-TFM
+        // contention the test process can win the handshake race against a
+        // still-warming auth subsystem and see "Server closed connection
+        // during handshake".
         .WithWaitStrategy(Wait.ForUnixContainer()
-            .UntilPortIsAvailable(9000))
+            .UntilPortIsAvailable(9000)
+            .UntilCommandIsCompleted(
+                "clickhouse-client", "--user", TestUsername, "--password", TestPassword, "--query", "SELECT 1"))
         .Build();
 
     /// <summary>
@@ -50,9 +57,12 @@ public class ClickHouseFixture : IAsyncLifetime
     {
         await _container.StartAsync();
 
-        // Image 25.3 reports port-open before the native protocol listener actually accepts
-        // connections; retry until the handshake succeeds.
-        for (int attempt = 1; attempt <= 20; attempt++)
+        // Belt-and-braces around the wait strategy: even with
+        // UntilCommandIsCompleted above, the *external* handshake from the
+        // test process can race a still-warming auth subsystem when 3+ TFMs
+        // each spin up their own container concurrently on CI. 60×500ms = 30s
+        // gives that race enough headroom without slowing the steady state.
+        for (int attempt = 1; attempt <= 60; attempt++)
         {
             try
             {
@@ -62,7 +72,7 @@ public class ClickHouseFixture : IAsyncLifetime
             }
             catch
             {
-                if (attempt == 20) throw;
+                if (attempt == 60) throw;
                 await Task.Delay(500);
             }
         }

@@ -73,4 +73,25 @@ public class BulkInsertOptionsTests
         Assert.NotNull(opt.Roles);
         Assert.Empty(opt.Roles);
     }
+
+    [Fact]
+    public void Default_ColumnTypes_IsNull()
+    {
+        Assert.Null(new BulkInsertOptions().ColumnTypes);
+    }
+
+    [Fact]
+    public void ColumnTypes_RoundTrips()
+    {
+        var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["id"] = "Int32",
+            ["name"] = "String",
+        };
+        var opt = new BulkInsertOptions { ColumnTypes = dict };
+
+        Assert.Same(dict, opt.ColumnTypes);
+        Assert.Equal("Int32", opt.ColumnTypes!["id"]);
+        Assert.Equal("String", opt.ColumnTypes!["NAME"]); // case-insensitive lookup honored by caller's dictionary
+    }
 }

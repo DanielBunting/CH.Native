@@ -17,7 +17,7 @@ public class SchemaCacheConcurrencyTests
     public void ConcurrentSet_SameKey_LastWriteWins_NoExceptions()
     {
         var cache = new SchemaCache();
-        var key = new SchemaKey("events", "id");
+        var key = new SchemaKey("default", "events", "id");
 
         Parallel.For(0, 200, i =>
         {
@@ -40,7 +40,7 @@ public class SchemaCacheConcurrencyTests
     public async Task ConcurrentSetAndTryGet_NeverThrowsAndAlwaysSeesAValueOnceSet()
     {
         var cache = new SchemaCache();
-        var key = new SchemaKey("hot", "id");
+        var key = new SchemaKey("default", "hot", "id");
         var schema = new BulkInsertSchema(new[] { "id" }, new[] { "Int32" });
         cache.Set(key, schema);  // pre-populate so all readers should observe
 
@@ -83,7 +83,7 @@ public class SchemaCacheConcurrencyTests
             int i = 0;
             while (!cts.Token.IsCancellationRequested)
             {
-                cache.Set(new SchemaKey("hot", "k" + (i++ % 50)), schema);
+                cache.Set(new SchemaKey("default", "hot", "k" + (i++ % 50)), schema);
             }
         });
         var getter = Task.Run(() =>
@@ -91,14 +91,14 @@ public class SchemaCacheConcurrencyTests
             int i = 0;
             while (!cts.Token.IsCancellationRequested)
             {
-                cache.TryGet(new SchemaKey("hot", "k" + (i++ % 50)), out _);
+                cache.TryGet(new SchemaKey("default", "hot", "k" + (i++ % 50)), out _);
             }
         });
         var invalidator = Task.Run(() =>
         {
             while (!cts.Token.IsCancellationRequested)
             {
-                cache.InvalidateTable("hot");
+                cache.InvalidateTable("default", "hot");
                 Thread.Sleep(1);
             }
         });
@@ -116,20 +116,20 @@ public class SchemaCacheConcurrencyTests
         // Populate two tables in parallel.
         Parallel.For(0, 100, i =>
         {
-            cache.Set(new SchemaKey("hot", "k" + i), schema);
-            cache.Set(new SchemaKey("cold", "k" + i), schema);
+            cache.Set(new SchemaKey("default", "hot", "k" + i), schema);
+            cache.Set(new SchemaKey("default", "cold", "k" + i), schema);
         });
 
         Assert.Equal(200, cache.Count);
 
-        cache.InvalidateTable("hot");
+        cache.InvalidateTable("default", "hot");
 
         // Cold table should still have all 100 entries; hot has zero.
         Assert.Equal(100, cache.Count);
         for (int i = 0; i < 100; i++)
         {
-            Assert.False(cache.TryGet(new SchemaKey("hot", "k" + i), out _));
-            Assert.True(cache.TryGet(new SchemaKey("cold", "k" + i), out _));
+            Assert.False(cache.TryGet(new SchemaKey("default", "hot", "k" + i), out _));
+            Assert.True(cache.TryGet(new SchemaKey("default", "cold", "k" + i), out _));
         }
     }
 }

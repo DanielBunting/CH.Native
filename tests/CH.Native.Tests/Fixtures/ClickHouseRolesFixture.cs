@@ -47,7 +47,25 @@ public sealed class ClickHouseRolesFixture : IAsyncLifetime
         // default user's config entirely (access_management + password).
         .WithResourceMapping(AccessMgmtOverlay,
             "/etc/clickhouse-server/users.d/z_access_management.xml")
-        .WithWaitStrategy(Wait.ForUnixContainer().UntilPortIsAvailable(9000))
+        // Two-step readiness: TCP listener bound, *and* clickhouse-client
+        // can complete an end-to-end handshake + query as the admin user
+        // we'll actually use from the test process. The port-only check
+        // returns early in the boot sequence (TCP accepts before the auth
+        // subsystem and our XML overlay are loaded), which shows up under
+        // CI parallel-TFM contention as "Server closed connection during
+        // handshake".
+        //
+        // The explicit `--user default` is load-bearing: the
+        // Testcontainers.ClickHouse module sets CLICKHOUSE_USER=clickhouse
+        // in the container env, which clickhouse-client picks up as its
+        // default user. Without this, the probe authenticates against the
+        // entrypoint-created `clickhouse` user instead of our overlay's
+        // `default` user — false-positives ("ready") for a server whose
+        // adminpass account isn't usable yet.
+        .WithWaitStrategy(Wait.ForUnixContainer()
+            .UntilPortIsAvailable(9000)
+            .UntilCommandIsCompleted(
+                "clickhouse-client", "--user", "default", "--password", "adminpass", "--query", "SELECT 1"))
         .Build();
 
     public string Host => _container.Hostname;
@@ -60,16 +78,20 @@ public sealed class ClickHouseRolesFixture : IAsyncLifetime
     {
         await _container.StartAsync();
 
-        // Wait until the native protocol actually accepts handshakes (image reports
-        // port-open before listener is ready on first boot).
+        // Belt-and-braces around the wait strategy: even with the
+        // UntilCommandIsCompleted gate above, the *external* handshake from
+        // the test process can race a still-warming auth subsystem when 3+
+        // TFMs each spin up their own container concurrently on CI. 60×500ms
+        // = 30s gives that race enough headroom without slowing the steady
+        // state (the first attempt usually succeeds).
         await using var admin = new ClickHouseConnection(
             $"Host={Host};Port={Port};Username=default;Password=adminpass");
-        for (var attempt = 1; attempt <= 20; attempt++)
+        for (var attempt = 1; attempt <= 60; attempt++)
         {
             try { await admin.OpenAsync(); break; }
             catch
             {
-                if (attempt == 20) throw;
+                if (attempt == 60) throw;
                 await Task.Delay(500);
             }
         }

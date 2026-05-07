@@ -15,6 +15,7 @@ using CH.Native.Parameters;
 using CH.Native.Protocol;
 using CH.Native.Protocol.Messages;
 using CH.Native.Results;
+using CH.Native.Sql;
 using CH.Native.Telemetry;
 
 namespace CH.Native.Connection;
@@ -1199,7 +1200,9 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// Creates a new bulk inserter for high-performance batch inserts.
     /// </summary>
     /// <typeparam name="T">The POCO type representing a row.</typeparam>
-    /// <param name="tableName">The table name to insert into.</param>
+    /// <param name="tableName">
+    /// The table name to insert into. May be qualified as <c>database.table</c>.
+    /// </param>
     /// <param name="options">Optional bulk insert options.</param>
     /// <returns>A new bulk inserter instance. Call InitAsync() before use.</returns>
     public BulkInserter<T> CreateBulkInserter<T>(string tableName, BulkInsertOptions? options = null)
@@ -1212,6 +1215,69 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         return new BulkInserter<T>(this, tableName, options);
     }
 
+    /// <summary>
+    /// Creates a new bulk inserter for high-performance batch inserts, targeting
+    /// the explicitly-supplied <paramref name="database"/> and <paramref name="tableName"/>.
+    /// </summary>
+    /// <typeparam name="T">The POCO type representing a row.</typeparam>
+    /// <param name="database">The database segment, quoted independently in the rendered SQL.</param>
+    /// <param name="tableName">The table segment, used verbatim — dots in the name are not split.</param>
+    /// <param name="options">Optional bulk insert options.</param>
+#pragma warning disable RS0026, RS0027 // Intentional sibling overload — distinct parameter shape, no resolution ambiguity.
+    public BulkInserter<T> CreateBulkInserter<T>(string database, string tableName, BulkInsertOptions? options = null)
+        where T : class
+#pragma warning restore RS0026, RS0027
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_isOpen)
+            throw new InvalidOperationException("Connection is not open.");
+
+        return new BulkInserter<T>(this, database, tableName, options);
+    }
+
+    /// <summary>
+    /// Creates a new dynamic (POCO-less) bulk inserter for high-performance batch inserts.
+    /// Rows are supplied as <c>object?[]</c> arrays whose element order matches
+    /// <paramref name="columnNames"/>.
+    /// </summary>
+    /// <param name="tableName">
+    /// The table name to insert into. May be qualified as <c>database.table</c>.
+    /// </param>
+    /// <param name="columnNames">The columns this inserter will write to, in row-element order.</param>
+    /// <param name="options">Optional bulk insert options.</param>
+#pragma warning disable RS0026, RS0027 // Distinct from generic CreateBulkInserter<T> via parameter shape.
+    public DynamicBulkInserter CreateBulkInserter(
+        string tableName,
+        IReadOnlyList<string> columnNames,
+        BulkInsertOptions? options = null)
+#pragma warning restore RS0026, RS0027
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_isOpen)
+            throw new InvalidOperationException("Connection is not open.");
+
+        return new DynamicBulkInserter(this, tableName, columnNames, options);
+    }
+
+    /// <summary>
+    /// Creates a new dynamic (POCO-less) bulk inserter targeting the explicitly-supplied
+    /// <paramref name="database"/> and <paramref name="tableName"/>.
+    /// </summary>
+#pragma warning disable RS0026, RS0027 // Sibling overload with distinct (database, table) parameter shape.
+    public DynamicBulkInserter CreateBulkInserter(
+        string database,
+        string tableName,
+        IReadOnlyList<string> columnNames,
+        BulkInsertOptions? options = null)
+#pragma warning restore RS0026, RS0027
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_isOpen)
+            throw new InvalidOperationException("Connection is not open.");
+
+        return new DynamicBulkInserter(this, database, tableName, columnNames, options);
+    }
+
     internal SchemaCache SchemaCache => _schemaCache;
 
     /// <summary>
@@ -1219,13 +1285,34 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// ALTER TABLE on a table whose schema is cached, or pass <c>null</c> to clear the
     /// entire cache.
     /// </summary>
-    /// <param name="tableName">The table to evict. When null, the entire cache is cleared.</param>
+    /// <param name="tableName">
+    /// The table to evict. When null, the entire cache is cleared. May be qualified
+    /// as <c>database.table</c>; an unqualified name targets the connection's default
+    /// database (<see cref="ClickHouseConnectionSettings.Database"/>).
+    /// </param>
+#pragma warning disable RS0026, RS0027 // Shipped overload preserved for source-compat; the (database, tableName) overload is the maximal one.
     public void InvalidateSchemaCache(string? tableName = null)
+#pragma warning restore RS0026, RS0027
     {
         if (tableName is null)
+        {
             _schemaCache.Clear();
-        else
-            _schemaCache.InvalidateTable(tableName);
+            return;
+        }
+
+        var (database, table) = ClickHouseIdentifier.SplitQualifiedName(tableName, _settings.Database);
+        _schemaCache.InvalidateTable(database, table);
+    }
+
+    /// <summary>
+    /// Evicts cached bulk-insert schemas for the specified <paramref name="database"/>
+    /// and <paramref name="tableName"/> on this connection.
+    /// </summary>
+    public void InvalidateSchemaCache(string database, string tableName)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+        ArgumentNullException.ThrowIfNull(tableName);
+        _schemaCache.InvalidateTable(database, tableName);
     }
 
     /// <summary>
@@ -1287,6 +1374,136 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
         await inserter.CompleteAsync(cancellationToken);
     }
+
+#pragma warning disable RS0026, RS0027 // Sibling BulkInsertAsync overloads — distinct parameter shapes for (database, tableName) and dynamic columns. No overload-resolution ambiguity.
+    /// <summary>
+    /// Bulk inserts rows from an enumerable into the explicitly-supplied
+    /// <paramref name="database"/> and <paramref name="tableName"/>.
+    /// </summary>
+    public async Task BulkInsertAsync<T>(
+        string database,
+        string tableName,
+        IEnumerable<T> rows,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        await using var inserter = CreateBulkInserter<T>(database, tableName, options);
+        await inserter.InitAsync(cancellationToken);
+
+        if (options?.PreferDirectStreaming ?? true)
+            await inserter.AddRangeStreamingAsync(rows, cancellationToken);
+        else
+            await inserter.AddRangeAsync(rows, cancellationToken);
+
+        await inserter.CompleteAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Bulk inserts rows from an async enumerable into the explicitly-supplied
+    /// <paramref name="database"/> and <paramref name="tableName"/>.
+    /// </summary>
+    public async Task BulkInsertAsync<T>(
+        string database,
+        string tableName,
+        IAsyncEnumerable<T> rows,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        await using var inserter = CreateBulkInserter<T>(database, tableName, options);
+        await inserter.InitAsync(cancellationToken);
+
+        if (options?.PreferDirectStreaming ?? true)
+        {
+            await inserter.AddRangeStreamingAsync(rows, cancellationToken);
+        }
+        else
+        {
+            await foreach (var row in rows.WithCancellation(cancellationToken))
+            {
+                await inserter.AddAsync(row, cancellationToken);
+            }
+        }
+
+        await inserter.CompleteAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Bulk inserts rows from an enumerable of <c>object?[]</c> into the specified
+    /// table without requiring a POCO type.
+    /// </summary>
+    /// <param name="tableName">
+    /// The table name to insert into. May be qualified as <c>database.table</c>.
+    /// </param>
+    /// <param name="columnNames">The columns to write to, in row-element order.</param>
+    /// <param name="rows">The rows to insert.</param>
+    /// <param name="options">Optional bulk insert options.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task BulkInsertAsync(
+        string tableName,
+        IReadOnlyList<string> columnNames,
+        IEnumerable<object?[]> rows,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var inserter = CreateBulkInserter(tableName, columnNames, options);
+        await inserter.InitAsync(cancellationToken);
+        await inserter.AddRangeAsync(rows, cancellationToken);
+        await inserter.CompleteAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Bulk inserts rows from an async enumerable of <c>object?[]</c> into the
+    /// specified table without requiring a POCO type.
+    /// </summary>
+    public async Task BulkInsertAsync(
+        string tableName,
+        IReadOnlyList<string> columnNames,
+        IAsyncEnumerable<object?[]> rows,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var inserter = CreateBulkInserter(tableName, columnNames, options);
+        await inserter.InitAsync(cancellationToken);
+        await inserter.AddRangeAsync(rows, cancellationToken);
+        await inserter.CompleteAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Bulk inserts rows from an enumerable of <c>object?[]</c> into the
+    /// explicitly-supplied <paramref name="database"/> and <paramref name="tableName"/>.
+    /// </summary>
+    public async Task BulkInsertAsync(
+        string database,
+        string tableName,
+        IReadOnlyList<string> columnNames,
+        IEnumerable<object?[]> rows,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var inserter = CreateBulkInserter(database, tableName, columnNames, options);
+        await inserter.InitAsync(cancellationToken);
+        await inserter.AddRangeAsync(rows, cancellationToken);
+        await inserter.CompleteAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Bulk inserts rows from an async enumerable of <c>object?[]</c> into the
+    /// explicitly-supplied <paramref name="database"/> and <paramref name="tableName"/>.
+    /// </summary>
+    public async Task BulkInsertAsync(
+        string database,
+        string tableName,
+        IReadOnlyList<string> columnNames,
+        IAsyncEnumerable<object?[]> rows,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using var inserter = CreateBulkInserter(database, tableName, columnNames, options);
+        await inserter.InitAsync(cancellationToken);
+        await inserter.AddRangeAsync(rows, cancellationToken);
+        await inserter.CompleteAsync(cancellationToken);
+    }
+#pragma warning restore RS0026, RS0027
 
     /// <summary>
     /// Executes a query and returns the first column of the first row.

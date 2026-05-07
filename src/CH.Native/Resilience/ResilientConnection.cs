@@ -322,6 +322,72 @@ public sealed class ResilientConnection : IAsyncDisposable
         await _currentConnection!.BulkInsertAsync(tableName, rows, options, cancellationToken).ConfigureAwait(false);
     }
 
+#pragma warning disable RS0026, RS0027 // Sibling BulkInsertAsync overloads — distinct parameter shapes (database/table split, dynamic columns).
+    /// <summary>
+    /// Bulk inserts rows into the explicitly-supplied <paramref name="database"/>
+    /// and <paramref name="tableName"/>. Resilience covers the connect phase only.
+    /// </summary>
+    public async Task BulkInsertAsync<T>(
+        string database,
+        string tableName,
+        IEnumerable<T> rows,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        ThrowIfDisposed();
+        await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+        await _currentConnection!.BulkInsertAsync(database, tableName, rows, options, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Bulk inserts rows from an async enumerable into the explicitly-supplied
+    /// <paramref name="database"/> and <paramref name="tableName"/>.
+    /// </summary>
+    public async Task BulkInsertAsync<T>(
+        string database,
+        string tableName,
+        IAsyncEnumerable<T> rows,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        ThrowIfDisposed();
+        await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+        await _currentConnection!.BulkInsertAsync(database, tableName, rows, options, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Bulk inserts rows from an enumerable of <c>object?[]</c> into the specified
+    /// table without requiring a POCO type.
+    /// </summary>
+    public async Task BulkInsertAsync(
+        string tableName,
+        IReadOnlyList<string> columnNames,
+        IEnumerable<object?[]> rows,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+        await _currentConnection!.BulkInsertAsync(tableName, columnNames, rows, options, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Bulk inserts rows from an async enumerable of <c>object?[]</c> into the
+    /// specified table without requiring a POCO type.
+    /// </summary>
+    public async Task BulkInsertAsync(
+        string tableName,
+        IReadOnlyList<string> columnNames,
+        IAsyncEnumerable<object?[]> rows,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ThrowIfDisposed();
+        await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
+        await _currentConnection!.BulkInsertAsync(tableName, columnNames, rows, options, cancellationToken).ConfigureAwait(false);
+    }
+#pragma warning restore RS0026, RS0027
+
     /// <summary>
     /// Gets the underlying ClickHouseConnection. Use with caution - this bypasses resilience features.
     /// </summary>
