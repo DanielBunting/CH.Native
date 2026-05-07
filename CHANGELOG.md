@@ -5,6 +5,55 @@ All notable changes to this project are documented in this file.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-05-07
+
+### Added
+
+- `DynamicBulkInserter` — POCO-less bulk-insert API. Rows are supplied as `object?[]`
+  arrays whose element order matches a caller-supplied `columnNames` list. Mirrors the
+  `Init` / `Add` / `Flush` / `Complete` lifecycle of `BulkInserter<T>`. Convenience
+  overloads on `ClickHouseConnection`, `ClickHouseDataSource`, and `ResilientConnection`
+  expose `CreateBulkInserter` (factory) and `BulkInsertAsync` (one-shot).
+- `BulkInsertOptions.ColumnTypes` — pre-supplied column types keyed by column name
+  (case-insensitive). When set and covering every column in `columnNames`, the dynamic
+  inserter skips the server schema-probe round-trip. Honored by the dynamic
+  (non-generic) bulk-insert API only; the POCO path always probes.
+- Qualified `database.table` names in `BulkInserter<T>` and `DynamicBulkInserter`.
+  Qualified strings are split on the single dot and rendered as `` `db`.`table` `` in
+  the emitted `INSERT` SQL, addressing the named database directly. Sibling
+  `(database, tableName)` overloads on `BulkInserter<T>`, `DynamicBulkInserter`,
+  `ClickHouseConnection.CreateBulkInserter` / `BulkInsertAsync`,
+  `ClickHouseDataSource.CreateBulkInserterAsync`, and
+  `ResilientConnection.BulkInsertAsync` provide an explicit escape hatch for tables
+  whose name itself contains a dot.
+- `ClickHouseIdentifier.QuoteQualifiedName(string)` helper.
+- `ClickHouseConnection.InvalidateSchemaCache(string database, string tableName)`
+  overload; the existing single-argument form learned to parse `database.table`.
+
+### Changed
+
+- Per-connection bulk-insert schema cache is now keyed by
+  `(Database, Table, ColumnListFingerprint)`. Two genuinely different tables in
+  different databases (e.g. `db1.events` and `db2.events`) hash to distinct keys
+  and never collide. An unqualified table name resolves to the connection's default
+  database, so callers that mix qualified and unqualified forms for the same logical
+  table still hit the same cache entry.
+- Bulk-insert telemetry now emits a `db.clickhouse.database` tag/metric label
+  alongside the existing `db.clickhouse.table`. The table tag carries the
+  unqualified table name regardless of whether the caller passed a qualified or
+  unqualified form, so dashboards grouped on it stay coherent.
+
+### Behaviour change
+
+- Anyone currently passing `"database.table"` as the `tableName` argument to
+  `BulkInserter<T>` was either (a) getting a server error because `database.table`
+  doesn't exist as a literal table name in the connection's default database, or
+  (b) hitting a literal table whose name happens to be `database.table`. Case (a)
+  is silently fixed — the rendered SQL now correctly addresses `database`'s
+  `table`. Case (b) is a behaviour change: that user must now use the explicit
+  `(database, tableName)` overload to address a table whose name literally contains
+  a dot.
+
 ## [1.1.0] - 2026-05-06
 
 ### Added

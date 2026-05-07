@@ -65,6 +65,30 @@ public sealed class BulkInsertOptions
     public string? QueryId { get; set; }
 
     /// <summary>
+    /// Pre-supplied column types, keyed by column name (OrdinalIgnoreCase).
+    /// When set and covering every column being inserted, the dynamic
+    /// (POCO-less) bulk-insert path skips the server schema-probe round-trip
+    /// and builds the schema directly from this dictionary.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Currently honored by the <see cref="DynamicBulkInserter"/> (non-generic)
+    /// path only; the POCO <see cref="BulkInserter{T}"/> path always probes
+    /// the server. Adding POCO support is a planned follow-up that touches
+    /// the property-mapping flow.
+    /// </para>
+    /// <para>
+    /// Partial coverage (some but not all column names present) throws an
+    /// <see cref="InvalidOperationException"/> at <c>InitAsync</c> time:
+    /// partial types is treated as a programming error, not a fallback
+    /// condition. Mismatched types vs. the server's actual schema surface as
+    /// a <see cref="Exceptions.ClickHouseServerException"/> at
+    /// <c>CompleteAsync</c> time.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyDictionary<string, string>? ColumnTypes { get; set; }
+
+    /// <summary>
     /// Gets the default options instance.
     /// </summary>
     public static BulkInsertOptions Default { get; } = new();

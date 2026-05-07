@@ -19,6 +19,9 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
 {
     private readonly ClickHouseConnection _connection;
     private readonly string _tableName;
+    private readonly string _resolvedDatabase;
+    private readonly string _resolvedTable;
+    private readonly string _quotedQualifiedTable;
     private readonly BulkInsertOptions _options;
     private readonly List<T> _buffer;
 
@@ -50,7 +53,12 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     /// Creates a new bulk inserter for the specified table.
     /// </summary>
     /// <param name="connection">The ClickHouse connection to use.</param>
-    /// <param name="tableName">The table name to insert into.</param>
+    /// <param name="tableName">
+    /// The table name to insert into. May be qualified as <c>database.table</c>;
+    /// in that case the rendered SQL addresses the named database directly
+    /// (<c>`db`.`table`</c>). Tables whose name legitimately contains a dot
+    /// must use the <c>(database, tableName)</c> overload instead.
+    /// </param>
     /// <param name="options">Optional bulk insert options.</param>
     public BulkInserter(ClickHouseConnection connection, string tableName, BulkInsertOptions? options = null)
     {
@@ -62,6 +70,49 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
                 nameof(options),
                 _options.BatchSize,
                 $"{nameof(BulkInsertOptions)}.{nameof(BulkInsertOptions.BatchSize)} must be greater than zero.");
+
+        var (db, table) = ClickHouseIdentifier.SplitQualifiedName(tableName, connection.Settings.Database);
+        _resolvedDatabase = db;
+        _resolvedTable = table;
+        _quotedQualifiedTable = ClickHouseIdentifier.QuoteQualifiedName(tableName);
+
+        _buffer = new List<T>(_options.BatchSize);
+    }
+
+    /// <summary>
+    /// Creates a new bulk inserter targeting the explicitly-supplied
+    /// <paramref name="database"/> and <paramref name="tableName"/>. Use this
+    /// overload to insert into a table whose name itself contains a dot, or
+    /// when you want to make cross-database routing explicit at the callsite.
+    /// </summary>
+    /// <param name="connection">The ClickHouse connection to use.</param>
+    /// <param name="database">The database segment. Quoted independently in the rendered SQL.</param>
+    /// <param name="tableName">The table segment, used verbatim — dots in the name are not split.</param>
+    /// <param name="options">Optional bulk insert options.</param>
+#pragma warning disable RS0026, RS0027 // Sibling ctor — distinct (database, table) parameter shape.
+    public BulkInserter(ClickHouseConnection connection, string database, string tableName, BulkInsertOptions? options = null)
+#pragma warning restore RS0026, RS0027
+    {
+        _connection = connection ?? throw new ArgumentNullException(nameof(connection));
+        ArgumentNullException.ThrowIfNull(database);
+        ArgumentNullException.ThrowIfNull(tableName);
+        if (database.Length == 0)
+            throw new ArgumentException("Database must be non-empty.", nameof(database));
+        if (tableName.Length == 0)
+            throw new ArgumentException("Table name must be non-empty.", nameof(tableName));
+
+        _options = options ?? BulkInsertOptions.Default;
+        if (_options.BatchSize <= 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                _options.BatchSize,
+                $"{nameof(BulkInsertOptions)}.{nameof(BulkInsertOptions.BatchSize)} must be greater than zero.");
+
+        _resolvedDatabase = database;
+        _resolvedTable = tableName;
+        _tableName = $"{database}.{tableName}";
+        _quotedQualifiedTable = ClickHouseIdentifier.Quote(database) + "." + ClickHouseIdentifier.Quote(tableName);
+
         _buffer = new List<T>(_options.BatchSize);
     }
 
@@ -175,10 +226,10 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             // can never break out of the INSERT statement.
             var propertyMappings = GetPropertyMappings();
             var columnList = string.Join(", ", propertyMappings.Select(p => ClickHouseIdentifier.Quote(p.ColumnName)));
-            _schemaCacheKey = new SchemaKey(_tableName, columnList);
+            _schemaCacheKey = new SchemaKey(_resolvedDatabase, _resolvedTable, columnList);
 
             // Send INSERT query (required for server-side protocol state even on cache hit)
-            var sql = $"INSERT INTO {ClickHouseIdentifier.Quote(_tableName)} ({columnList}) VALUES";
+            var sql = $"INSERT INTO {_quotedQualifiedTable} ({columnList}) VALUES";
             // Snapshot to IReadOnlyList so the wire path doesn't observe later mutation.
             var rolesSnapshot = _options.Roles is null ? null : (IReadOnlyList<string>)_options.Roles.ToArray();
             await _connection.SendInsertQueryAsync(
@@ -503,7 +554,8 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         if (activity != null)
         {
             activity.SetTag("db.system", "clickhouse");
-            activity.SetTag("db.clickhouse.table", _tableName);
+            activity.SetTag("db.clickhouse.database", _resolvedDatabase);
+            activity.SetTag("db.clickhouse.table", _resolvedTable);
             activity.SetTag("db.clickhouse.rows", _buffer.Count);
         }
 
@@ -544,7 +596,8 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
                 _buffer.Count,
                 new KeyValuePair<string, object?>("db.system", "clickhouse"),
                 new KeyValuePair<string, object?>("db.name", _connection.Settings.Database),
-                new KeyValuePair<string, object?>("db.clickhouse.table", _tableName));
+                new KeyValuePair<string, object?>("db.clickhouse.database", _resolvedDatabase),
+                new KeyValuePair<string, object?>("db.clickhouse.table", _resolvedTable));
         }
         catch (OperationCanceledException ex) when (_connection.WasCancellationRequested)
         {
@@ -606,10 +659,11 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         _completeStarted = true;
 
         using var activity = ClickHouseActivitySource.StartBulkInsert(
-            _tableName,
+            _resolvedTable,
             _connection.Settings.Database,
             _effectiveQueryId,
             _connection.Settings.Telemetry);
+        activity?.SetTag("db.clickhouse.database", _resolvedDatabase);
 
         using var registration = RegisterCancelHook(cancellationToken);
         try
@@ -638,7 +692,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             // Server-side rejection on the cached-schema path is almost always schema drift
             // (e.g. post-ALTER column removal, rename, or type change). Evict the entry so
             // the next inserter refreshes, and surface the error to the caller.
-            _connection.SchemaCache.InvalidateTable(_tableName);
+            _connection.SchemaCache.InvalidateTable(_resolvedDatabase, _resolvedTable);
             ClickHouseActivitySource.SetError(activity, ex);
             throw;
         }

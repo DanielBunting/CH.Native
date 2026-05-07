@@ -4,8 +4,9 @@ namespace CH.Native.BulkInsert;
 
 /// <summary>
 /// Thread-safe per-connection cache of bulk insert schemas, keyed by
-/// (table name, ordered column list fingerprint). The fingerprint differentiates
-/// POCOs that map disjoint column subsets of the same table.
+/// (database, table, ordered column list fingerprint). The fingerprint differentiates
+/// POCOs that map disjoint column subsets of the same table; the database segment
+/// keeps cross-database inserts on the same connection from colliding.
 /// </summary>
 /// <remarks>
 /// Lifetime is bounded by the owning <c>ClickHouseConnection</c>: the cache is
@@ -29,23 +30,24 @@ internal sealed class SchemaCache
         => _entries[key] = schema;
 
     /// <summary>
-    /// Evicts all entries for the given table (across all column fingerprints).
+    /// Evicts all entries for the given (database, table) pair (across all column fingerprints).
     /// </summary>
     /// <remarks>
     /// **Case-sensitive.** ClickHouse table identifiers are byte-equal compared,
     /// so callers must invalidate using the exact casing the entry was inserted
-    /// with. <c>InvalidateTable("MyTable")</c> does <b>not</b> evict an entry
-    /// stored under <c>"mytable"</c>; on a case-insensitive filesystem or
+    /// with. <c>InvalidateTable("db", "MyTable")</c> does <b>not</b> evict an entry
+    /// stored under <c>("db", "mytable")</c>; on a case-insensitive filesystem or
     /// catalog wrapper this can leave stale schema metadata in the cache. If
     /// your code paths reference the same table with mixed casing, normalise
     /// table names at a single boundary before calling either <see cref="Set"/>
     /// or <see cref="InvalidateTable"/>.
     /// </remarks>
-    public void InvalidateTable(string tableName)
+    public void InvalidateTable(string database, string table)
     {
         foreach (var key in _entries.Keys)
         {
-            if (string.Equals(key.TableName, tableName, StringComparison.Ordinal))
+            if (string.Equals(key.Database, database, StringComparison.Ordinal) &&
+                string.Equals(key.Table, table, StringComparison.Ordinal))
             {
                 _entries.TryRemove(key, out _);
             }
@@ -57,6 +59,6 @@ internal sealed class SchemaCache
     public int Count => _entries.Count;
 }
 
-internal readonly record struct SchemaKey(string TableName, string ColumnListFingerprint);
+internal readonly record struct SchemaKey(string Database, string Table, string ColumnListFingerprint);
 
 internal sealed record BulkInsertSchema(string[] ColumnNames, string[] ColumnTypes);

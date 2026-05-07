@@ -294,6 +294,77 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
         }
     }
 
+#pragma warning disable RS0026, RS0027 // Sibling overloads with distinct parameter shapes (database/table split, dynamic columns).
+    /// <summary>
+    /// Creates a <see cref="BulkInserter{T}"/> backed by a pooled connection,
+    /// targeting the explicitly-supplied <paramref name="database"/> and
+    /// <paramref name="tableName"/>.
+    /// </summary>
+    public async ValueTask<BulkInserter<T>> CreateBulkInserterAsync<T>(
+        string database,
+        string tableName,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+        where T : class
+    {
+        var conn = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return new BulkInserter<T>(conn, database, tableName, options);
+        }
+        catch
+        {
+            await conn.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Creates a <see cref="DynamicBulkInserter"/> backed by a pooled connection.
+    /// </summary>
+    public async ValueTask<DynamicBulkInserter> CreateBulkInserterAsync(
+        string tableName,
+        IReadOnlyList<string> columnNames,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var conn = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return new DynamicBulkInserter(conn, tableName, columnNames, options);
+        }
+        catch
+        {
+            await conn.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Creates a <see cref="DynamicBulkInserter"/> backed by a pooled connection,
+    /// targeting the explicitly-supplied <paramref name="database"/> and
+    /// <paramref name="tableName"/>.
+    /// </summary>
+    public async ValueTask<DynamicBulkInserter> CreateBulkInserterAsync(
+        string database,
+        string tableName,
+        IReadOnlyList<string> columnNames,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        var conn = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return new DynamicBulkInserter(conn, database, tableName, columnNames, options);
+        }
+        catch
+        {
+            await conn.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+#pragma warning restore RS0026, RS0027
+
     /// <summary>Point-in-time snapshot of pool state.</summary>
     public DataSourceStatistics GetStatistics()
     {
