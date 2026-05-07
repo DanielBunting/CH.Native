@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using CH.Native.BulkInsert;
+using CH.Native.Linq;
 using CH.Native.Telemetry;
 
 namespace CH.Native.Connection;
@@ -364,6 +365,40 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
         }
     }
 #pragma warning restore RS0026, RS0027
+
+    /// <summary>
+    /// Creates a queryable bound to this data source. Each enumeration and
+    /// each <see cref="ClickHouseQueryableExtensions.InsertAsync{T}(IQueryable{T}, T, BulkInsertOptions?, System.Threading.CancellationToken)"/>
+    /// rents a connection from the pool and returns it on completion — the
+    /// queryable itself does not pin a connection. Table name is resolved via
+    /// snake_case from the type name.
+    /// </summary>
+    /// <typeparam name="T">The entity type.</typeparam>
+    /// <returns>A queryable representing the table.</returns>
+    public IQueryable<T> Table<T>()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var tableName = TableNameResolver.Resolve<T>();
+        var context = ClickHouseQueryContext.FromDataSource(this, tableName, typeof(T), columnNames: null);
+        return new ClickHouseQueryable<T>(context);
+    }
+
+    /// <summary>
+    /// Creates a queryable bound to this data source for the specified table
+    /// name (which may be qualified as <c>database.table</c>).
+    /// </summary>
+    /// <typeparam name="T">The entity type.</typeparam>
+    /// <param name="tableName">The explicit table name.</param>
+    /// <returns>A queryable representing the table.</returns>
+#pragma warning disable RS0026, RS0027 // Sibling overload — distinct (tableName) parameter shape.
+    public IQueryable<T> Table<T>(string tableName)
+#pragma warning restore RS0026, RS0027
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentException.ThrowIfNullOrWhiteSpace(tableName);
+        var context = ClickHouseQueryContext.FromDataSource(this, tableName, typeof(T), columnNames: null);
+        return new ClickHouseQueryable<T>(context);
+    }
 
     /// <summary>Point-in-time snapshot of pool state.</summary>
     public DataSourceStatistics GetStatistics()

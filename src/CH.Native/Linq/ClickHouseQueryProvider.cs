@@ -95,14 +95,24 @@ public sealed class ClickHouseQueryProvider : IQueryProvider
     /// </summary>
     internal ClickHouseQueryContext CreateContextForType(Type elementType)
     {
-        return new ClickHouseQueryContext(
-            _context.Connection,
-            _context.TableName,
-            elementType,
-            _context.ColumnNames)
-        {
-            QueryId = _context.QueryId
-        };
+        // Preserve the original execution binding: a data-source-backed context
+        // must keep the data-source factory branch so projected queryables also
+        // rent a pooled connection on enumeration; a connection-backed context
+        // keeps the connection (or null, for SQL-generation-only contexts).
+        var clone = _context.DataSource is not null
+            ? ClickHouseQueryContext.FromDataSource(
+                _context.DataSource,
+                _context.TableName,
+                elementType,
+                _context.ColumnNames)
+            : new ClickHouseQueryContext(
+                _context.Connection,
+                _context.TableName,
+                elementType,
+                _context.ColumnNames);
+
+        clone.QueryId = _context.QueryId;
+        return clone;
     }
 
     private static Type GetElementType(Type type)

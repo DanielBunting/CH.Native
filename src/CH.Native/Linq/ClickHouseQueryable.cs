@@ -90,8 +90,16 @@ public sealed class ClickHouseQueryable<T> : IQueryable<T>, IOrderedQueryable<T>
     public async IAsyncEnumerator<T> GetAsyncEnumerator(CancellationToken cancellationToken = default)
     {
         var (sql, parameters) = _provider.TranslateToSqlWithParameters(_expression);
-        var connection = _provider.Context.Connection;
         var queryId = _provider.Context.QueryId;
+
+        // Resolve the connection through the lease helper: either the bound
+        // connection (no-op dispose) or a rented one when the context was
+        // created via ClickHouseDataSource.Table<T> (lease dispose returns
+        // the connection to the pool). Lease must outlive the reader.
+        await using var lease = await _provider.Context
+            .AcquireConnectionAsync(cancellationToken)
+            .ConfigureAwait(false);
+        var connection = lease.Connection;
 
         await using var reader = await connection
             .ExecuteReaderWithParametersAsync(sql, parameters, cancellationToken, queryId: queryId)

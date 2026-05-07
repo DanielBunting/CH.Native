@@ -5,9 +5,25 @@ All notable changes to this project are documented in this file.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/).
 
-## [1.1.1] - 2026-05-07
+## [1.1.1] 
 
 ### Added
+
+- `InsertAsync<T>` extension methods on `IQueryable<T>` for the LINQ table
+  handle returned by `connection.Table<T>()`. Three overloads cover single
+  records (`InsertAsync(T row, ...)`), in-memory collections
+  (`InsertAsync(IEnumerable<T> rows, ...)`), and async streams
+  (`InsertAsync(IAsyncEnumerable<T> rows, ...)`). All three delegate to the
+  existing `BulkInsertAsync<T>` plumbing — schema cache, roles, query id,
+  batch size, and telemetry are inherited unchanged. Single-record inserts
+  still open a fresh INSERT context per call (handshake + commit), so callers
+  on hot paths should prefer the collection overload or `BulkInserter<T>`.
+- `ClickHouseDataSource.Table<T>()` and `Table<T>(string tableName)` instance
+  methods, mirroring the existing connection-side LINQ entry point. The
+  returned queryable rents a pooled connection for the lifetime of each
+  enumeration (reads) and each `InsertAsync` call (writes), then returns
+  it to the pool — the handle itself does not pin a connection, so it
+  composes naturally with concurrent service code.
 
 - `DynamicBulkInserter` — POCO-less bulk-insert API. Rows are supplied as `object?[]`
   arrays whose element order matches a caller-supplied `columnNames` list. Mirrors the

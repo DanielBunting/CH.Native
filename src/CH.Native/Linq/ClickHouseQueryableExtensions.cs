@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using System.Reflection;
+using CH.Native.BulkInsert;
 using CH.Native.Connection;
 
 namespace CH.Native.Linq;
@@ -12,18 +13,18 @@ public static class ClickHouseQueryableExtensions
     #region Entry Point - Table<T>()
 
     /// <summary>
-    /// Creates a queryable for the specified entity type.
-    /// Table name is resolved using snake_case conversion of the type name.
+    /// Creates a queryable for the specified entity type that also supports
+    /// <c>InsertAsync</c> via the extension methods on this class. Table name
+    /// is resolved using snake_case conversion of the type name.
     /// </summary>
     /// <typeparam name="T">The entity type. Must have a parameterless constructor for result mapping.</typeparam>
     /// <param name="connection">The connection to query against.</param>
     /// <returns>A queryable representing the table.</returns>
     /// <exception cref="InvalidOperationException">Thrown if the connection is not open.</exception>
     /// <example>
-    /// var users = await connection.Table&lt;User&gt;()
-    ///     .Where(u => u.Age > 18)
-    ///     .OrderBy(u => u.Name)
-    ///     .ToListAsync();
+    /// var users = connection.Table&lt;User&gt;();
+    /// await users.InsertAsync(new User { ... });
+    /// var adults = await users.Where(u =&gt; u.Age &gt; 18).ToListAsync();
     /// </example>
     public static IQueryable<T> Table<T>(this ClickHouseConnection connection)
     {
@@ -151,6 +152,108 @@ public static class ClickHouseQueryableExtensions
 
         throw new InvalidOperationException(
             "ToSql() is only available on ClickHouse queries created via connection.Table<T>().");
+    }
+
+    #endregion
+
+    #region Insert
+
+#pragma warning disable RS0026, RS0027 // Sibling InsertAsync overloads — distinct row-shape (T / IEnumerable<T> / IAsyncEnumerable<T>) keeps overload resolution unambiguous.
+    /// <summary>
+    /// Inserts a single record into the table represented by this queryable.
+    /// </summary>
+    /// <remarks>
+    /// Each call opens a fresh INSERT context on the wire (query handshake,
+    /// per-block commit, end-of-stream). That overhead is fine for occasional
+    /// inserts but adds up in a hot loop — for high-volume writes prefer the
+    /// <see cref="IEnumerable{T}"/> or <see cref="IAsyncEnumerable{T}"/>
+    /// overload (one INSERT, many rows), or a long-lived
+    /// <see cref="BulkInserter{T}"/> for explicit batching.
+    /// </remarks>
+    public static Task InsertAsync<T>(
+        this IQueryable<T> source,
+        T row,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(row);
+        return InsertAsync(source, new[] { row }, options, cancellationToken);
+    }
+
+    /// <summary>
+    /// Inserts a sequence of records into the table represented by this queryable
+    /// in a single bulk-insert pass.
+    /// </summary>
+    public static async Task InsertAsync<T>(
+        this IQueryable<T> source,
+        IEnumerable<T> rows,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        var (connection, tableName, ownsConnection) = await ResolveInsertTargetAsync(source, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await connection.BulkInsertAsync(tableName, rows, options, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (ownsConnection)
+                await connection.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Inserts an async stream of records into the table represented by this queryable
+    /// in a single bulk-insert pass.
+    /// </summary>
+    public static async Task InsertAsync<T>(
+        this IQueryable<T> source,
+        IAsyncEnumerable<T> rows,
+        BulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        var (connection, tableName, ownsConnection) = await ResolveInsertTargetAsync(source, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await connection.BulkInsertAsync(tableName, rows, options, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (ownsConnection)
+                await connection.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+#pragma warning restore RS0026, RS0027
+
+    /// <summary>
+    /// Resolves the connection and table name behind a queryable for an insert
+    /// operation. For data-source-bound queryables, rents a connection from the
+    /// pool — the caller must dispose it (returns to pool) when <c>ownsConnection</c>
+    /// is <see langword="true"/>.
+    /// </summary>
+    private static async Task<(ClickHouseConnection Connection, string TableName, bool OwnsConnection)>
+        ResolveInsertTargetAsync<T>(IQueryable<T> source, CancellationToken cancellationToken)
+    {
+        if (source.Provider is not ClickHouseQueryProvider provider)
+            throw new InvalidOperationException(
+                "InsertAsync() is only available on ClickHouse queries created via connection.Table<T>() or dataSource.Table<T>().");
+
+        var ctx = provider.Context;
+
+        if (ctx.Connection is not null)
+            return (ctx.Connection, ctx.TableName, OwnsConnection: false);
+
+        if (ctx.DataSource is not null)
+        {
+            var rented = await ctx.DataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            return (rented, ctx.TableName, OwnsConnection: true);
+        }
+
+        throw new InvalidOperationException(
+            "InsertAsync() requires the underlying query to be bound to a Connection or DataSource. " +
+            "This queryable was created without either, which only supports SQL generation, not execution.");
     }
 
     #endregion

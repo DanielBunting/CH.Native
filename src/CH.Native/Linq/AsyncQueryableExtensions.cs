@@ -216,7 +216,10 @@ public static class AsyncQueryableExtensions
 
             var (sql, parameters) = provider.TranslateToSqlWithParameters(countExpression);
 
-            var result = await provider.Context.Connection
+            await using var lease = await provider.Context
+                .AcquireConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var result = await lease.Connection
                 .ExecuteScalarWithParametersAsync<long>(sql, parameters, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
@@ -263,7 +266,10 @@ public static class AsyncQueryableExtensions
 
             var (sql, parameters) = provider.TranslateToSqlWithParameters(countExpression);
 
-            return await provider.Context.Connection
+            await using var lease = await provider.Context
+                .AcquireConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            return await lease.Connection
                 .ExecuteScalarWithParametersAsync<long>(sql, parameters, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -355,7 +361,10 @@ public static class AsyncQueryableExtensions
 
             var (sql, parameters) = provider.TranslateToSqlWithParameters(sumExpression);
 
-            var result = await provider.Context.Connection
+            await using var lease = await provider.Context
+                .AcquireConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var result = await lease.Connection
                 .ExecuteScalarWithParametersAsync<TResult>(sql, parameters, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
@@ -385,7 +394,10 @@ public static class AsyncQueryableExtensions
 
             var (sql, parameters) = provider.TranslateToSqlWithParameters(avgExpression);
 
-            return await provider.Context.Connection
+            await using var lease = await provider.Context
+                .AcquireConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            return await lease.Connection
                 .ExecuteScalarWithParametersAsync<double>(sql, parameters, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -412,7 +424,10 @@ public static class AsyncQueryableExtensions
 
             var (sql, parameters) = provider.TranslateToSqlWithParameters(avgExpression);
 
-            return await provider.Context.Connection
+            await using var lease = await provider.Context
+                .AcquireConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            return await lease.Connection
                 .ExecuteScalarWithParametersAsync<double>(sql, parameters, cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -439,7 +454,10 @@ public static class AsyncQueryableExtensions
 
             var (sql, parameters) = provider.TranslateToSqlWithParameters(minExpression);
 
-            return await provider.Context.Connection
+            await using var lease = await provider.Context
+                .AcquireConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            return await lease.Connection
                 .ExecuteScalarWithParametersAsync<TResult>(sql, parameters, cancellationToken: cancellationToken)
                 .ConfigureAwait(false) ?? default!;
         }
@@ -466,7 +484,10 @@ public static class AsyncQueryableExtensions
 
             var (sql, parameters) = provider.TranslateToSqlWithParameters(maxExpression);
 
-            return await provider.Context.Connection
+            await using var lease = await provider.Context
+                .AcquireConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            return await lease.Connection
                 .ExecuteScalarWithParametersAsync<TResult>(sql, parameters, cancellationToken: cancellationToken)
                 .ConfigureAwait(false) ?? default!;
         }
