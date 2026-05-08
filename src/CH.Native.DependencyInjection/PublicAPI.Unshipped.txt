@@ -1,2 +1,1 @@
 #nullable enable
-CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.ValidateOnStart() -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!

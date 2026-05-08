@@ -53,10 +53,10 @@ CH.Native.DependencyInjection.ClickHouseConnectionOptions.TlsClientCertificate.g
 CH.Native.DependencyInjection.ClickHouseConnectionOptions.TlsClientCertificate.set -> void
 CH.Native.DependencyInjection.ClickHouseConnectionOptions.TlsPort.get -> int?
 CH.Native.DependencyInjection.ClickHouseConnectionOptions.TlsPort.set -> void
-CH.Native.DependencyInjection.ClickHouseConnectionOptions.Username.get -> string?
-CH.Native.DependencyInjection.ClickHouseConnectionOptions.Username.set -> void
 CH.Native.DependencyInjection.ClickHouseConnectionOptions.UseTls.get -> bool?
 CH.Native.DependencyInjection.ClickHouseConnectionOptions.UseTls.set -> void
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Username.get -> string?
+CH.Native.DependencyInjection.ClickHouseConnectionOptions.Username.set -> void
 CH.Native.DependencyInjection.ClickHouseConnectionOptionsValidator
 CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions
 CH.Native.DependencyInjection.HealthChecks.ClickHouseHealthCheck
@@ -68,6 +68,7 @@ CH.Native.DependencyInjection.IClickHouseCertificateProvider.GetCertificateAsync
 CH.Native.DependencyInjection.IClickHouseDataSourceBuilder
 CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.ServiceKey.get -> object?
 CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.Services.get -> Microsoft.Extensions.DependencyInjection.IServiceCollection!
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.ValidateOnStart() -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
 CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithCertificateProvider(System.Func<System.IServiceProvider!, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.Security.Cryptography.X509Certificates.X509Certificate2!>>!>! factory) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
 CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithCertificateProvider<TProvider>() -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
 CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithJwtProvider(System.Func<System.IServiceProvider!, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<string!>>!>! factory) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
@@ -104,9 +105,9 @@ CH.Native.DependencyInjection.TlsClientCertificateOptions.TlsClientCertificateOp
 static CH.Native.DependencyInjection.ClickHouseConnectionOptionsValidator.ValidateOrThrow(CH.Native.DependencyInjection.ClickHouseConnectionOptions! options, string? sectionPath = null) -> void
 static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, CH.Native.Connection.ClickHouseConnectionSettings! settings) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
 static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, Microsoft.Extensions.Configuration.IConfiguration! section) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<CH.Native.Connection.ClickHouseConnectionSettingsBuilder!>! configure) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
 static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! connectionString) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
 static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! serviceKey, Microsoft.Extensions.Configuration.IConfiguration! section) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
-static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! serviceKey, string! connectionString) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
 static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! serviceKey, System.Action<CH.Native.Connection.ClickHouseConnectionSettingsBuilder!>! configure) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
-static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, System.Action<CH.Native.Connection.ClickHouseConnectionSettingsBuilder!>! configure) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+static CH.Native.DependencyInjection.ClickHouseServiceCollectionExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IServiceCollection! services, string! serviceKey, string! connectionString) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
 static CH.Native.DependencyInjection.HealthChecks.ClickHouseHealthCheckBuilderExtensions.AddClickHouse(this Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder! builder, string! name = "clickhouse", object? serviceKey = null, System.TimeSpan? timeout = null, System.Collections.Generic.IEnumerable<string!>? tags = null) -> Microsoft.Extensions.DependencyInjection.IHealthChecksBuilder!

@@ -111,6 +111,20 @@ Or in the connection string:
 
 Leave unset (or pass `null`) to keep the server's login-time defaults. Each query starts with the configured roles applied — this is the right place to grant elevated permissions for a specific connection without changing the user's defaults globally.
 
+### Per-request role activation (`ChangeRolesAsync`)
+
+`ClickHouseConnection.ChangeRolesAsync` flips the active role set on an open connection — useful for per-request RBAC where the caller's role isn't known at pool-rent time:
+
+```csharp
+await using var conn = await dataSource.OpenConnectionAsync(ct);
+await conn.ChangeRolesAsync(new[] { "analyst" }, ct);
+// queries on this connection now run with `analyst` active
+```
+
+Pass `null` to revert to the connection's configured defaults; pass an empty list for an explicit `SET ROLE NONE`.
+
+**Pool trade-off:** when a rented connection has had `ChangeRolesAsync` called against it, the pool considers it poisoned and discards it on return rather than handing it to another caller (`CanBePooled` returns `false`). That's the documented price for using a pooled `ClickHouseDataSource` to serve per-request roles — see [Connection Pooling — Connection poison detection](connection-pooling.md#connection-poison-detection). For workloads where the role set is stable across requests, `WithRoles(...)` at connection-build time is cheaper.
+
 ## Rotating credentials in DI apps
 
 For long-running services where credentials rotate (JWTs, mTLS certs from Key Vault, SSH keys from Vault), don't hold the secret in `ClickHouseConnectionSettings`. Use the provider interfaces from `CH.Native.DependencyInjection`:
@@ -127,4 +141,4 @@ Providers are invoked once per **physical** connection (cold start, post-evictio
 - [Configuration](configuration.md) — connection-string keys and builder methods
 - [Dependency Injection](dependency-injection.md) — provider interfaces and DI wiring
 - [Connection Pooling](connection-pooling.md) — `ConnectionLifetime` and rotation timing
-- `samples/CH.Native.Samples.Authentication` — runnable demo of all four methods
+- `samples/CH.Native.Samples.Hosting` — ASP.NET sample with endpoint probes for all four auth methods (password / JWT / SSH / mTLS) plus a per-request role-activation demo. The bundled `docker/setup.sh` + `docker compose up` provisions roles, certs, and SSH keys against a local ClickHouse so every endpoint actually handshakes.

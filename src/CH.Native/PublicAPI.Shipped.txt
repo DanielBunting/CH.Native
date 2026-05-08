@@ -262,6 +262,8 @@ CH.Native.Connection.ClickHouseDataSource.Options.get -> CH.Native.Connection.Cl
 CH.Native.Connection.ClickHouseDataSource.PingAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
 CH.Native.Connection.ClickHouseDataSource.PrewarmTask.get -> System.Threading.Tasks.Task!
 CH.Native.Connection.ClickHouseDataSource.Settings.get -> CH.Native.Connection.ClickHouseConnectionSettings!
+CH.Native.Connection.ClickHouseDataSource.Table<T>() -> System.Linq.IQueryable<T>!
+CH.Native.Connection.ClickHouseDataSource.Table<T>(string! tableName) -> System.Linq.IQueryable<T>!
 CH.Native.Connection.ClickHouseDataSourceOptions
 CH.Native.Connection.ClickHouseDataSourceOptions.ClickHouseDataSourceOptions() -> void
 CH.Native.Connection.ClickHouseDataSourceOptions.ConnectionFactory.get -> System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<CH.Native.Connection.ClickHouseConnectionSettings!>>?
@@ -1261,6 +1263,9 @@ static CH.Native.Linq.AsyncQueryableExtensions.ToArrayAsync<T>(this System.Linq.
 static CH.Native.Linq.AsyncQueryableExtensions.ToListAsync<T>(this System.Linq.IQueryable<T>! source, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.List<T>!>!
 static CH.Native.Linq.ClickHouseQueryableExtensions.AsAsyncEnumerable<T>(this System.Linq.IQueryable<T>! source) -> System.Collections.Generic.IAsyncEnumerable<T>!
 static CH.Native.Linq.ClickHouseQueryableExtensions.Final<T>(this System.Linq.IQueryable<T>! source) -> System.Linq.IQueryable<T>!
+static CH.Native.Linq.ClickHouseQueryableExtensions.InsertAsync<T>(this System.Linq.IQueryable<T!>! source, System.Collections.Generic.IAsyncEnumerable<T!>! rows, CH.Native.BulkInsert.BulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+static CH.Native.Linq.ClickHouseQueryableExtensions.InsertAsync<T>(this System.Linq.IQueryable<T!>! source, System.Collections.Generic.IEnumerable<T!>! rows, CH.Native.BulkInsert.BulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+static CH.Native.Linq.ClickHouseQueryableExtensions.InsertAsync<T>(this System.Linq.IQueryable<T!>! source, T! row, CH.Native.BulkInsert.BulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 static CH.Native.Linq.ClickHouseQueryableExtensions.Sample<T>(this System.Linq.IQueryable<T>! source, double ratio) -> System.Linq.IQueryable<T>!
 static CH.Native.Linq.ClickHouseQueryableExtensions.Table<T>(this CH.Native.Connection.ClickHouseConnection! connection) -> System.Linq.IQueryable<T>!
 static CH.Native.Linq.ClickHouseQueryableExtensions.Table<T>(this CH.Native.Connection.ClickHouseConnection! connection, string! tableName) -> System.Linq.IQueryable<T>!

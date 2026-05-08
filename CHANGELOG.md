@@ -46,6 +46,32 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - `ClickHouseConnection.InvalidateSchemaCache(string database, string tableName)`
   overload; the existing single-argument form learned to parse `database.table`.
 
+- `samples/CH.Native.Samples.Queries/` — single multi-flavour console project
+  demonstrating every supported query path: scalar, data-reader, raw rows,
+  typed (reflection + high-perf), parameterised, LINQ basics / aggregates /
+  `Final` / `Sample`, ADO.NET, Dapper, pooled `ClickHouseDataSource`, resilient
+  multi-host `ResilientConnection`, `IProgress<QueryProgress>` + cancellation,
+  and a realistic log-analytics dashboard. Each flavour threads through
+  cross-cutting plumbing (parameters, `CancellationToken`, custom `queryId`,
+  progress) so the surface is visible end-to-end. Mirrors the layout of
+  `CH.Native.Samples.Insert` (commit #27).
+- `samples/CH.Native.Samples.QuickStart/` — minimal runnable counterpart to
+  `docs/quickstart.md`. A single linear console script (open connection,
+  scalar query, `CREATE TABLE`, bulk insert, typed `await foreach`, drop) so
+  first-touch users have an executable on-ramp alongside the doc.
+- `samples/CH.Native.Samples.Hosting/` — ASP.NET sample that merges the
+  former `CH.Native.Samples.Authentication` and
+  `CH.Native.Samples.DependencyInjection` projects. Combines `AddClickHouse`
+  + keyed services + credential providers + health checks + bulk insert with
+  endpoint probes for all four auth methods (password / JWT / SSH / mTLS),
+  all running against the docker overlay (`./docker/setup.sh` + `docker compose up`)
+  inherited from the auth sample. The keyed `mtls` / `ssh` `Demo*Provider`
+  classes now read from the docker-generated client cert and SSH key, so those
+  DataSources actually handshake against the local server. Adds a per-request
+  role-activation pattern via `ClickHouseConnection.ChangeRolesAsync` (the
+  pool discards the modified connection on return — the documented trade-off
+  for per-request RBAC against a pooled DataSource).
+
 ### Changed
 
 - Per-connection bulk-insert schema cache is now keyed by
@@ -58,6 +84,17 @@ and this project follows [Semantic Versioning](https://semver.org/).
   alongside the existing `db.clickhouse.table`. The table tag carries the
   unqualified table name regardless of whether the caller passed a qualified or
   unqualified form, so dashboards grouped on it stay coherent.
+
+- Replaced the three small query-focused sample projects
+  (`CH.Native.Samples.GettingStarted`, `CH.Native.Samples.LinqQueries`,
+  `CH.Native.Samples.DapperIntegration`) with the unified
+  `CH.Native.Samples.Queries` above. The new project subsumes their content
+  and adds ~12 additional flavours.
+- Replaced `CH.Native.Samples.Authentication` and
+  `CH.Native.Samples.DependencyInjection` with the unified
+  `CH.Native.Samples.Hosting` above. The docker overlay (`docker/setup.sh`,
+  `docker-compose.yml`, role/cert/SSH provisioning) moved into the new
+  project so a single `docker compose up` powers every endpoint.
 
 ### Behaviour change
 
