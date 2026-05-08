@@ -192,4 +192,4 @@ The `AddClickHouse` health-check overload also accepts an optional `timeout` and
 - [Connection Pooling](connection-pooling.md) — how the pool works under the hood
 - [Authentication](authentication.md) — when each auth method (and provider) applies
 - [Configuration](configuration.md) — connection-string keys
-- `samples/CH.Native.Samples.DependencyInjection` — full ASP.NET demo with all six registration shapes
+- `samples/CH.Native.Samples.Hosting` — full ASP.NET demo with `AddClickHouse` registration, keyed services, credential providers, health checks, and bulk insert against a docker-provisioned ClickHouse.

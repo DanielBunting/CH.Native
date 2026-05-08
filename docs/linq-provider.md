@@ -4,20 +4,26 @@ CH.Native ships a typed LINQ provider in `CH.Native.Linq` that translates LINQ e
 
 ## Entry point
 
-The starting point is the `connection.Table<T>()` extension method. The connection must be open.
+The starting point is the `Table<T>()` extension on either `ClickHouseConnection` or `ClickHouseDataSource`. For the connection variant the connection must be open; the DataSource variant rents a pooled connection for the lifetime of each enumeration / `InsertAsync` call:
 
 ```csharp
 using CH.Native.Connection;
 using CH.Native.Linq;
 
+// Direct connection
 await using var connection = new ClickHouseConnection("Host=localhost;Port=9000");
 await connection.OpenAsync();
-
 var users = connection.Table<User>();        // table name = "user" (snake_case of T)
 var rooms = connection.Table<Room>("rooms"); // explicit override
+
+// Pooled DataSource (typical service code)
+var events = dataSource.Table<Event>();
+var logs   = dataSource.Table<LogEntry>("logs_v2");
 ```
 
 `Table<T>()` resolves the table name from the entity type via `TableNameResolver` — it lowercases and snake-cases the type name (e.g. `OrderItem` → `order_item`). Pass an explicit table name when the convention doesn't fit. Column-name mapping uses `[ClickHouseColumn(Name = "…")]`, the same as the bulk-insert and read paths.
+
+The DataSource handle itself does not pin a connection — it composes naturally with concurrent service code, with each enumeration or `InsertAsync` call renting and returning its own connection.
 
 ## Operators that translate
 
@@ -72,6 +78,33 @@ var sum    = await query.SumAsync(p => p.Price);
 
 All async-execution extensions are in `CH.Native.Linq.AsyncQueryableExtensions` and accept an optional `CancellationToken`.
 
+## Inserting via the table handle
+
+The `IQueryable<T>` returned by `connection.Table<T>()` / `dataSource.Table<T>()` also supports `InsertAsync` for write paths. Three overloads cover the common shapes:
+
+```csharp
+var users = dataSource.Table<User>();
+
+// Single record
+await users.InsertAsync(new User { Id = 1, Name = "Alice" });
+
+// In-memory collection
+await users.InsertAsync(new[]
+{
+    new User { Id = 2, Name = "Bob" },
+    new User { Id = 3, Name = "Charlie" },
+});
+
+// Async stream — preferred for large or unbounded sources
+await users.InsertAsync(GenerateUsersAsync());
+```
+
+Under the hood `InsertAsync` delegates to the same `BulkInsertAsync<T>` plumbing as the native API — schema cache, role activation, query id, batch size, and telemetry are all inherited. An optional `BulkInsertOptions` and `CancellationToken` are accepted on every overload.
+
+The single-record overload still opens a fresh INSERT context per call (handshake + commit), so callers on hot paths should prefer the collection or async-stream overload, or drop down to `BulkInserter<T>` directly. See [Bulk Insert](bulk-insert.md) for the full picture.
+
+`InsertAsync` only works on queries created via `connection.Table<T>()` or `dataSource.Table<T>()` — calling it on an arbitrary `IQueryable<T>` throws.
+
 ## String operations
 
 The visitor translates the standard `System.String` instance methods:
@@ -119,6 +152,6 @@ For anything raw, fall back to `connection.QueryAsync<T>("…", new { p })` — 
 
 ## See also
 
-- `samples/CH.Native.Samples.LinqQueries` — runnable demo of `Where`, projections, `Final`, `Sample`, async aggregates
+- `samples/CH.Native.Samples.Queries` — runnable demo of `Where`, projections, `Final`, `Sample`, async aggregates, plus the broader query-flavour matrix (scalar, raw, typed, parameterised, ADO.NET, Dapper, pooled DataSource, resilient multi-host)
 - [Data Types](data-types.md) — type mapping for projected DTOs
 - [ADO.NET & Dapper](ado-net-dapper.md) — when to fall back to raw SQL

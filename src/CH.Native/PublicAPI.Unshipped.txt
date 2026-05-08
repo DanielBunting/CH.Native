@@ -1,6 +1,1 @@
 #nullable enable
-CH.Native.Connection.ClickHouseDataSource.Table<T>() -> System.Linq.IQueryable<T>!
-CH.Native.Connection.ClickHouseDataSource.Table<T>(string! tableName) -> System.Linq.IQueryable<T>!
-static CH.Native.Linq.ClickHouseQueryableExtensions.InsertAsync<T>(this System.Linq.IQueryable<T!>! source, System.Collections.Generic.IAsyncEnumerable<T!>! rows, CH.Native.BulkInsert.BulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
-static CH.Native.Linq.ClickHouseQueryableExtensions.InsertAsync<T>(this System.Linq.IQueryable<T!>! source, System.Collections.Generic.IEnumerable<T!>! rows, CH.Native.BulkInsert.BulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
-static CH.Native.Linq.ClickHouseQueryableExtensions.InsertAsync<T>(this System.Linq.IQueryable<T!>! source, T! row, CH.Native.BulkInsert.BulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!

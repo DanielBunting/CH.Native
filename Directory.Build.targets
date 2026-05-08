@@ -1,0 +1,30 @@
+<Project>
+
+  <!--
+    Releases ship off main, so there is no separate "promote Unshipped to
+    Shipped" step. New public APIs go straight into PublicAPI.Shipped.txt.
+    This target fails the build the moment anything lands in
+    PublicAPI.Unshipped.txt beyond the obligatory "#nullable enable"
+    header — keeping the convention enforced rather than documented.
+
+    Scoped via the Exists() condition so projects without a PublicAPI
+    baseline (samples, tests) are silently skipped.
+  -->
+  <Target Name="EnforceEmptyUnshippedPublicApi"
+          BeforeTargets="Build"
+          Condition="Exists('$(MSBuildProjectDirectory)\PublicAPI.Unshipped.txt')">
+    <ReadLinesFromFile File="$(MSBuildProjectDirectory)\PublicAPI.Unshipped.txt">
+      <Output TaskParameter="Lines" ItemName="_UnshippedPublicApiLines" />
+    </ReadLinesFromFile>
+    <ItemGroup>
+      <_UnshippedPublicApiEntries
+        Include="@(_UnshippedPublicApiLines)"
+        Condition="'%(Identity)' != '' AND '%(Identity)' != '#nullable enable'" />
+    </ItemGroup>
+    <Error
+      Condition="'@(_UnshippedPublicApiEntries)' != ''"
+      Code="CHN_UNSHIPPED_API"
+      Text="PublicAPI.Unshipped.txt is non-empty in $(MSBuildProjectName). Releases ship off main — every new public API must go directly into PublicAPI.Shipped.txt. Move these entries into Shipped, leave Unshipped containing only '#nullable enable':%0A%0A@(_UnshippedPublicApiEntries, '%0A')" />
+  </Target>
+
+</Project>

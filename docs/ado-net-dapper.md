@@ -51,7 +51,6 @@ while (await reader.ReadAsync())
 | `DataSource` | Server host:port |
 | `ServerVersion` | Server version (major.minor) |
 | `State` | ConnectionState (Open, Closed, etc.) |
-| `Inner` | Access underlying `ClickHouseConnection` |
 
 ### Parameters
 
@@ -74,23 +73,26 @@ cmd.Parameters.Add(new ClickHouseDbParameter
 using var reader = await cmd.ExecuteReaderAsync();
 ```
 
-### Accessing Native Connection
+### Reaching Native Features
 
-For advanced features, access the underlying native connection:
+The ADO.NET surface (`ClickHouseDbConnection` / `DbCommand` / `DbDataReader`) is intentionally narrow — it covers what Dapper, EF Core scaffolding, and other ADO.NET consumers expect, and nothing more. For native-only capabilities (`BulkInserter<T>`, `DynamicBulkInserter`, `IAsyncEnumerable<T>` streaming, LINQ via `connection.Table<T>()`, role activation, etc.), open a `ClickHouseConnection` directly using the same connection string:
 
 ```csharp
-var dbConnection = new ClickHouseDbConnection("Host=localhost;Port=9000");
+const string ConnectionString = "Host=localhost;Port=9000";
+
+// ADO.NET path (Dapper, scaffolding)
+await using var dbConnection = new ClickHouseDbConnection(ConnectionString);
 await dbConnection.OpenAsync();
+var user = await dbConnection.QueryFirstAsync<User>(
+    "SELECT * FROM users WHERE id = @id", new { id = 1 });
 
-// Access native connection
-ClickHouseConnection native = dbConnection.Inner;
-
-// Use native bulk insert
-await using var inserter = native.CreateBulkInserter<User>("users");
-await inserter.InitAsync();
-await inserter.AddRangeAsync(users);
-await inserter.CompleteAsync();
+// Native path for bulk insert
+await using var nativeConnection = new ClickHouseConnection(ConnectionString);
+await nativeConnection.OpenAsync();
+await nativeConnection.BulkInsertAsync("users", newUsers);
 ```
+
+In a long-running service, share a single `ClickHouseDataSource` across both paths instead of opening a fresh connection each time — see [Connection Pooling](connection-pooling.md) and [Dependency Injection](dependency-injection.md).
 
 ## Dapper Integration
 
@@ -109,11 +111,17 @@ await connection.OpenAsync();
 ### Query
 
 ```csharp
+using CH.Native.Mapping;
+
 public class User
 {
-    public uint Id { get; set; }
-    public string Name { get; set; } = "";
-    public int Age { get; set; }
+    // The [ClickHouseColumn] attributes are only needed for the native bulk-insert
+    // path (it sends column identifiers to the server case-sensitively, so PascalCase
+    // properties don't auto-match snake_case columns). Dapper itself maps by name
+    // case-insensitively and would work without them.
+    [ClickHouseColumn(Name = "id")]   public uint Id { get; set; }
+    [ClickHouseColumn(Name = "name")] public string Name { get; set; } = "";
+    [ClickHouseColumn(Name = "age")]  public int Age { get; set; }
 }
 
 // Query multiple rows
@@ -200,11 +208,11 @@ var users = await connection.QueryAsync<User>(
 );
 ```
 
-**Workaround:** Use the native API for array parameters:
+**Workaround:** open a `ClickHouseConnection` for the array-parameter call — the native API expands arrays correctly:
 
 ```csharp
-// Use native connection for array parameters
-var native = ((ClickHouseDbConnection)connection).Inner;
+await using var native = new ClickHouseConnection(ConnectionString);
+await native.OpenAsync();
 
 var users = await native.QueryAsync<User>(
     "SELECT * FROM users WHERE id IN @ids",
@@ -212,7 +220,7 @@ var users = await native.QueryAsync<User>(
 ).ToListAsync();
 ```
 
-Or construct the query manually:
+Or build the `IN` list manually on the ADO.NET path:
 
 ```csharp
 var ids = new[] { 1, 2, 3 };
@@ -262,29 +270,41 @@ The entry point is the `connection.Table<T>()` extension (or `connection.Table<T
 
 ## Example: Mixed Usage
 
+The two connection types don't share a pool — `ClickHouseDbConnection` opens its own socket from a connection string, and `ClickHouseDataSource` pools `ClickHouseConnection` instances for the native API. Pick one per code path:
+
 ```csharp
-await using var dbConnection = new ClickHouseDbConnection("Host=localhost;Port=9000");
-await dbConnection.OpenAsync();
+const string ConnectionString = "Host=localhost;Port=9000";
 
-// Use Dapper for simple queries
-var user = await dbConnection.QueryFirstAsync<User>(
-    "SELECT * FROM users WHERE id = @id",
-    new { id = 1 }
-);
-
-// Use native API for bulk insert
-var native = dbConnection.Inner;
-await using var inserter = native.CreateBulkInserter<User>("users");
-await inserter.InitAsync();
-await inserter.AddRangeAsync(newUsers);
-await inserter.CompleteAsync();
-
-// Use native API for streaming large results
-await foreach (var row in native.QueryAsync<LogEntry>("SELECT * FROM logs WHERE date = today()"))
+// Dapper / ADO.NET path: a fresh DbConnection per unit of work.
+await using (var dbConnection = new ClickHouseDbConnection(ConnectionString))
 {
-    ProcessLog(row);
+    await dbConnection.OpenAsync();
+    var user = await dbConnection.QueryFirstAsync<User>(
+        "SELECT * FROM users WHERE id = @id", new { id = 1 });
+}
+
+// Native path: pool with ClickHouseDataSource (recommended for services).
+await using var dataSource = new ClickHouseDataSource(new ClickHouseDataSourceOptions
+{
+    Settings = ClickHouseConnectionSettings.Parse(ConnectionString),
+});
+
+await using (var native = await dataSource.OpenConnectionAsync())
+{
+    await native.BulkInsertAsync("users", newUsers);
+}
+
+await using (var native = await dataSource.OpenConnectionAsync())
+{
+    await foreach (var row in native.QueryAsync<LogEntry>(
+        "SELECT * FROM logs WHERE date = today()"))
+    {
+        ProcessLog(row);
+    }
 }
 ```
+
+If your hot path is Dapper, keep using `ClickHouseDbConnection`; reach for the native side only where it pays off (bulk insert, streaming, LINQ).
 
 ## See Also
 

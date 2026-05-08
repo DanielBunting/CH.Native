@@ -91,32 +91,35 @@ Control how many rows are buffered before sending:
 ```csharp
 var options = new BulkInsertOptions
 {
-    BatchSize = 10000 // Default varies by type
+    BatchSize = 50_000 // Default 10,000
 };
 
 await using var inserter = connection.CreateBulkInserter<Event>("events", options);
 ```
 
-Larger batches are more efficient but use more memory. The default batch size is optimized for typical use cases.
+Larger batches are more efficient but use more memory. The default of 10,000 rows is a reasonable starting point — see [Optimal Batch Sizes](#optimal-batch-sizes) below for tuning guidance.
 
 ## Property Mapping
 
 ### Automatic Mapping
 
-By default, properties are mapped to columns by name (case-insensitive):
+By default, the bulk inserter uses each property's name (or the `[ClickHouseColumn(Name=…)]` override) as the column identifier in the emitted `INSERT INTO table (col, …) VALUES` statement. Identifier comparison on the server is **case-sensitive**, so the property name has to match the column name exactly:
 
 ```csharp
+// Table created as: CREATE TABLE users (Id UInt32, Name String, Created DateTime) …
 public class User
 {
-    public uint Id { get; set; }        // -> id column
-    public string Name { get; set; }    // -> name column
-    public DateTime Created { get; set; } // -> created column
+    public uint Id { get; set; }          // matches column `Id`
+    public string Name { get; set; }      // matches column `Name`
+    public DateTime Created { get; set; } // matches column `Created`
 }
 ```
 
+If your tables follow snake_case or any convention that doesn't match C# property casing, pin the column name with `[ClickHouseColumn(Name = "…")]` — see [Custom Column Names](#custom-column-names) below. Once the server has accepted the INSERT and replied with its schema block, the inserter does map property → column case-insensitively for the *value extraction* step, but that fallback only kicks in if the INSERT statement itself parsed.
+
 ### Custom Column Names
 
-Use `ClickHouseColumnAttribute` to customize mapping:
+Use `ClickHouseColumnAttribute` to customize mapping. This is the right tool when the C# convention (PascalCase) doesn't match the table's column convention (snake_case, lowercase, etc.):
 
 ```csharp
 using CH.Native.Mapping;
@@ -163,9 +166,77 @@ public class User
     public string Name { get; set; } = "";
 
     [ClickHouseColumn(Ignore = true)]
-    public string TempData { get; set; } = ""; // Not inserted
+    public string TempData { get; set; } = "";
 }
 ```
+
+`Ignore = true` is **bidirectional** — the property is invisible to both the bulk-insert writer *and* the typed reader. On insert the column is omitted from the emitted SQL (so a server-side `DEFAULT` gets to fire). On read, the property keeps its C# default value regardless of what the server sends back, even if the projection includes the column. Use this when the property is purely transient client state; don't reach for it as a "read but don't write" toggle.
+
+## Qualified table names
+
+Both inserters accept a `database.table` qualified name and split it on the single dot, rendering it as `` `db`.`table` `` in the emitted INSERT. The unqualified form continues to resolve against the connection's default database:
+
+```csharp
+// Unqualified — resolves against the connection's default database.
+await connection.BulkInsertAsync("events", rows);
+
+// Qualified — addresses analytics.events explicitly.
+await connection.BulkInsertAsync("analytics.events", rows);
+```
+
+If the table name itself contains a dot, use the explicit `(database, tableName)` overload as the escape hatch:
+
+```csharp
+await connection.BulkInsertAsync(
+    database: "analytics",
+    tableName: "raw.events", // a real table name with a dot in it
+    rows);
+```
+
+The same `(database, tableName)` pair is available on `BulkInserter<T>`, `DynamicBulkInserter`, `ClickHouseConnection.CreateBulkInserter` / `BulkInsertAsync`, `ClickHouseDataSource.CreateBulkInserterAsync`, and `ResilientConnection.BulkInsertAsync`. The per-connection schema cache keys on `(Database, Table, ColumnListFingerprint)`, so two different tables in different databases never collide.
+
+## Dynamic (POCO-less) bulk insert
+
+When the row shape isn't known at compile time — generic ETL, schema-driven imports, or anything that can't easily be expressed as a `T` — use `DynamicBulkInserter`. Rows are supplied as `object?[]` arrays whose element order matches a caller-supplied `columnNames` list:
+
+```csharp
+var columns = new[] { "timestamp", "event_type", "data" };
+
+await using var inserter = connection.CreateBulkInserter("events", columns);
+await inserter.InitAsync();
+
+await inserter.AddAsync(new object?[] { DateTime.UtcNow, "click", "{}" });
+await inserter.AddRangeAsync(rows); // IEnumerable<object?[]> or IAsyncEnumerable<object?[]>
+
+await inserter.CompleteAsync();
+```
+
+The lifecycle (`InitAsync` → `AddAsync` / `AddRangeAsync` / `FlushAsync` → `CompleteAsync`) and `BatchSize` semantics are identical to `BulkInserter<T>`. A one-shot overload mirrors the typed path:
+
+```csharp
+await connection.BulkInsertAsync("events", columns, rows);
+```
+
+### Skipping the schema probe with `ColumnTypes`
+
+By default, `DynamicBulkInserter.InitAsync` round-trips to the server to fetch the column schema. When you already know the types — usually because you generated the inserter from a schema you control — pass them via `BulkInsertOptions.ColumnTypes` to skip that probe:
+
+```csharp
+var options = new BulkInsertOptions
+{
+    ColumnTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["timestamp"]  = "DateTime64(3)",
+        ["event_type"] = "LowCardinality(String)",
+        ["data"]       = "String",
+    },
+};
+
+await using var inserter = connection.CreateBulkInserter("events", columns, options);
+await inserter.InitAsync(); // no schema probe — types come from ColumnTypes
+```
+
+The probe is skipped only when every column in `columnNames` has a matching entry; missing entries fall back to the probe. This is a `DynamicBulkInserter`-only optimisation — the typed `BulkInserter<T>` path always probes.
 
 ## Streaming Insert
 

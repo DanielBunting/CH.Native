@@ -21,7 +21,8 @@ var result = await connection.ExecuteScalarAsync<int>("SELECT 1");
 Console.WriteLine(result); // 1
 ```
 
-See the [Getting Started Guide](docs/quickstart.md) for more examples.
+See the [Getting Started Guide](docs/quickstart.md) for more examples, or run
+[`samples/CH.Native.Samples.QuickStart`](samples/CH.Native.Samples.QuickStart/) for the same flow as a runnable project.
 
 ## Features
 
@@ -139,6 +140,17 @@ var users = await connection.QueryAsync<User>("SELECT * FROM users");
 | [ADO.NET & Dapper](docs/ado-net-dapper.md) | Standard provider and ORM integration |
 | [LINQ Provider](docs/linq-provider.md) | `connection.Table<T>()`, operators, modifiers |
 | [Telemetry](docs/telemetry.md) | Tracing, metrics, and logging |
+
+## Samples
+
+End-to-end runnable console projects under [`samples/`](samples/). Each picks a flavour by CLI arg, creates a temp table, runs the demo, and drops the table.
+
+| Project | What it covers |
+|---------|----------------|
+| [QuickStart](samples/CH.Native.Samples.QuickStart/) | Runnable mirror of [`docs/quickstart.md`](docs/quickstart.md) — open a connection, scalar query, bulk insert, typed read. Start here. |
+| [Queries](samples/CH.Native.Samples.Queries/README.md) | Every read path: scalar, reader, raw rows, typed, LINQ, ADO.NET, Dapper, pooled, resilient, progress, log analytics |
+| [Insert](samples/CH.Native.Samples.Insert/README.md) | Every write path: single, collection, async stream, one-shot bulk, long-lived, dynamic, pooled, cross-database, plain SQL |
+| [Hosting](samples/CH.Native.Samples.Hosting/README.md) | ASP.NET host wiring: `AddClickHouse`, keyed DataSources, all four auth methods (password / JWT / SSH / mTLS) against a docker overlay, credential providers, per-request role activation, health checks, bulk insert |
 
 ## Performance
 
