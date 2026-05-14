@@ -92,12 +92,33 @@ public static class ClickHouseTypeMapper
         if (TypeMappings.TryGetValue(underlyingType, out var clickHouseType))
             return clickHouseType;
 
-        // Handle arrays
+        // Handle arrays (jagged and rectangular). Rectangular arrays (T[,], T[,,])
+        // map to nested Array(...) on the wire — the rank-N rect is unwrapped into
+        // N levels of Array. Hybrid shapes that mix rectangular and jagged at
+        // different levels (T[,][], T[][,], T[,][,]) are rejected: the boundary
+        // converter only handles a single rectangular section.
         if (underlyingType.IsArray)
         {
             var elementType = underlyingType.GetElementType()!;
-            var elementClickHouseType = InferTypeFromClrType(elementType);
-            return $"Array({elementClickHouseType})";
+            var rank = underlyingType.GetArrayRank();
+
+            if (rank > 1 && elementType.IsArray)
+            {
+                throw new NotSupportedException(
+                    $"Hybrid array shapes are not supported (type '{type.FullName}'). " +
+                    "Use either pure jagged (e.g., int[][]) or pure rectangular (e.g., int[,,]).");
+            }
+            if (rank == 1 && elementType.IsArray && elementType.GetArrayRank() > 1)
+            {
+                throw new NotSupportedException(
+                    $"Hybrid array shapes are not supported (type '{type.FullName}'). " +
+                    "Use either pure jagged (e.g., int[][]) or pure rectangular (e.g., int[,,]).");
+            }
+
+            var inner = InferTypeFromClrType(elementType);
+            for (int i = 0; i < rank; i++)
+                inner = $"Array({inner})";
+            return inner;
         }
 
         // Handle IEnumerable<T> (but not string)

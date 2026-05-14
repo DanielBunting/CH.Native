@@ -1,5 +1,6 @@
 using CH.Native.BulkInsert;
 using CH.Native.Connection;
+using CH.Native.Exceptions;
 using CH.Native.Mapping;
 using CH.Native.Tests.Fixtures;
 using Xunit;
@@ -66,6 +67,412 @@ public class BulkInsertCompositeTypeTests
 
             // Row 3: []
             Assert.Empty(results[2].arr);
+        }
+        finally
+        {
+            await using var cleanup = new ClickHouseConnection(_fixture.ConnectionString);
+            await cleanup.OpenAsync();
+            await cleanup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_RectangularInt2D_RoundTrips()
+    {
+        var tableName = $"test_multidim_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                id Int32,
+                grid Array(Array(Int32))
+            ) ENGINE = Memory");
+
+        try
+        {
+            await using var inserter = connection.CreateBulkInserter<RectInt2DRow>(tableName);
+            await inserter.InitAsync();
+
+            await inserter.AddAsync(new RectInt2DRow { Id = 1, Grid = new int[2, 3] { { 1, 2, 3 }, { 4, 5, 6 } } });
+            await inserter.AddAsync(new RectInt2DRow { Id = 2, Grid = new int[1, 2] { { 9, 8 } } });
+            await inserter.AddAsync(new RectInt2DRow { Id = 3, Grid = new int[0, 0] });
+
+            await inserter.CompleteAsync();
+
+            var results = new List<(int id, int[][] grid)>();
+            await foreach (var row in connection.QueryAsync($"SELECT id, grid FROM {tableName} ORDER BY id"))
+            {
+                results.Add((row.GetFieldValue<int>("id"), (int[][])row.GetFieldValue<object>("grid")));
+            }
+
+            Assert.Equal(3, results.Count);
+
+            Assert.Equal(2, results[0].grid.Length);
+            Assert.Equal(new[] { 1, 2, 3 }, results[0].grid[0]);
+            Assert.Equal(new[] { 4, 5, 6 }, results[0].grid[1]);
+
+            Assert.Single(results[1].grid);
+            Assert.Equal(new[] { 9, 8 }, results[1].grid[0]);
+
+            Assert.Empty(results[2].grid);
+        }
+        finally
+        {
+            await using var cleanup = new ClickHouseConnection(_fixture.ConnectionString);
+            await cleanup.OpenAsync();
+            await cleanup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_RectangularInt2D_RoundTrips_ReadAsRectangular()
+    {
+        // Wave 3 read parity: insert via int[,] POCO, SELECT into POCO whose
+        // property is int[,] (typed-fast-path goes through ReflectionTypedRowMapper).
+        var tableName = $"test_multidim_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                id Int32,
+                grid Array(Array(Int32))
+            ) ENGINE = Memory");
+
+        try
+        {
+            await using var inserter = connection.CreateBulkInserter<RectInt2DRow>(tableName);
+            await inserter.InitAsync();
+            await inserter.AddAsync(new RectInt2DRow { Id = 1, Grid = new int[2, 3] { { 1, 2, 3 }, { 4, 5, 6 } } });
+            await inserter.CompleteAsync();
+
+            var read = new List<RectInt2DRow>();
+            await foreach (var row in connection.QueryAsync<RectInt2DRow>($"SELECT id, grid FROM {tableName} ORDER BY id"))
+            {
+                read.Add(row);
+            }
+
+            Assert.Single(read);
+            Assert.Equal(2, read[0].Grid.GetLength(0));
+            Assert.Equal(3, read[0].Grid.GetLength(1));
+            Assert.Equal(1, read[0].Grid[0, 0]);
+            Assert.Equal(6, read[0].Grid[1, 2]);
+        }
+        finally
+        {
+            await using var cleanup = new ClickHouseConnection(_fixture.ConnectionString);
+            await cleanup.OpenAsync();
+            await cleanup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_RaggedSource_FailsCleanlyOnRectRead()
+    {
+        // Insert ragged inner arrays via raw SQL, then SELECT into int[,] POCO.
+        // The boundary converter must throw ClickHouseTypeConversionException
+        // with the offending row's index and lengths in the message.
+        var tableName = $"test_multidim_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                id Int32,
+                grid Array(Array(Int32))
+            ) ENGINE = Memory");
+
+        try
+        {
+            await connection.ExecuteNonQueryAsync(
+                $"INSERT INTO {tableName} (id, grid) VALUES (1, [[1, 2], [3]])");
+
+            var ex = await Assert.ThrowsAsync<ClickHouseTypeConversionException>(async () =>
+            {
+                await foreach (var _ in connection.QueryAsync<RectInt2DRow>($"SELECT id, grid FROM {tableName}"))
+                {
+                    // Expect failure during row mapping.
+                }
+            });
+
+            Assert.Equal(1, ex.RowIndex);
+            Assert.Equal(2, ex.ExpectedLength);
+            Assert.Equal(1, ex.ActualLength);
+        }
+        finally
+        {
+            await using var cleanup = new ClickHouseConnection(_fixture.ConnectionString);
+            await cleanup.OpenAsync();
+            await cleanup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_RectangularNullableInt2D_RoundTrips()
+    {
+        // Edge case: int?[,] → Array(Array(Nullable(Int32))). Verifies the
+        // boundary converter preserves nulls (T=int? in the typed To2DJagged).
+        var tableName = $"test_multidim_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                id Int32,
+                grid Array(Array(Nullable(Int32)))
+            ) ENGINE = Memory");
+
+        try
+        {
+            await using var inserter = connection.CreateBulkInserter<RectNullableInt2DRow>(tableName);
+            await inserter.InitAsync();
+            await inserter.AddAsync(new RectNullableInt2DRow
+            {
+                Id = 1,
+                Grid = new int?[2, 2] { { 1, null }, { null, 4 } }
+            });
+            await inserter.CompleteAsync();
+
+            await foreach (var row in connection.QueryAsync($"SELECT grid FROM {tableName} WHERE id = 1"))
+            {
+                var grid = (int?[][])row.GetFieldValue<object>("grid");
+                Assert.Equal(2, grid.Length);
+                Assert.Equal(new int?[] { 1, null }, grid[0]);
+                Assert.Equal(new int?[] { null, 4 }, grid[1]);
+            }
+        }
+        finally
+        {
+            await using var cleanup = new ClickHouseConnection(_fixture.ConnectionString);
+            await cleanup.OpenAsync();
+            await cleanup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_RectangularInt3D_RoundTrips()
+    {
+        var tableName = $"test_multidim_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                id Int32,
+                cube Array(Array(Array(Int32)))
+            ) ENGINE = Memory");
+
+        try
+        {
+            await using var inserter = connection.CreateBulkInserter<RectInt3DRow>(tableName);
+            await inserter.InitAsync();
+
+            await inserter.AddAsync(new RectInt3DRow
+            {
+                Id = 1,
+                Cube = new int[2, 2, 2] { { { 1, 2 }, { 3, 4 } }, { { 5, 6 }, { 7, 8 } } }
+            });
+
+            await inserter.CompleteAsync();
+
+            await foreach (var row in connection.QueryAsync($"SELECT cube FROM {tableName} WHERE id = 1"))
+            {
+                var cube = (int[][][])row.GetFieldValue<object>("cube");
+                Assert.Equal(2, cube.Length);
+                Assert.Equal(new[] { 1, 2 }, cube[0][0]);
+                Assert.Equal(new[] { 3, 4 }, cube[0][1]);
+                Assert.Equal(new[] { 5, 6 }, cube[1][0]);
+                Assert.Equal(new[] { 7, 8 }, cube[1][1]);
+            }
+        }
+        finally
+        {
+            await using var cleanup = new ClickHouseConnection(_fixture.ConnectionString);
+            await cleanup.OpenAsync();
+            await cleanup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_RectangularDouble2D_RoundTrips()
+    {
+        // Exercises Float64 element writer beneath the rectangular converter.
+        var tableName = $"test_multidim_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                id Int32,
+                grid Array(Array(Float64))
+            ) ENGINE = Memory");
+
+        try
+        {
+            await using var inserter = connection.CreateBulkInserter<RectDouble2DRow>(tableName);
+            await inserter.InitAsync();
+
+            await inserter.AddAsync(new RectDouble2DRow
+            {
+                Id = 1,
+                Grid = new double[2, 2] { { 1.5, 2.5 }, { 3.25, 4.125 } }
+            });
+
+            await inserter.CompleteAsync();
+
+            await foreach (var row in connection.QueryAsync($"SELECT grid FROM {tableName} WHERE id = 1"))
+            {
+                var grid = (double[][])row.GetFieldValue<object>("grid");
+                Assert.Equal(2, grid.Length);
+                Assert.Equal(new[] { 1.5, 2.5 }, grid[0]);
+                Assert.Equal(new[] { 3.25, 4.125 }, grid[1]);
+            }
+        }
+        finally
+        {
+            await using var cleanup = new ClickHouseConnection(_fixture.ConnectionString);
+            await cleanup.OpenAsync();
+            await cleanup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_RectangularString2D_RoundTrips()
+    {
+        // Exercises the variable-width String writer beneath the rectangular converter.
+        var tableName = $"test_multidim_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                id Int32,
+                grid Array(Array(String))
+            ) ENGINE = Memory");
+
+        try
+        {
+            await using var inserter = connection.CreateBulkInserter<RectString2DRow>(tableName);
+            await inserter.InitAsync();
+
+            await inserter.AddAsync(new RectString2DRow
+            {
+                Id = 1,
+                Grid = new string[2, 3] { { "a", "bb", "ccc" }, { "dddd", "eeeee", "ffffff" } }
+            });
+
+            await inserter.CompleteAsync();
+
+            await foreach (var row in connection.QueryAsync($"SELECT grid FROM {tableName} WHERE id = 1"))
+            {
+                var grid = (string[][])row.GetFieldValue<object>("grid");
+                Assert.Equal(2, grid.Length);
+                Assert.Equal(new[] { "a", "bb", "ccc" }, grid[0]);
+                Assert.Equal(new[] { "dddd", "eeeee", "ffffff" }, grid[1]);
+            }
+        }
+        finally
+        {
+            await using var cleanup = new ClickHouseConnection(_fixture.ConnectionString);
+            await cleanup.OpenAsync();
+            await cleanup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_RectangularDateTime2D_RoundTrips()
+    {
+        // Exercises the temporal column writer beneath the rectangular converter.
+        var tableName = $"test_multidim_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                id Int32,
+                grid Array(Array(DateTime))
+            ) ENGINE = Memory");
+
+        try
+        {
+            // DateTime in ClickHouse has second precision — pick whole-second values
+            // so the round-trip is exact without coercion logic in the assertion.
+            var t1 = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+            var t2 = new DateTime(2026, 6, 7, 8, 9, 10, DateTimeKind.Utc);
+
+            await using var inserter = connection.CreateBulkInserter<RectDateTime2DRow>(tableName);
+            await inserter.InitAsync();
+
+            await inserter.AddAsync(new RectDateTime2DRow
+            {
+                Id = 1,
+                Grid = new DateTime[2, 2] { { t1, t2 }, { t2, t1 } }
+            });
+
+            await inserter.CompleteAsync();
+
+            await foreach (var row in connection.QueryAsync($"SELECT grid FROM {tableName} WHERE id = 1"))
+            {
+                var grid = (DateTime[][])row.GetFieldValue<object>("grid");
+                Assert.Equal(2, grid.Length);
+                Assert.Equal(t1, grid[0][0]);
+                Assert.Equal(t2, grid[0][1]);
+                Assert.Equal(t2, grid[1][0]);
+                Assert.Equal(t1, grid[1][1]);
+            }
+        }
+        finally
+        {
+            await using var cleanup = new ClickHouseConnection(_fixture.ConnectionString);
+            await cleanup.OpenAsync();
+            await cleanup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_RectangularInt4D_RoundTrips()
+    {
+        // Rank-4 canary: proves the reflection-based RectangularArrayConverter.ToJagged(Array)
+        // path integrates with the rest of the bulk-insert + read stack end-to-end.
+        var tableName = $"test_multidim_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                id Int32,
+                tess Array(Array(Array(Array(Int32))))
+            ) ENGINE = Memory");
+
+        try
+        {
+            // 2x2x2x2 = 16 distinct elements, row-major.
+            var data = new int[2, 2, 2, 2];
+            int counter = 1;
+            for (int i = 0; i < 2; i++)
+                for (int j = 0; j < 2; j++)
+                    for (int k = 0; k < 2; k++)
+                        for (int l = 0; l < 2; l++)
+                            data[i, j, k, l] = counter++;
+
+            await using var inserter = connection.CreateBulkInserter<RectInt4DRow>(tableName);
+            await inserter.InitAsync();
+            await inserter.AddAsync(new RectInt4DRow { Id = 1, Tess = data });
+            await inserter.CompleteAsync();
+
+            await foreach (var row in connection.QueryAsync($"SELECT tess FROM {tableName} WHERE id = 1"))
+            {
+                var tess = (int[][][][])row.GetFieldValue<object>("tess");
+                Assert.Equal(2, tess.Length);
+
+                counter = 1;
+                for (int i = 0; i < 2; i++)
+                    for (int j = 0; j < 2; j++)
+                        for (int k = 0; k < 2; k++)
+                            for (int l = 0; l < 2; l++)
+                                Assert.Equal(counter++, tess[i][j][k][l]);
+            }
         }
         finally
         {
@@ -701,6 +1108,69 @@ public class BulkInsertCompositeTypeTests
 
         [ClickHouseColumn(Name = "nested_arr", Order = 1)]
         public int[][] NestedArr { get; set; } = Array.Empty<int[]>();
+    }
+
+    private class RectInt2DRow
+    {
+        [ClickHouseColumn(Name = "id", Order = 0)]
+        public int Id { get; set; }
+
+        [ClickHouseColumn(Name = "grid", Order = 1)]
+        public int[,] Grid { get; set; } = new int[0, 0];
+    }
+
+    private class RectInt3DRow
+    {
+        [ClickHouseColumn(Name = "id", Order = 0)]
+        public int Id { get; set; }
+
+        [ClickHouseColumn(Name = "cube", Order = 1)]
+        public int[,,] Cube { get; set; } = new int[0, 0, 0];
+    }
+
+    private class RectNullableInt2DRow
+    {
+        [ClickHouseColumn(Name = "id", Order = 0)]
+        public int Id { get; set; }
+
+        [ClickHouseColumn(Name = "grid", Order = 1)]
+        public int?[,] Grid { get; set; } = new int?[0, 0];
+    }
+
+    private class RectDouble2DRow
+    {
+        [ClickHouseColumn(Name = "id", Order = 0)]
+        public int Id { get; set; }
+
+        [ClickHouseColumn(Name = "grid", Order = 1)]
+        public double[,] Grid { get; set; } = new double[0, 0];
+    }
+
+    private class RectString2DRow
+    {
+        [ClickHouseColumn(Name = "id", Order = 0)]
+        public int Id { get; set; }
+
+        [ClickHouseColumn(Name = "grid", Order = 1)]
+        public string[,] Grid { get; set; } = new string[0, 0];
+    }
+
+    private class RectDateTime2DRow
+    {
+        [ClickHouseColumn(Name = "id", Order = 0)]
+        public int Id { get; set; }
+
+        [ClickHouseColumn(Name = "grid", Order = 1)]
+        public DateTime[,] Grid { get; set; } = new DateTime[0, 0];
+    }
+
+    private class RectInt4DRow
+    {
+        [ClickHouseColumn(Name = "id", Order = 0)]
+        public int Id { get; set; }
+
+        [ClickHouseColumn(Name = "tess", Order = 1)]
+        public int[,,,] Tess { get; set; } = new int[0, 0, 0, 0];
     }
 
     private class ArrayOfNullableRow

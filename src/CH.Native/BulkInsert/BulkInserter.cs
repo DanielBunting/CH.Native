@@ -919,7 +919,44 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         // Create a compiled expression for fast property access
         var parameter = Expression.Parameter(typeof(T), "obj");
         var propertyAccess = Expression.Property(parameter, property);
-        var convert = Expression.Convert(propertyAccess, typeof(object));
+
+        // Rectangular multidim arrays (T[,], T[,,], …) must be flattened to
+        // jagged before reaching ArrayColumnWriter — its IList fallback would
+        // otherwise treat a multidim Array's flat Count as outer length and
+        // corrupt offsets. The wire type Array(Array(T)) is the same; only the
+        // CLR representation differs.
+        Expression body = propertyAccess;
+        var propertyType = property.PropertyType;
+        if (propertyType.IsArray && propertyType.GetArrayRank() > 1)
+        {
+            var scalarElementType = propertyType.GetElementType()!;
+            var rank = propertyType.GetArrayRank();
+
+            MethodInfo converter;
+            if (rank == 2)
+            {
+                converter = typeof(Data.Conversion.RectangularArrayConverter)
+                    .GetMethod(nameof(Data.Conversion.RectangularArrayConverter.To2DJagged))!
+                    .MakeGenericMethod(scalarElementType);
+                body = Expression.Call(converter, body);
+            }
+            else if (rank == 3)
+            {
+                converter = typeof(Data.Conversion.RectangularArrayConverter)
+                    .GetMethod(nameof(Data.Conversion.RectangularArrayConverter.To3DJagged))!
+                    .MakeGenericMethod(scalarElementType);
+                body = Expression.Call(converter, body);
+            }
+            else
+            {
+                // Rank 4+: reflection-based ToJagged. Cast property value to Array first.
+                converter = typeof(Data.Conversion.RectangularArrayConverter)
+                    .GetMethod(nameof(Data.Conversion.RectangularArrayConverter.ToJagged), new[] { typeof(Array) })!;
+                body = Expression.Call(converter, Expression.Convert(body, typeof(Array)));
+            }
+        }
+
+        var convert = Expression.Convert(body, typeof(object));
         var lambda = Expression.Lambda<Func<T, object?>>(convert, parameter);
         return lambda.Compile();
     }

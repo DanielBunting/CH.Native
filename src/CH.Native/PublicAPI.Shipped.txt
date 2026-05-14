@@ -392,6 +392,8 @@ CH.Native.Data.DictionaryEncodedColumn<T>.ElementType.get -> System.Type!
 CH.Native.Data.DictionaryEncodedColumn<T>.GetValue(int index) -> object?
 CH.Native.Data.DictionaryEncodedColumn<T>.Indices.get -> System.ReadOnlySpan<int>
 CH.Native.Data.DictionaryEncodedColumn<T>.this[int index].get -> T
+CH.Native.Data.Conversion.JaggedToRectangularConverter
+CH.Native.Data.Conversion.RectangularArrayConverter
 CH.Native.Data.Dynamic.ClickHouseDynamic
 CH.Native.Data.Dynamic.ClickHouseDynamic.ClickHouseDynamic() -> void
 CH.Native.Data.Dynamic.ClickHouseDynamic.ClickHouseDynamic(byte discriminator, object? value, string? declaredTypeName) -> void
@@ -615,6 +617,11 @@ CH.Native.Exceptions.ClickHouseServerException.ClickHouseServerException(int err
 CH.Native.Exceptions.ClickHouseServerException.ErrorCode.get -> int
 CH.Native.Exceptions.ClickHouseServerException.ServerExceptionName.get -> string!
 CH.Native.Exceptions.ClickHouseServerException.ServerStackTrace.get -> string!
+CH.Native.Exceptions.ClickHouseTypeConversionException
+CH.Native.Exceptions.ClickHouseTypeConversionException.ActualLength.get -> int
+CH.Native.Exceptions.ClickHouseTypeConversionException.ClickHouseTypeConversionException(string! message, int rowIndex = -1, int expectedLength = -1, int actualLength = -1) -> void
+CH.Native.Exceptions.ClickHouseTypeConversionException.ExpectedLength.get -> int
+CH.Native.Exceptions.ClickHouseTypeConversionException.RowIndex.get -> int
 CH.Native.Linq.AsyncQueryableExtensions
 CH.Native.Linq.ClickHouseQueryProvider
 CH.Native.Linq.ClickHouseQueryProvider.CreateQuery(System.Linq.Expressions.Expression! expression) -> System.Linq.IQueryable!
@@ -1216,6 +1223,12 @@ static CH.Native.Data.ColumnReaderRegistry.LazyStrings.get -> CH.Native.Data.Col
 static CH.Native.Data.ColumnSkipperRegistry.Default.get -> CH.Native.Data.ColumnSkipperRegistry!
 static CH.Native.Data.ColumnWriterRegistry.CreateBuilder() -> CH.Native.Data.ColumnWriterRegistryBuilder!
 static CH.Native.Data.ColumnWriterRegistry.Default.get -> CH.Native.Data.ColumnWriterRegistry!
+static CH.Native.Data.Conversion.JaggedToRectangularConverter.ToRectangular(System.Array! jagged, System.Type! targetType) -> System.Array!
+static CH.Native.Data.Conversion.JaggedToRectangularConverter.ToRectangular2D<T>(T[]![]! jagged) -> T[,]!
+static CH.Native.Data.Conversion.JaggedToRectangularConverter.ToRectangular3D<T>(T[]![]![]! jagged) -> T[,,]!
+static CH.Native.Data.Conversion.RectangularArrayConverter.To2DJagged<T>(T[,]! rect) -> T[]![]!
+static CH.Native.Data.Conversion.RectangularArrayConverter.To3DJagged<T>(T[,,]! rect) -> T[]![]![]!
+static CH.Native.Data.Conversion.RectangularArrayConverter.ToJagged(System.Array! rect) -> System.Array!
 static CH.Native.Data.Dynamic.ClickHouseDynamic.Null.get -> CH.Native.Data.Dynamic.ClickHouseDynamic
 static CH.Native.Data.Dynamic.ClickHouseDynamic.operator !=(CH.Native.Data.Dynamic.ClickHouseDynamic left, CH.Native.Data.Dynamic.ClickHouseDynamic right) -> bool
 static CH.Native.Data.Dynamic.ClickHouseDynamic.operator ==(CH.Native.Data.Dynamic.ClickHouseDynamic left, CH.Native.Data.Dynamic.ClickHouseDynamic right) -> bool

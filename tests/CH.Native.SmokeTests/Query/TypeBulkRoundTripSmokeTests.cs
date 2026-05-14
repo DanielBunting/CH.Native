@@ -1,6 +1,7 @@
 using System.Net;
 using CH.Native.Connection;
 using CH.Native.Data;
+using CH.Native.Data.Conversion;
 using CH.Native.Data.Geo;
 using CH.Native.Data.Dynamic;
 using CH.Native.Data.Variant;
@@ -792,6 +793,28 @@ public class TypeBulkRoundTripSmokeTests
         new Row<int[][]> { Id = 1, Val = new[] { new[] { 1, 2 } } },
         new Row<int[][]> { Id = 2, Val = new[] { new[] { 1 }, new[] { 2, 3 } } },
     });
+
+    [Fact]
+    public Task Rectangular_Int2D_Bulk_RoundTrips() => RunAsync(
+        "Array(Array(Int32))",
+        new[]
+        {
+            new Row<int[,]> { Id = 0, Val = new int[0, 0] },
+            new Row<int[,]> { Id = 1, Val = new int[1, 1] { { 42 } } },
+            new Row<int[,]> { Id = 2, Val = new int[2, 3] { { 1, 2, 3 }, { 4, 5, 6 } } },
+        },
+        expected: r => new object?[] { r.Id, RectangularArrayConverter.To2DJagged(r.Val) });
+
+    [Fact]
+    public Task Rectangular_Int3D_Bulk_RoundTrips() => RunAsync(
+        "Array(Array(Array(Int32)))",
+        new[]
+        {
+            new Row<int[,,]> { Id = 0, Val = new int[0, 0, 0] },
+            new Row<int[,,]> { Id = 1, Val = new int[1, 1, 1] { { { 99 } } } },
+            new Row<int[,,]> { Id = 2, Val = new int[2, 2, 2] { { { 1, 2 }, { 3, 4 } }, { { 5, 6 }, { 7, 8 } } } },
+        },
+        expected: r => new object?[] { r.Id, RectangularArrayConverter.To3DJagged(r.Val) });
 
     [Fact]
     public Task ArrayBool() => RunAsync("Array(Bool)", new[]

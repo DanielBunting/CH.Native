@@ -253,6 +253,48 @@ Nested arrays are supported:
 var matrix = await connection.ExecuteScalarAsync<int[][]>("SELECT [[1,2],[3,4]]");
 ```
 
+#### Rectangular multidimensional arrays
+
+C# rectangular arrays (`T[,]`, `T[,,]`, …) map to the same wire type as their
+jagged counterparts: `Array(Array(T))` for `T[,]`, `Array(Array(Array(T)))` for
+`T[,,]`, and so on. The client converts at the boundary — both for bulk insert
+and for typed POCO reads — so the wire is always nested `Array(...)`.
+
+```csharp
+public class Sample
+{
+    public int Id { get; set; }
+    public int[,] Grid { get; set; } = new int[0, 0];  // column type: Array(Array(Int32))
+}
+
+// Bulk insert.
+await using var inserter = connection.CreateBulkInserter<Sample>("samples");
+await inserter.InitAsync();
+await inserter.AddAsync(new Sample { Id = 1, Grid = new int[2, 3] { { 1, 2, 3 }, { 4, 5, 6 } } });
+await inserter.CompleteAsync();
+
+// Read back as rectangular.
+await foreach (var row in connection.QueryAsync<Sample>("SELECT id, grid FROM samples"))
+{
+    Console.WriteLine(row.Grid[0, 2]);  // 3
+}
+
+// Or via ADO.NET / GetFieldValue.
+using var reader = await connection.ExecuteReaderAsync("SELECT grid FROM samples LIMIT 1");
+await reader.ReadAsync();
+var grid = reader.GetFieldValue<int[,]>(0);
+```
+
+When reading back as rectangular, every inner array must have the same length
+— ClickHouse data is naturally jagged on the wire. Ragged data causes a
+`ClickHouseTypeConversionException` with the offending outer index and the
+expected/actual inner lengths in the message; use jagged `int[][]` instead if
+the data may be ragged.
+
+Mixed shapes like `int[,][]` or `int[][,]` are rejected at type inference with
+a `NotSupportedException`. Use either pure jagged (`int[][][]`) or pure
+rectangular (`int[,,]`).
+
 ### Map(K, V)
 
 Key-value maps:
