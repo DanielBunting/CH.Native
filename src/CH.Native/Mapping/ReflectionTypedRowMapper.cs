@@ -1,6 +1,7 @@
 using System.Linq.Expressions;
 using System.Reflection;
 using CH.Native.Data;
+using CH.Native.Data.Conversion;
 using CH.Native.Numerics;
 
 namespace CH.Native.Mapping;
@@ -93,7 +94,23 @@ public sealed class ReflectionTypedRowMapper<T> : ITypedRowMapper<T> where T : n
             // Fallback to GetValue with boxing: column.GetValue(rowIndex)
             var getValueMethod = typeof(ITypedColumn).GetMethod(nameof(ITypedColumn.GetValue))!;
             var boxedValue = Expression.Call(columnAccess, getValueMethod, rowIndexParam);
-            valueExpression = Expression.Convert(boxedValue, propertyType);
+
+            // Rectangular multidim property (T[,], T[,,], …): the column reader
+            // returns jagged form (T[][], T[][][]). Cast → throw without the
+            // boundary converter, so route through JaggedToRectangularConverter
+            // before assignment.
+            if (propertyType.IsArray && propertyType.GetArrayRank() > 1)
+            {
+                var toRect = typeof(JaggedToRectangularConverter)
+                    .GetMethod(nameof(JaggedToRectangularConverter.ToRectangular))!;
+                var castArray = Expression.Convert(boxedValue, typeof(Array));
+                var rectArray = Expression.Call(toRect, castArray, Expression.Constant(propertyType));
+                valueExpression = Expression.Convert(rectArray, propertyType);
+            }
+            else
+            {
+                valueExpression = Expression.Convert(boxedValue, propertyType);
+            }
         }
 
         // Set property: target.Property = value

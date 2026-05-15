@@ -317,6 +317,53 @@ public class ParameterTests
         Assert.True(result); // 2 is in both arrays
     }
 
+    [Fact]
+    public async Task ArrayParameter_RectangularInt2D_Works()
+    {
+        // Exercises ParameterSerializer.SerializeArray's rectangular branch:
+        // int[2,3] should serialize to [[..],[..]] and length() should return the outer rank.
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var grid = new int[2, 3] { { 1, 2, 3 }, { 4, 5, 6 } };
+        var result = await connection.ExecuteScalarAsync<int>(
+            "SELECT length(@grid)",
+            new { grid });
+
+        Assert.Equal(2, result);
+    }
+
+    [Fact]
+    public async Task ArrayParameter_RectangularInt2D_Flatten_Works()
+    {
+        // Verifies the *content* survives the round trip — arrayFlatten of the
+        // serialized rectangular value must match the row-major flattening.
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var grid = new int[2, 2] { { 1, 2 }, { 3, 4 } };
+        var flat = (int[])(await connection.ExecuteScalarAsync<object>(
+            "SELECT arrayFlatten(@grid)",
+            new { grid }))!;
+
+        Assert.Equal(new[] { 1, 2, 3, 4 }, flat);
+    }
+
+    [Fact]
+    public async Task ArrayParameter_RectangularInt3D_Works()
+    {
+        // 3D path through SerializeArray's rectangular branch; outer length is 2.
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var cube = new int[2, 2, 2] { { { 1, 2 }, { 3, 4 } }, { { 5, 6 }, { 7, 8 } } };
+        var result = await connection.ExecuteScalarAsync<int>(
+            "SELECT length(@cube)",
+            new { cube });
+
+        Assert.Equal(2, result);
+    }
+
     #endregion
 
     #region Table Operations with Parameters

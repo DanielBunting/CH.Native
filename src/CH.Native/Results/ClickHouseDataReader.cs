@@ -200,6 +200,12 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
         if (typeof(T) == typeof(string) && value is JsonDocument jsonDoc)
             return (T)(object)jsonDoc.RootElement.GetRawText();
 
+        // Jagged → rectangular: column readers always materialize Array(Array(T))
+        // as jagged. If the caller asks for T[,] (or higher rank), validate uniform
+        // shape and copy into the rect form.
+        if (typeof(T).IsArray && typeof(T).GetArrayRank() > 1 && value is Array jaggedArray)
+            return (T)(object)Data.Conversion.JaggedToRectangularConverter.ToRectangular(jaggedArray, typeof(T));
+
         // Convert.ChangeType cannot target Nullable<U> directly — convert to the
         // underlying type and rely on the boxed-value-type → Nullable cast.
         var underlying = Nullable.GetUnderlyingType(typeof(T));

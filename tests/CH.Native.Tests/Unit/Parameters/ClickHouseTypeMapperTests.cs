@@ -145,4 +145,60 @@ public class ClickHouseTypeMapperTests
     }
 
     #endregion
+
+    #region Multidimensional Arrays
+
+    [Fact]
+    public void InferTypeFromClrType_Int2dArray_ReturnsArrayArrayInt32()
+    {
+        Assert.Equal("Array(Array(Int32))", ClickHouseTypeMapper.InferTypeFromClrType(typeof(int[,])));
+    }
+
+    [Fact]
+    public void InferTypeFromClrType_Int3dArray_ReturnsArrayArrayArrayInt32()
+    {
+        Assert.Equal("Array(Array(Array(Int32)))", ClickHouseTypeMapper.InferTypeFromClrType(typeof(int[,,])));
+    }
+
+    [Fact]
+    public void InferTypeFromClrType_String2dArray_ReturnsArrayArrayString()
+    {
+        Assert.Equal("Array(Array(String))", ClickHouseTypeMapper.InferTypeFromClrType(typeof(string[,])));
+    }
+
+    [Fact]
+    public void InferTypeFromClrType_StringJaggedArray_StillJagged()
+    {
+        // Regression: jagged path unchanged after the rect addition.
+        Assert.Equal("Array(Array(String))", ClickHouseTypeMapper.InferTypeFromClrType(typeof(string[][])));
+    }
+
+    [Fact]
+    public void InferTypeFromClrType_NullableElement2D_MatchesJaggedBehavior()
+    {
+        // Aligns with the existing jagged behavior: Nullable is stripped at
+        // InferTypeFromClrType (top-level and recursively). int?[,] mirrors
+        // int?[][] which returns Array(Array(Int32)).
+        Assert.Equal("Array(Array(Int32))", ClickHouseTypeMapper.InferTypeFromClrType(typeof(int?[,])));
+    }
+
+    [Fact]
+    public void InferTypeFromClrType_HybridJaggedOfRect_Throws()
+    {
+        // int[][,] — outer jagged (rank 1), element rectangular (int[,]). Rejected.
+        var ex = Assert.Throws<NotSupportedException>(
+            () => ClickHouseTypeMapper.InferTypeFromClrType(typeof(int[][,])));
+        Assert.Contains("Hybrid array shapes", ex.Message);
+    }
+
+    [Fact]
+    public void InferTypeFromClrType_HybridRectOfJagged_Throws()
+    {
+        // int[,][] — outer rectangular (rank 2), element jagged (int[]). Rejected.
+        var ex = Assert.Throws<NotSupportedException>(
+            () => ClickHouseTypeMapper.InferTypeFromClrType(typeof(int[,][])));
+        Assert.Contains("Hybrid array shapes", ex.Message);
+    }
+
+    #endregion
 }

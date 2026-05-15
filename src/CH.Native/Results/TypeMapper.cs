@@ -331,6 +331,14 @@ internal sealed class TypeMapper<T>
             return Enum.ToObject(targetType, value);
         }
 
+        // Jagged → rectangular: column readers always materialize Array(Array(T))
+        // as jagged. If the caller asks for T[,] (or higher rank), validate uniform
+        // shape and copy into the rect form.
+        if (targetType.IsArray && targetType.GetArrayRank() > 1 && value is Array jaggedArray)
+        {
+            return Data.Conversion.JaggedToRectangularConverter.ToRectangular(jaggedArray, targetType);
+        }
+
         // General conversion
         try
         {

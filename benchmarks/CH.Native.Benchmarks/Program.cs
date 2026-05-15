@@ -59,6 +59,9 @@ if (args.Length > 0)
         case "geo":
             BenchmarkRunner.Run<GeoColumnBenchmarks>();
             break;
+        case "multidim":
+            BenchmarkRunner.Run<MultiDimArrayBenchmarks>();
+            break;
         case "geocompare":
             BenchmarkRunner.Run<GeoComparisonBenchmarks>();
             break;
@@ -150,6 +153,7 @@ static void PrintUsage()
           bulk        - Bulk insert serialization benchmarks
           bulkalloc   - Direct vs boxed bulk-insert allocation comparison (50K+ rows)
           geo         - Geo column reader/writer/skipper benchmarks
+          multidim    - Multi-dim array converters + Array(Array(Int32)) pipeline
 
         Protocol Comparison Benchmarks (requires Docker):
           geocompare  - Geo types: CH.Native (native TCP) vs ClickHouse.Driver (HTTP)

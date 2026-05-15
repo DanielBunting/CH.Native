@@ -204,19 +204,35 @@ public static class ParameterSerializer
 
     private static string SerializeArray(IEnumerable enumerable, string clickHouseType)
     {
-        // Extract element type from Array(X)
+        // Top-level array literal: build the nested form and wrap with
+        // EscapeStringForParameter so it survives the server's two-pass decode
+        // (matches the String path in Serialize). The raw literal is built by
+        // SerializeArrayLiteral so it can also be reused by SerializeRawValue
+        // when the enclosing element is itself an array (Array(Array(T))).
+        return EscapeStringForParameter(SerializeArrayLiteral(enumerable, clickHouseType));
+    }
+
+    private static string SerializeArrayLiteral(IEnumerable enumerable, string clickHouseType)
+    {
         var elementType = ExtractArrayElementType(clickHouseType);
+
+        // Rectangular multidim arrays (T[,], T[,,]) iterate flat in row-major
+        // order via IEnumerable — that would emit a flat single-level literal
+        // instead of the nested form Array(Array(T)) demands. Convert to
+        // jagged at the boundary so the outer iteration yields rows, and the
+        // inner SerializeRawValue path produces nested literals.
+        if (enumerable is Array array && array.Rank > 1)
+        {
+            enumerable = Data.Conversion.RectangularArrayConverter.ToJagged(array);
+        }
 
         var elements = new List<string>();
         foreach (var item in enumerable)
         {
-            // Use raw value serialization for array elements
             elements.Add(SerializeRawValue(item, elementType));
         }
 
-        // Return array as quoted string — double-escape for the parameter-wire
-        // two-pass decode (matches the String path in Serialize).
-        return EscapeStringForParameter($"[{string.Join(", ", elements)}]");
+        return $"[{string.Join(", ", elements)}]";
     }
 
     /// <summary>
@@ -257,6 +273,10 @@ public static class ParameterSerializer
 
             // Guid
             Guid g => $"'{g:D}'",
+
+            // Nested arrays — recurse to produce a nested literal [a, b, c].
+            // String is IEnumerable<char>; the earlier arm handles it first.
+            IEnumerable e => SerializeArrayLiteral(e, clickHouseType),
 
             _ => throw new NotSupportedException(
                 $"Cannot serialize array element of type '{value.GetType().FullName}' to ClickHouse.")
