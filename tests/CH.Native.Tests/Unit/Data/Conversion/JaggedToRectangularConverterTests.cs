@@ -126,4 +126,83 @@ public class JaggedToRectangularConverterTests
         Assert.Throws<ClickHouseTypeConversionException>(
             () => JaggedToRectangularConverter.ToRectangular(jagged, typeof(int[,,])));
     }
+
+    [Fact]
+    public void ToRectangular2D_NullInnerRows_TreatedAsZeroLength()
+    {
+        // Defensive null handling: a null inner row should be treated as length 0
+        // and produce a uniform [n, 0] rectangular result rather than NPE.
+        var jagged = new int[][] { null!, null! };
+
+        var rect = JaggedToRectangularConverter.ToRectangular2D(jagged);
+
+        Assert.Equal(2, rect.GetLength(0));
+        Assert.Equal(0, rect.GetLength(1));
+    }
+
+    [Fact]
+    public void ToRectangular3D_FirstPlaneEmpty_ReturnsZeroSizedInnerDims()
+    {
+        // When the first outer element has d1=0, the d2 seed must fall through
+        // to the false arm of the ternary rather than indexing jagged[0][0].
+        var jagged = new int[][][] { Array.Empty<int[]>() };
+
+        var rect = JaggedToRectangularConverter.ToRectangular3D(jagged);
+
+        Assert.Equal(1, rect.GetLength(0));
+        Assert.Equal(0, rect.GetLength(1));
+        Assert.Equal(0, rect.GetLength(2));
+    }
+
+    [Fact]
+    public void ToRectangular3D_NullPlane_TreatedAsEmpty()
+    {
+        // A null outer plane should coalesce to an empty array via the null-
+        // coalescing fallback, not throw a NullReferenceException.
+        var jagged = new int[][][] { null!, null! };
+
+        var rect = JaggedToRectangularConverter.ToRectangular3D(jagged);
+
+        Assert.Equal(2, rect.GetLength(0));
+        Assert.Equal(0, rect.GetLength(1));
+        Assert.Equal(0, rect.GetLength(2));
+    }
+
+    [Fact]
+    public void ToRectangular_ReflectionRank5_ProducesCorrectShape()
+    {
+        // Build a uniform jagged 2x2x2x2x2 of ints; values encode their index
+        // so we can verify Copy traverses every leaf correctly at rank 5.
+        var jagged = new int[2][][][][];
+        for (int i = 0; i < 2; i++)
+        {
+            jagged[i] = new int[2][][][];
+            for (int j = 0; j < 2; j++)
+            {
+                jagged[i][j] = new int[2][][];
+                for (int k = 0; k < 2; k++)
+                {
+                    jagged[i][j][k] = new int[2][];
+                    for (int l = 0; l < 2; l++)
+                    {
+                        jagged[i][j][k][l] = new[]
+                        {
+                            i * 16 + j * 8 + k * 4 + l * 2,
+                            i * 16 + j * 8 + k * 4 + l * 2 + 1,
+                        };
+                    }
+                }
+            }
+        }
+
+        var rect = (int[,,,,])JaggedToRectangularConverter.ToRectangular(jagged, typeof(int[,,,,]));
+
+        Assert.Equal(2, rect.GetLength(0));
+        Assert.Equal(2, rect.GetLength(1));
+        Assert.Equal(2, rect.GetLength(2));
+        Assert.Equal(2, rect.GetLength(3));
+        Assert.Equal(2, rect.GetLength(4));
+        Assert.Equal(0, rect[0, 0, 0, 0, 0]);
+        Assert.Equal(31, rect[1, 1, 1, 1, 1]);
+    }
 }

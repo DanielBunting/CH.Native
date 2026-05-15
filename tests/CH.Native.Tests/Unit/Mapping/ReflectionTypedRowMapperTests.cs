@@ -19,6 +19,12 @@ public class ReflectionTypedRowMapperTests
         public int[,,] Cube { get; set; } = new int[0, 0, 0];
     }
 
+    private class RectString2DRow
+    {
+        public int Id { get; set; }
+        public string[,] Tags { get; set; } = new string[0, 0];
+    }
+
     [Fact]
     public void MapRow_RectangularInt2D_ConvertsJaggedToRect()
     {
@@ -78,5 +84,26 @@ public class ReflectionTypedRowMapperTests
         Assert.Equal(2, row.Cube.GetLength(2));
         Assert.Equal(1, row.Cube[0, 0, 0]);
         Assert.Equal(8, row.Cube[1, 1, 1]);
+    }
+
+    [Fact]
+    public void MapRow_RectangularString2D_ConvertsJaggedToRect()
+    {
+        // Reference-typed element to exercise the non-int branch of the
+        // expression-tree Convert in the rectangular-property setter.
+        var idColumn = new TypedColumn<int>(new[] { 5 });
+        var tagsColumn = new TypedColumn<string[][]>(new[]
+        {
+            new[] { new[] { "a", "b" }, new[] { "c", "d" } }
+        });
+
+        var mapper = TypedRowMapperFactory.GetMapper<RectString2DRow>(new[] { "Id", "Tags" });
+        var row = mapper.MapRow(new ITypedColumn[] { idColumn, tagsColumn }, 0);
+
+        Assert.Equal(5, row.Id);
+        Assert.Equal(2, row.Tags.GetLength(0));
+        Assert.Equal(2, row.Tags.GetLength(1));
+        Assert.Equal("a", row.Tags[0, 0]);
+        Assert.Equal("d", row.Tags[1, 1]);
     }
 }
