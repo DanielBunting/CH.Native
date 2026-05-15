@@ -5,7 +5,21 @@ All notable changes to this project are documented in this file.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/).
 
-## [1.1.1] 
+## [1.1.2]
+
+### Added
+
+- Multidimensional array support for `Array(Array(T))` (and deeper) columns.
+  Properties typed as rectangular `T[,]` / `T[,,]` (any rank ≥ 2) are now
+  materialized via a jagged→rectangular conversion at the read boundary,
+  validating uniform shape and reporting the offending row index in a
+  `ClickHouseTypeConversionException` on mismatch. Surfaces through the
+  reflection-based typed row mapper (`QueryAsync<T>`, LINQ `Table<T>` result
+  projection) and the ADO.NET reader's `GetFieldValue<T>()` when `T` is a
+  rectangular array type. Jagged `T[][]` / `T[][][]` continues to work
+  unchanged for ragged data.
+
+## [1.1.1] - 2026-05-09
 
 ### Added
 

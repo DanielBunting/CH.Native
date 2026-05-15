@@ -16,7 +16,7 @@
 
   <!-- NuGet Package Configuration -->
   <PropertyGroup>
-    <VersionPrefix>1.1.1</VersionPrefix>
+    <VersionPrefix>1.1.2</VersionPrefix>
     <Authors>Daniel Bunting</Authors>
     <Company>Daniel Bunting</Company>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
