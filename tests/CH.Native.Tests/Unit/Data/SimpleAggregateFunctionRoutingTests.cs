@@ -96,4 +96,32 @@ public class SimpleAggregateFunctionRoutingTests
         var factory = new ColumnReaderFactory(ColumnReaderRegistry.Default);
         Assert.Throws<FormatException>(() => factory.CreateReader("SimpleAggregateFunction(sum)"));
     }
+
+    [Fact]
+    public void WriterFactory_MissingTypeArg_ThrowsFormat()
+    {
+        var factory = new ColumnWriterFactory(ColumnWriterRegistry.Default);
+        var ex = Assert.Throws<FormatException>(
+            () => factory.CreateWriter("SimpleAggregateFunction(sum)"));
+        Assert.Contains("exactly one type argument", ex.Message);
+    }
+
+    [Fact]
+    public void SkipperFactory_MissingTypeArg_ThrowsFormat()
+    {
+        var factory = new ColumnSkipperFactory(ColumnSkipperRegistry.Default);
+        var ex = Assert.Throws<FormatException>(
+            () => factory.CreateSkipper("SimpleAggregateFunction(sum)"));
+        Assert.Contains("exactly one type argument", ex.Message);
+    }
+
+    [Fact]
+    public void WriterFactory_TooManyTypeArgs_ThrowsFormat()
+    {
+        // Two type args is invalid for SimpleAggregateFunction. Note: the parser
+        // accepts this shape syntactically; the validation lives at the factory.
+        var factory = new ColumnWriterFactory(ColumnWriterRegistry.Default);
+        Assert.Throws<FormatException>(
+            () => factory.CreateWriter("SimpleAggregateFunction(sum, Int32, Int64)"));
+    }
 }
