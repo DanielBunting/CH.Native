@@ -91,9 +91,7 @@ internal sealed class MapColumnReader<TKey, TValue> : IColumnReader<Dictionary<T
             // Dictionary<TKey, TValue> is therefore lossy when duplicates are
             // present — the assignment below is last-wins, silently dropping
             // earlier entries. This is a deliberate trade-off for ergonomic
-            // access in the common (unique-key) case; callers needing fidelity
-            // should use the KeyValuePair[]-shaped reader (see Map-type plan
-            // in .tmp/map-type).
+            // access in the common (unique-key) case.
             for (int i = 0; i < count; i++)
             {
                 dict[keys[i]] = values[i];
