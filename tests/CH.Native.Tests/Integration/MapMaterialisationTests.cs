@@ -318,6 +318,43 @@ public class MapMaterialisationTests
     }
 
     [Fact]
+    public async Task ScalarClickHouseMap_NestedMap_InnerFallbackProducesClickHouseMap()
+    {
+        // Nested Map(String, Map(String, Int32)) materialised into
+        // ClickHouseMap<string, ClickHouseMap<string, int>>. The outer reader
+        // resolves via columnName; the inner Map reader is built recursively
+        // with columnName=null, exercising the ColumnReaderFactory fallback path
+        // that routes nested Maps to the hint's Fallback shape (Entries for the
+        // AllEntries hint pushed by the scalar T).
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var map = await connection.ExecuteScalarAsync<ClickHouseMap<string, ClickHouseMap<string, int>>>(
+            "SELECT cast(map(" +
+            "  'outer1', cast(map('a', 1, 'a', 2) as Map(String, Int32))," +
+            "  'outer2', cast(map('b', 3) as Map(String, Int32))" +
+            ") as Map(String, Map(String, Int32)))");
+
+        Assert.NotNull(map);
+        Assert.Equal(2, map!.Count);
+
+        // Outer entry order preserved.
+        Assert.Equal("outer1", map[0].Key);
+        Assert.Equal("outer2", map[1].Key);
+
+        // Inner Maps materialised as ClickHouseMap with duplicates preserved.
+        var inner1 = map[0].Value;
+        Assert.Equal(2, inner1.Count);
+        Assert.True(inner1.HasDuplicateKeys);
+        Assert.Equal(new KeyValuePair<string, int>("a", 1), inner1[0]);
+        Assert.Equal(new KeyValuePair<string, int>("a", 2), inner1[1]);
+
+        var inner2 = map[1].Value;
+        Assert.Equal(1, inner2.Count);
+        Assert.Equal(new KeyValuePair<string, int>("b", 3), inner2[0]);
+    }
+
+    [Fact]
     public async Task Smoke_PocoWithDictionaryAndClickHouseMap_BothColumnsRoundTrip()
     {
         // Smoke test: a single POCO with one Dictionary property and one ClickHouseMap

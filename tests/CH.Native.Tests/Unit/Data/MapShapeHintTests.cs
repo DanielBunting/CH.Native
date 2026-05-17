@@ -1,3 +1,4 @@
+using CH.Native.Connection;
 using CH.Native.Data;
 using CH.Native.Data.ColumnReaders;
 using Xunit;
@@ -132,5 +133,85 @@ public class ColumnReaderFactoryMapShapeTests
         var reader = factory.CreateReader("Map(String, Int32)", columnName: "m");
 
         Assert.IsType<MapColumnReader<string, int>>(reader);
+    }
+}
+
+/// <summary>
+/// Tests for <c>ClickHouseConnection.PushMapShapeHintFor</c>, the typed-query entry
+/// point that decides whether a per-call hint is needed at all and, if so, whether
+/// it's the <see cref="MapShapeHint.AllEntries"/> shortcut (scalar <c>T</c>) or a
+/// per-column hint derived from <c>T</c>'s properties.
+/// </summary>
+public class PushMapShapeHintForTests
+{
+    private static ClickHouseConnection NewUnopenedConnection() =>
+        // Unit tests don't need to open the socket — PushMapShapeHintFor only
+        // inspects the rowType. "Host=localhost" matches existing unit-test usage.
+        new ClickHouseConnection("Host=localhost");
+
+    [Fact]
+    public async Task ScalarClickHouseMap_PushesAllEntriesHint()
+    {
+        await using var conn = NewUnopenedConnection();
+
+        using (var _ = conn.PushMapShapeHintFor(typeof(ClickHouseMap<string, int>)))
+        {
+            var hint = conn.EffectiveMapShapeHintOrNull();
+            Assert.NotNull(hint);
+            Assert.Equal(MapShape.Entries, hint!.Resolve("anything"));
+            Assert.Equal(MapShape.Entries, hint.Resolve("another"));
+        }
+
+        // After dispose, no hint is in effect.
+        Assert.Null(conn.EffectiveMapShapeHintOrNull());
+    }
+
+    [Fact]
+    public async Task PocoWithNoMapProperties_ReturnsNoOpDisposable()
+    {
+        await using var conn = NewUnopenedConnection();
+
+        using (var disp = conn.PushMapShapeHintFor(typeof(NoMapPoco)))
+        {
+            // No hint pushed at all — the legacy Dictionary path stays in effect.
+            Assert.Null(conn.EffectiveMapShapeHintOrNull());
+            // Disposable is the cached no-op singleton (not strictly observable
+            // from outside, but the null hint above proves the early-return path).
+            Assert.NotNull(disp);
+        }
+
+        Assert.Null(conn.EffectiveMapShapeHintOrNull());
+    }
+
+    [Fact]
+    public async Task PocoWithMixedMapProperties_PushesPerColumnHint()
+    {
+        await using var conn = NewUnopenedConnection();
+
+        using (var _ = conn.PushMapShapeHintFor(typeof(MixedMapPoco)))
+        {
+            var hint = conn.EffectiveMapShapeHintOrNull();
+            Assert.NotNull(hint);
+            // ClickHouseMap property is entries; Dictionary property is dictionary;
+            // non-Map property falls back to the default.
+            Assert.Equal(MapShape.Entries, hint!.Resolve(nameof(MixedMapPoco.Tags)));
+            Assert.Equal(MapShape.Dictionary, hint.Resolve(nameof(MixedMapPoco.Stats)));
+            Assert.Equal(MapShape.Dictionary, hint.Resolve(nameof(MixedMapPoco.Name)));
+        }
+
+        Assert.Null(conn.EffectiveMapShapeHintOrNull());
+    }
+
+    private sealed class NoMapPoco
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+    }
+
+    private sealed class MixedMapPoco
+    {
+        public string Name { get; set; } = "";
+        public Dictionary<string, int> Stats { get; set; } = new();
+        public ClickHouseMap<string, int> Tags { get; set; } = null!;
     }
 }

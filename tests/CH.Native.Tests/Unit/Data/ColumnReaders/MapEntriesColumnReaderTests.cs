@@ -151,6 +151,43 @@ public class MapEntriesColumnReaderTests
             Assert.Equal(0, column[i].Count);
         }
     }
+
+    [Fact]
+    public void ReadTypedColumn_NonMonotonicOffsets_ThrowsWithRowAndOffsets()
+    {
+        // Wire integrity: cumulative offsets must be non-decreasing. If row N's
+        // offset is less than row (N-1)'s, the derived per-row count goes negative
+        // — surface it as a typed error rather than letting the reader produce a
+        // silently-corrupted column.
+        var reader = CreateReader();
+
+        using var buffer = new PooledBufferWriter();
+        var writer = new ProtocolWriter(buffer);
+        // 3 rows with offsets [5, 2, 6]: row 1 goes backwards (5 → 2).
+        // Last offset (6) drives totalEntries so we still have 6 keys+values to
+        // consume before the per-row loop tries to bisect the array.
+        writer.WriteUInt64(5);
+        writer.WriteUInt64(2);
+        writer.WriteUInt64(6);
+        for (int i = 0; i < 6; i++) WriteString(writer, $"k{i}");
+        for (int i = 0; i < 6; i++) writer.WriteInt32(i);
+
+        var bytes = buffer.WrittenMemory;
+        InvalidOperationException? captured = null;
+        try
+        {
+            var pr = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+            using var _ = reader.ReadTypedColumn(ref pr, 3);
+        }
+        catch (InvalidOperationException ex)
+        {
+            captured = ex;
+        }
+
+        Assert.NotNull(captured);
+        Assert.Contains("Map row 1", captured!.Message);
+        Assert.Contains("non-monotonic", captured.Message);
+    }
 }
 
 /// <summary>
