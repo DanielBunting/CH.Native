@@ -85,12 +85,15 @@ internal sealed class MapColumnReader<TKey, TValue> : IColumnReader<Dictionary<T
             using var keys = _keyReader.ReadTypedColumn(ref reader, count);
             using var values = _valueReader.ReadTypedColumn(ref reader, count);
 
-            // Map keys are already deduplicated by the server in well-formed
-            // blocks. If a corrupt / hostile stream emits a duplicate key, the
-            // assignment below is last-wins by Dictionary semantics — silently
-            // dropping the earlier value. We accept that rather than throwing,
-            // matching server-side semantics, but document it here so a future
-            // change to "throw on duplicate" is a deliberate choice.
+            // ClickHouse Map(K, V) is stored as Array(Tuple(K, V)) and the
+            // server explicitly permits duplicate keys (see ClickHouse docs:
+            // "maps are not unique in ClickHouse"). Materialising into a
+            // Dictionary<TKey, TValue> is therefore lossy when duplicates are
+            // present — the assignment below is last-wins, silently dropping
+            // earlier entries. This is a deliberate trade-off for ergonomic
+            // access in the common (unique-key) case; callers needing fidelity
+            // should use the KeyValuePair[]-shaped reader (see Map-type plan
+            // in .tmp/map-type).
             for (int i = 0; i < count; i++)
             {
                 dict[keys[i]] = values[i];
