@@ -2230,6 +2230,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                     throw new ClickHouseException($"Unexpected server message type: {messageType}");
             }
         }
+        catch (ClickHouseServerException)
+        {
+            // Server-side error from the ServerMessageType.Exception arm. That
+            // arm advances the pipe past the exception body inline before
+            // throwing, so the wire is in a clean state — the connection
+            // stays usable for subsequent operations.
+            throw;
+        }
         catch (ClickHouseProtocolException)
         {
             // Wire bytes were malformed; the protocol stream is now at an
@@ -2242,6 +2250,17 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         {
             // Not enough data yet
             return false;
+        }
+        catch (Exception)
+        {
+            // Any other exception (reader factory rejected an unsupported
+            // column type, type-arg list malformed, value decode overflowed,
+            // …) means wire bytes were partially consumed at an indeterminate
+            // offset. Poison the connection so EnterBusy surfaces a clean
+            // "Connection is broken" on the next call instead of silently
+            // re-parsing stale bytes.
+            _protocolFatal = true;
+            throw;
         }
     }
 
@@ -3205,6 +3224,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                         $"Unknown server message type 0x{(byte)messageType:X2} ({(int)messageType}); protocol stream is malformed.");
             }
         }
+        catch (ClickHouseServerException)
+        {
+            // Server-side error from the ServerMessageType.Exception arm. That
+            // arm advances the pipe past the exception body inline before
+            // throwing, so the wire is in a clean state — the connection
+            // stays usable for subsequent operations.
+            throw;
+        }
         catch (ClickHouseProtocolException)
         {
             // See TryReadTypedMessage — wire bytes were malformed, the stream is
@@ -3216,6 +3243,17 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         {
             // Not enough data yet
             return false;
+        }
+        catch (Exception)
+        {
+            // Any other exception (reader factory rejected an unsupported
+            // column type, type-arg list malformed, value decode overflowed,
+            // …) means wire bytes were partially consumed at an indeterminate
+            // offset. Poison the connection so EnterBusy surfaces a clean
+            // "Connection is broken" on the next call instead of silently
+            // re-parsing stale bytes.
+            _protocolFatal = true;
+            throw;
         }
     }
 
