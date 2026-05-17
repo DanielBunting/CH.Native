@@ -377,6 +377,76 @@ public class ConnectionRecoveryTests
     }
 
     // ───────────────────────────────────────────────────────────────────────
+    // 5. Typed-query path (QueryTypedAsync → TryReadTypedMessage) also poisons
+    // ───────────────────────────────────────────────────────────────────────
+    //
+    // QueryTypedAsync<T> goes through a different read pump (ReadTypedBlocksAsync
+    // → TryReadTypedMessage) than the untyped entrypoints. The catch chain
+    // there has the same shape and must enforce the same contract — these
+    // tests pin that and close the patch-coverage gap left by §1–§4 which
+    // only exercise TryReadMessage.
+
+    [Theory]
+    [MemberData(nameof(UnsupportedAggregateProjections))]
+    public async Task UnsupportedAggregate_QueryTypedAsync_PoisonsConnection(string projection, string fnHint)
+    {
+        await using var conn = new ClickHouseConnection(_fixture.ConnectionString);
+        await conn.OpenAsync();
+
+        var first = await Assert.ThrowsAsync<NotSupportedException>(async () =>
+        {
+            await foreach (var _ in conn.QueryTypedAsync<int>($"SELECT {projection} FROM numbers(10)")) { }
+        });
+        Assert.Contains(fnHint, first.Message);
+
+        var second = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Contains("Connection is broken", second.Message);
+    }
+
+    [Fact]
+    public async Task QueryTypedAsync_ServerError_ConnectionRemainsUsable()
+    {
+        // Symmetric regression guard for the typed path — pins the
+        // catch (ClickHouseServerException) arm in TryReadTypedMessage.
+        await using var conn = new ClickHouseConnection(_fixture.ConnectionString);
+        await conn.OpenAsync();
+
+        await Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+        {
+            await foreach (var _ in conn.QueryTypedAsync<int>("SELECT * FROM no_such_table_xyz")) { }
+        });
+
+        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+    }
+
+    [Fact]
+    public async Task UnsupportedAggregate_QueryTypedAsync_PoisonStickyAcrossEntryPoints()
+    {
+        // Poison via the typed pump, then verify the untyped entry points also
+        // see the broken state. _protocolFatal is a single connection-wide flag;
+        // this pins that the typed and untyped pumps share it.
+        await using var conn = new ClickHouseConnection(_fixture.ConnectionString);
+        await conn.OpenAsync();
+
+        await Assert.ThrowsAsync<NotSupportedException>(async () =>
+        {
+            await foreach (var _ in conn.QueryTypedAsync<int>(
+                "SELECT uniqExactState(toUInt64(number)) FROM numbers(10)")) { }
+        });
+
+        var fromQueryAsync = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await foreach (var _ in conn.QueryAsync("SELECT 1")) { }
+        });
+        Assert.Contains("Connection is broken", fromQueryAsync.Message);
+
+        var fromExecuteNonQuery = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => conn.ExecuteNonQueryAsync("SELECT 1"));
+        Assert.Contains("Connection is broken", fromExecuteNonQuery.Message);
+    }
+
+    // ───────────────────────────────────────────────────────────────────────
     // Helper
     // ───────────────────────────────────────────────────────────────────────
 
