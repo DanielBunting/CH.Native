@@ -2,6 +2,7 @@ using System.Data.Common;
 using CH.Native.BulkInsert;
 using CH.Native.Compression;
 using CH.Native.Connection;
+using CH.Native.Data;
 using CH.Native.Mapping;
 using CH.Native.Results;
 using CH.Native.SystemTests.Fixtures;
@@ -249,6 +250,42 @@ public class AllocationBudgetTests
             "QueryAsync.FixedString16.10k",
             "SELECT toFixedString('0123456789abcdef', 16) FROM numbers(10000)",
             row => row.GetFieldValue<byte[]>(0));
+
+    [Fact]
+    public Task QueryAsync_MapStringInt32_StaysWithinBudget() =>
+        ProjectionScenario(
+            "QueryAsync.Map_String_Int32.10k",
+            "SELECT cast(map(toString(number), toInt32(number), toString(number + 1), toInt32(number + 1)) as Map(String, Int32)) FROM numbers(10000)",
+            row => row.GetFieldValue<Dictionary<string, int>>(0));
+
+    [Fact]
+    public async Task QueryTyped_ClickHouseMapProperty_StaysWithinBudget()
+    {
+        // The typed path with a ClickHouseMap property selects the entries reader
+        // via the per-call hint. Budget pins that the per-row cost stays comparable
+        // to the Dictionary baseline above (one KeyValuePair[] + one ClickHouseMap
+        // wrapper per row, vs one Dictionary per row in the baseline).
+        await using var conn = new ClickHouseConnection(_fixture.BuildSettings());
+        await conn.OpenAsync();
+
+        const string sql =
+            "SELECT toInt32(number) AS Id, " +
+            "cast(map(toString(number), toInt32(number), toString(number + 1), toInt32(number + 1)) as Map(String, Int32)) AS Tags " +
+            "FROM numbers(10000)";
+
+        // Warm.
+        await foreach (var _ in conn.QueryAsync<MapBudgetPoco>(sql)) { }
+
+        var bytes = await AllocationProbe.MeasureAsync(async () =>
+        {
+            await foreach (var row in conn.QueryAsync<MapBudgetPoco>(sql))
+            {
+                _ = row.Tags.Count;
+            }
+        });
+
+        _budget.Assert("QueryTyped.ClickHouseMap_String_Int32.10k", bytes);
+    }
 
     private async Task ProjectionScenario(string scenario, string sql, Action<ClickHouseRow> read)
     {
@@ -611,5 +648,11 @@ public class AllocationBudgetTests
     {
         public ulong Value { get; set; }
         public string Name { get; set; } = "";
+    }
+
+    private class MapBudgetPoco
+    {
+        public int Id { get; set; }
+        public ClickHouseMap<string, int> Tags { get; set; } = null!;
     }
 }

@@ -24,6 +24,7 @@ Func<string, Task>? runner = sampleName switch
     "pooled"      => DataSourcePooledSample.RunAsync,
     "cross-db"    => CrossDatabaseSample.RunAsync,
     "sql"         => PlainSqlInsertSample.RunAsync,
+    "map"         => MapColumnSample.RunAsync,
     _             => null,
 };
 
@@ -56,6 +57,7 @@ static void PrintUsage()
             pooled       dataSource.Table<T>(name).InsertAsync(rows)
             cross-db     qualified database.table inserts on a single connection
             sql          plain SQL INSERT via ClickHouseCommand
+            map          bulk insert with Map(K, V) columns — Dictionary vs ClickHouseMap (preserves duplicates)
 
         All samples create a uniquely-named temp table, run the demo, and drop the table.
         """);

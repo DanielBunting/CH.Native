@@ -27,6 +27,11 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 {
     private readonly ClickHouseConnectionSettings _settings;
     private readonly ColumnReaderRegistry _columnReaderRegistry;
+    private readonly AsyncLocal<MapShapeHint?> _currentMapShapeHint = new();
+    // Fast-path flag: set when at least one push is live anywhere on this connection.
+    // Avoids paying the AsyncLocal.Value (ExecutionContext) lookup on every block read
+    // when no typed call site has installed a hint — the common case.
+    private int _mapShapeHintPushCount;
     private readonly ClickHouseLogger _logger;
 
     internal ClickHouseLogger Logger => _logger;
@@ -334,6 +339,48 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             ? ColumnReaderRegistry.LazyStrings
             : ColumnReaderRegistry.Default;
         _logger = new ClickHouseLogger(_settings.Telemetry?.LoggerFactory);
+    }
+
+    /// <summary>
+    /// Resolves the Map-shape hint for the current operation. Returns <c>null</c>
+    /// when no per-query override is in play — that's the byte-for-byte legacy path
+    /// that uses the registry's composite-reader cache (every Map column reads as a
+    /// <see cref="Dictionary{TKey, TValue}"/>). When a typed call site has pushed a
+    /// hint (via <see cref="PushMapShapeHintFor"/>), that hint is returned so the
+    /// per-column entries readers get selected.
+    /// </summary>
+    internal MapShapeHint? EffectiveMapShapeHintOrNull()
+        => Volatile.Read(ref _mapShapeHintPushCount) == 0 ? null : _currentMapShapeHint.Value;
+
+    /// <summary>
+    /// Sets a per-call Map-shape hint scoped to the current async flow. The caller
+    /// is responsible for clearing it (typically via the returned disposable
+    /// pattern from typed call sites). Used by <see cref="ClickHouseCommand"/>
+    /// when executing a typed query whose row type <c>T</c> declares
+    /// entries-shaped Map properties.
+    /// </summary>
+    internal IDisposable PushMapShapeHint(MapShapeHint hint)
+    {
+        var previous = _currentMapShapeHint.Value;
+        _currentMapShapeHint.Value = hint;
+        Interlocked.Increment(ref _mapShapeHintPushCount);
+        return new PopMapShapeHint(this, previous);
+    }
+
+    private sealed class PopMapShapeHint : IDisposable
+    {
+        private readonly ClickHouseConnection _connection;
+        private readonly MapShapeHint? _previous;
+        public PopMapShapeHint(ClickHouseConnection connection, MapShapeHint? previous)
+        {
+            _connection = connection;
+            _previous = previous;
+        }
+        public void Dispose()
+        {
+            _connection._currentMapShapeHint.Value = _previous;
+            Interlocked.Decrement(ref _connection._mapShapeHintPushCount);
+        }
     }
 
     /// <summary>
@@ -1528,6 +1575,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         EnterBusy(effectiveQueryId);
         try
         {
+            using var mapHintScope = PushMapShapeHintFor(typeof(T));
             return await ExecuteScalarCoreAsync<T>(sql, progress, cancellationToken, effectiveQueryId);
         }
         finally
@@ -1806,6 +1854,8 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         [EnumeratorCancellation] CancellationToken cancellationToken = default,
         string? queryId = null)
     {
+        using var mapHintScope = PushMapShapeHintFor(typeof(T));
+
         await using var reader = await ExecuteReaderAsync(sql, cancellationToken, queryId);
 
         // Need to call ReadAsync at least once to initialize schema before creating mapper
@@ -1822,6 +1872,39 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         {
             yield return mapper.Map(reader);
         }
+    }
+
+    /// <summary>
+    /// Pushes a per-call Map-shape hint derived from a typed call site's <c>T</c>
+    /// onto the AsyncLocal stack. For scalar types whose runtime classification is
+    /// entries-shape (e.g. <c>T = ClickHouseMap&lt;,&gt;</c>), forces every Map
+    /// column to entries. For POCO types, walks properties for per-column hints.
+    /// Returns a disposable that pops the hint when the typed call completes;
+    /// returns a no-op when T has no Map-shape signals.
+    /// </summary>
+    internal IDisposable PushMapShapeHintFor(Type rowType)
+    {
+        if (Mapping.MapShapeInspector.InspectScalar(rowType) == MapShape.Entries)
+        {
+            return PushMapShapeHint(MapShapeHint.AllEntries);
+        }
+
+        var perColumn = Mapping.MapShapeInspector.Inspect(rowType);
+        // The Empty sentinel is the cached "no Map-shape properties" case — avoid
+        // pushing a hint at all so the reader factory stays on the byte-for-byte
+        // legacy Dictionary path.
+        if (ReferenceEquals(perColumn, Mapping.MapShapeInspector.Empty))
+        {
+            return NoOpDisposable.Instance;
+        }
+
+        return PushMapShapeHint(new MapShapeHint(perColumn));
+    }
+
+    private sealed class NoOpDisposable : IDisposable
+    {
+        public static readonly NoOpDisposable Instance = new();
+        public void Dispose() { }
     }
 
     /// <summary>
@@ -1844,6 +1927,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         if (!_isOpen)
             throw new InvalidOperationException("Connection is not open.");
 
+        using var mapHintScope = PushMapShapeHintFor(typeof(T));
         var effectiveQueryId = ResolveQueryId(queryId);
         EnterBusy(effectiveQueryId);
         try
@@ -2007,7 +2091,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
 
                                 // Read table name and block from contiguous buffer
                                 var tableName = contiguousReader.ReadString();
-                                typedBlock = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion);
+                                typedBlock = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull());
 
                                 // Advance original buffer past message type + message content
                                 buffer = buffer.Slice(reader.Consumed + messageLength);
@@ -2121,7 +2205,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                                 var contiguousReader = CreateProtocolReader(contiguousSeq);
 
                                 var tableName = contiguousReader.ReadString();
-                                typedBlock = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion);
+                                typedBlock = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull());
 
                                 buffer = buffer.Slice(reader.Consumed + totalsMessageLength);
                                 return true;
@@ -2234,7 +2318,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             // Scan pass already validated completeness in TryReadTypedMessage
             // Just parse directly now - we know we have all the data
             var tableName = reader.ReadString();
-            return Block.ReadTypedBlockWithTableName(ref reader, registry, tableName, NegotiatedProtocolVersion);
+            return Block.ReadTypedBlockWithTableName(ref reader, registry, tableName, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull());
         }
 
         // Table name is read OUTSIDE the compressed block
@@ -2245,7 +2329,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         if (!isCompressed)
         {
             // Data is not compressed - read directly
-            return Block.ReadTypedBlockWithTableName(ref reader, registry, tableNameFromCompressed, NegotiatedProtocolVersion);
+            return Block.ReadTypedBlockWithTableName(ref reader, registry, tableNameFromCompressed, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull());
         }
 
         // ClickHouse sends block data in multiple compressed chunks (typically 1MB each).
@@ -2266,7 +2350,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             {
                 var seq = new ReadOnlySequence<byte>(accumulator.WrittenMemory);
                 var blockReader = CreateProtocolReader(seq);
-                return Block.ReadTypedBlockWithTableName(ref blockReader, registry, tableNameFromCompressed, NegotiatedProtocolVersion);
+                return Block.ReadTypedBlockWithTableName(ref blockReader, registry, tableNameFromCompressed, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull());
             }
             catch (InvalidOperationException)
             {
@@ -2922,7 +3006,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                                 var contiguousReader = CreateProtocolReader(contiguousSeq);
 
                                 var tableName = contiguousReader.ReadString();
-                                var block = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion);
+                                var block = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull());
 
                                 buffer = buffer.Slice(reader.Consumed + dataMessageLength);
                                 message = new DataMessage { Block = block };
@@ -3046,7 +3130,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
                                 var contiguousReader = CreateProtocolReader(contiguousSeq);
 
                                 var tableName = contiguousReader.ReadString();
-                                var block = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion);
+                                var block = Block.ReadTypedBlockWithTableName(ref contiguousReader, registry, tableName, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull());
 
                                 buffer = buffer.Slice(reader.Consumed + specialMessageLength);
                                 message = new DataMessage { Block = block };
@@ -3142,7 +3226,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             // Scan pass already validated completeness in TryReadMessage
             // Just parse directly now - we know we have all the data
             var tableName = reader.ReadString();
-            var block = Block.ReadTypedBlockWithTableName(ref reader, registry, tableName, NegotiatedProtocolVersion);
+            var block = Block.ReadTypedBlockWithTableName(ref reader, registry, tableName, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull());
             return new DataMessage { Block = block };
         }
 
@@ -3158,7 +3242,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         if (!isCompressed)
         {
             // Data is not compressed - read directly
-            return new DataMessage { Block = Block.ReadTypedBlockWithTableName(ref reader, registry, compressedTableName, NegotiatedProtocolVersion) };
+            return new DataMessage { Block = Block.ReadTypedBlockWithTableName(ref reader, registry, compressedTableName, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull()) };
         }
 
         // ClickHouse sends block data in multiple compressed chunks (typically 1MB each).
@@ -3179,7 +3263,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
             {
                 var seq = new ReadOnlySequence<byte>(accumulator.WrittenMemory);
                 var blockReader = CreateProtocolReader(seq);
-                return new DataMessage { Block = Block.ReadTypedBlockWithTableName(ref blockReader, registry, compressedTableName, NegotiatedProtocolVersion) };
+                return new DataMessage { Block = Block.ReadTypedBlockWithTableName(ref blockReader, registry, compressedTableName, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull()) };
             }
             catch (InvalidOperationException)
             {

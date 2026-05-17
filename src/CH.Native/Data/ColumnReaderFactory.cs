@@ -10,14 +10,22 @@ namespace CH.Native.Data;
 public sealed class ColumnReaderFactory
 {
     private readonly ColumnReaderRegistry _registry;
+    private readonly MapShapeHint _mapShapeHint;
+    private string? _currentColumnName;
 
     /// <summary>
     /// Creates a factory backed by the given registry of base-type column readers.
     /// </summary>
     /// <param name="registry">The registry of column readers used to resolve base types.</param>
     public ColumnReaderFactory(ColumnReaderRegistry registry)
+        : this(registry, MapShapeHint.Default)
+    {
+    }
+
+    internal ColumnReaderFactory(ColumnReaderRegistry registry, MapShapeHint mapShapeHint)
     {
         _registry = registry;
+        _mapShapeHint = mapShapeHint;
     }
 
     /// <summary>
@@ -28,18 +36,41 @@ public sealed class ColumnReaderFactory
     /// <exception cref="NotSupportedException">Thrown if the type is not supported.</exception>
     public IColumnReader CreateReader(string typeName)
     {
-        // JSON needs the factory reference for binary-format (v0/v3) decoding.
-        // Bypass the registry so we always attach `this` to the reader.
-        if (typeName == "JSON")
-            return new ColumnReaders.JsonColumnReader(this);
+        return CreateReader(typeName, columnName: null);
+    }
 
-        // Try direct registry lookup first for simple types
-        if (_registry.TryGetReader(typeName, out var directReader))
-            return directReader!;
+    /// <summary>
+    /// Creates a column reader for the specified ClickHouse type name in the context of a
+    /// top-level column name. Per-column shape hints (e.g., for <c>Map(K, V)</c>) are
+    /// applied only to the outermost type; nested types fall back to the connection-level
+    /// default.
+    /// </summary>
+    /// <param name="typeName">The ClickHouse type name.</param>
+    /// <param name="columnName">The top-level column name, or <c>null</c> if unknown.</param>
+    /// <returns>A column reader for the type.</returns>
+    public IColumnReader CreateReader(string typeName, string? columnName)
+    {
+        var previous = _currentColumnName;
+        _currentColumnName = columnName;
+        try
+        {
+            // JSON needs the factory reference for binary-format (v0/v3) decoding.
+            // Bypass the registry so we always attach `this` to the reader.
+            if (typeName == "JSON")
+                return new ColumnReaders.JsonColumnReader(this);
 
-        // Parse the type for complex handling
-        var type = ClickHouseTypeParser.Parse(typeName);
-        return CreateReaderForType(type);
+            // Try direct registry lookup first for simple types
+            if (_registry.TryGetReader(typeName, out var directReader))
+                return directReader!;
+
+            // Parse the type for complex handling
+            var type = ClickHouseTypeParser.Parse(typeName);
+            return CreateReaderForType(type);
+        }
+        finally
+        {
+            _currentColumnName = previous;
+        }
     }
 
     private IColumnReader CreateReaderForType(ClickHouseType type)
@@ -137,11 +168,33 @@ public sealed class ColumnReaderFactory
 
         var keyType = type.TypeArguments[0];
         var valueType = type.TypeArguments[1];
-        var keyReader = CreateReaderForType(keyType);
-        var valueReader = CreateReaderForType(valueType);
 
-        var readerType = typeof(MapColumnReader<,>).MakeGenericType(keyReader.ClrType, valueReader.ClrType);
-        return (IColumnReader)Activator.CreateInstance(readerType, keyReader, valueReader)!;
+        // Per-column hint applies only to the top-level Map column — null out the
+        // column name before resolving inner types so a nested Map(...) falls back
+        // to the connection default.
+        var columnName = _currentColumnName;
+        _currentColumnName = null;
+        try
+        {
+            var keyReader = CreateReaderForType(keyType);
+            var valueReader = CreateReaderForType(valueType);
+
+            // Resolve / Fallback both guarantee a non-Default MapShape.
+            var shape = columnName is not null
+                ? _mapShapeHint.Resolve(columnName)
+                : _mapShapeHint.Fallback;
+
+            var openGeneric = shape == MapShape.Entries
+                ? typeof(MapEntriesColumnReader<,>)
+                : typeof(MapColumnReader<,>);
+
+            var readerType = openGeneric.MakeGenericType(keyReader.ClrType, valueReader.ClrType);
+            return (IColumnReader)Activator.CreateInstance(readerType, keyReader, valueReader)!;
+        }
+        finally
+        {
+            _currentColumnName = columnName;
+        }
     }
 
     private IColumnReader CreateTupleReader(ClickHouseType type)
