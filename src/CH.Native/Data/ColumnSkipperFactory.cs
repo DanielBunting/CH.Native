@@ -50,6 +50,8 @@ public sealed class ColumnSkipperFactory
             "LowCardinality" => CreateLowCardinalitySkipper(type),
             "Variant" => CreateVariantSkipper(type),
             "Dynamic" => new DynamicColumnSkipper(this, type.OriginalTypeName),
+            "SimpleAggregateFunction" => CreateSimpleAggregateFunctionSkipper(type),
+            "AggregateFunction" => CreateAggregateFunctionSkipper(type),
             "JSON" => new JsonColumnSkipper(this),
 
             // Parameterized simple types
@@ -191,6 +193,26 @@ public sealed class ColumnSkipperFactory
             .ToArray();
 
         return new VariantColumnSkipper(innerSkippers, innerTypeNames);
+    }
+
+    private IColumnSkipper CreateSimpleAggregateFunctionSkipper(ClickHouseType type)
+    {
+        // SimpleAggregateFunction(name, T) is a wire-format pass-through for T —
+        // route directly to the inner type's skipper, no wrapper class.
+        if (type.TypeArguments.Count != 1)
+            throw new FormatException(
+                $"SimpleAggregateFunction requires exactly one type argument, got: {type.OriginalTypeName}");
+        return CreateSkipperForType(type.TypeArguments[0]);
+    }
+
+    private IColumnSkipper CreateAggregateFunctionSkipper(ClickHouseType type)
+    {
+        if (type.AggregateFunctionName is null)
+            throw new FormatException(
+                $"AggregateFunction missing function name: {type.OriginalTypeName}");
+        var format = AggregateState.AggregateFunctionStateFormatRegistry.Resolve(
+            type.AggregateFunctionName, type.TypeArguments);
+        return new AggregateFunctionColumnSkipper(type.OriginalTypeName, format);
     }
 
     private IColumnSkipper CreateFixedStringSkipper(ClickHouseType type)

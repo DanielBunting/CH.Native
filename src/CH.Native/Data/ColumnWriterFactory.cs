@@ -45,6 +45,8 @@ public sealed class ColumnWriterFactory
             "LowCardinality" => CreateLowCardinalityWriter(type),
             "Variant" => CreateVariantWriter(type),
             "Dynamic" => CreateDynamicWriter(type),
+            "SimpleAggregateFunction" => CreateSimpleAggregateFunctionWriter(type),
+            "AggregateFunction" => CreateAggregateFunctionWriter(type),
             "JSON" => new JsonColumnWriter(),
 
             // Parameterized simple types
@@ -190,6 +192,26 @@ public sealed class ColumnWriterFactory
     {
         var maxTypes = type.GetDynamicMaxTypes();
         return new DynamicColumnWriter(this, maxTypes);
+    }
+
+    private IColumnWriter CreateSimpleAggregateFunctionWriter(ClickHouseType type)
+    {
+        // SimpleAggregateFunction(name, T) is a wire-format pass-through for T —
+        // route directly to the inner type's writer, no wrapper class.
+        if (type.TypeArguments.Count != 1)
+            throw new FormatException(
+                $"SimpleAggregateFunction requires exactly one type argument, got: {type.OriginalTypeName}");
+        return CreateWriterForType(type.TypeArguments[0]);
+    }
+
+    private IColumnWriter CreateAggregateFunctionWriter(ClickHouseType type)
+    {
+        if (type.AggregateFunctionName is null)
+            throw new FormatException(
+                $"AggregateFunction missing function name: {type.OriginalTypeName}");
+        var format = AggregateState.AggregateFunctionStateFormatRegistry.Resolve(
+            type.AggregateFunctionName, type.TypeArguments);
+        return new AggregateFunctionColumnWriter(type.OriginalTypeName, format);
     }
 
     private IColumnWriter CreateFixedStringWriter(ClickHouseType type)

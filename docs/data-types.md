@@ -52,6 +52,8 @@ When reading data, CH.Native automatically converts ClickHouse types to their .N
 | JSON | JsonDocument / string | ClickHouse 25.6+ required |
 | Dynamic | ClickHouseDynamic | Per-row type discriminator |
 | Variant(T0, T1, ...) | VariantValue<T0, T1> / ClickHouseVariant | Boxing-free up to 2 arms |
+| SimpleAggregateFunction(fn, T) | CLR type of T | Transparent — wire format is identical to T |
+| AggregateFunction(fn, T...) | ClickHouseAggregateState | Opaque per-row state bytes; tier-1 fn set only |
 | Point | (X, Y) record struct | |
 | Ring, LineString | Point[] | |
 | Polygon, MultiLineString | Point[][] | |
@@ -483,6 +485,84 @@ var any = await connection.ExecuteScalarAsync<ClickHouseVariant>(
     "SELECT CAST(3.14 AS Variant(Int64, String, Float64))");
 if (any.TryGetAs<double>(out var d)) Console.WriteLine(d);
 ```
+
+### SimpleAggregateFunction(fn, T)
+
+`SimpleAggregateFunction(fn, T)` is a server-side hint used by `AggregatingMergeTree`: the wire format is identical to `T`, and the function name is a merge-time directive that the client ignores. The column reads as the inner CLR type directly — no wrapper.
+
+```csharp
+// Schema:  CREATE TABLE x (total SimpleAggregateFunction(sum, Int64), ...);
+var total = row.GetFieldValue<long>("total");
+```
+
+`Nullable(SimpleAggregateFunction(...))` is forbidden by ClickHouse and rejected by the driver with a `FormatException`. Wrap the inner type instead: `SimpleAggregateFunction(sum, Nullable(Int64))`.
+
+### AggregateFunction(fn, T...)
+
+`AggregateFunction(fn, T...)` columns store the **serialized intermediate state** of an aggregate function — they appear in every materialized view backed by `AggregatingMergeTree` and in any `*State()` aggregate output.
+
+Reading exposes a `ClickHouseAggregateState` wrapper:
+
+```csharp
+public sealed class ClickHouseAggregateState : IEquatable<ClickHouseAggregateState>
+{
+    public ClickHouseAggregateState(byte[] state, string functionName);
+    public byte[] State { get; }
+    public string FunctionName { get; }
+    public static readonly ClickHouseAggregateState Empty;
+}
+```
+
+Equality is **byte-wise** on `State` and string-wise on `FunctionName`, so two instances with identical content compare equal regardless of array reference identity (safe for `HashSet`/`Dictionary` keys).
+
+Example — reading a materialized-view state column:
+
+```csharp
+await foreach (var row in connection.QueryAsync(
+    "SELECT id, sum_state FROM mv_user_totals ORDER BY id"))
+{
+    var state = row.GetFieldValue<ClickHouseAggregateState>("sum_state");
+    // state.State is the opaque bytes; state.FunctionName is "sum".
+}
+```
+
+#### Tier-1 supported aggregates
+
+CH.Native ships first-class support for the following aggregate functions:
+
+| Function | Inner types (supported in tier 1) | Wire format |
+|----------|-----------------------------------|-------------|
+| `sum` | Int8/16/32/64, UInt8/16/32/64, Float32/64, Int128/UInt128, Int256/UInt256, Decimal32/64/128/256 | Fixed 8/16/32 bytes |
+| `count` | Any (or zero args — `countState()`) | VarUInt (1–10 bytes) |
+| `min`, `max`, `any`, `anyLast` | Int8/16/32/64, UInt8/16/32/64, Float32/64, Date, Date32, DateTime, DateTime64, UUID, Bool | 1-byte flag + N data bytes |
+
+Functions outside this set throw `NotSupportedException` with workaround guidance. Notable exclusions:
+
+- `avg` — needs a `Float64 + VarUInt` composite format; coming in a follow-up.
+- Nullable inner types for any aggregate — state size varies between rows; deferred.
+- String / FixedString inner for `min`/`max`/`any`/`anyLast` — variable-length state; deferred.
+- `uniqExact`, `uniqHLL12`, `quantilesTDigest`, `groupArray`, `topK`, `argMin`, `argMax` — variable-size states by design.
+
+#### Workaround for unsupported functions
+
+For aggregate functions outside the supported set, use the server-side `finalizeAggregation()` or `*Merge()` pattern:
+
+```sql
+-- Pattern 1: finalize the state on the server, transport the final scalar.
+SELECT id, finalizeAggregation(uniq_state) AS unique_users
+FROM mv_daily_users;
+
+-- Pattern 2: transport the opaque state as a hex String, finalize on a different server.
+SELECT id, hex(uniq_state) FROM mv_daily_users;                 -- producer
+INSERT INTO mv (uniq_state) VALUES (unhex('aabbcc...'));        -- consumer
+```
+
+The `unhex`/`finalizeAggregation` recipe is exactly how CH.Native's own cross-version system tests transfer states (`tests/CH.Native.SystemTests/VersionMatrix/ComplexTypeMatrixProbeTests.cs:341`).
+
+#### Limitations
+
+- `Nullable(AggregateFunction(...))` is rejected by both ClickHouse and the driver — there is no nullable wrapper for state columns.
+- Round-tripping a state through `BulkInserter<T>` works for the supported set: declare a POCO property of type `ClickHouseAggregateState` and bulk-insert as usual.
 
 ### Geospatial
 

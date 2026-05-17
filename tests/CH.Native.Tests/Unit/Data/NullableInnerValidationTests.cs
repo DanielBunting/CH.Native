@@ -24,6 +24,8 @@ public class NullableInnerValidationTests
         new object[] { "Nullable(Nullable(Int32))" },
         new object[] { "Nullable(Dynamic)" },
         new object[] { "Nullable(Variant(Int32, String))" },
+        new object[] { "Nullable(AggregateFunction(sum, Int32))" },
+        new object[] { "Nullable(SimpleAggregateFunction(sum, Int32))" },
     };
 
     public static IEnumerable<object[]> AllowedInnerTypes() => new[]

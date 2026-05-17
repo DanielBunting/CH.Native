@@ -312,6 +312,14 @@ CH.Native.Connection.ResilienceOptionsBuilder.WithHealthCheckInterval(System.Tim
 CH.Native.Connection.ResilienceOptionsBuilder.WithHealthCheckTimeout(System.TimeSpan timeout) -> CH.Native.Connection.ResilienceOptionsBuilder!
 CH.Native.Connection.ResilienceOptionsBuilder.WithRetry() -> CH.Native.Connection.ResilienceOptionsBuilder!
 CH.Native.Connection.ResilienceOptionsBuilder.WithRetry(CH.Native.Resilience.RetryOptions! options) -> CH.Native.Connection.ResilienceOptionsBuilder!
+CH.Native.Data.AggregateState.ClickHouseAggregateState
+CH.Native.Data.AggregateState.ClickHouseAggregateState.ClickHouseAggregateState(byte[]! state, string! functionName) -> void
+CH.Native.Data.AggregateState.ClickHouseAggregateState.Equals(CH.Native.Data.AggregateState.ClickHouseAggregateState? other) -> bool
+CH.Native.Data.AggregateState.ClickHouseAggregateState.FunctionName.get -> string!
+CH.Native.Data.AggregateState.ClickHouseAggregateState.State.get -> byte[]!
+override CH.Native.Data.AggregateState.ClickHouseAggregateState.Equals(object? obj) -> bool
+override CH.Native.Data.AggregateState.ClickHouseAggregateState.GetHashCode() -> int
+static readonly CH.Native.Data.AggregateState.ClickHouseAggregateState.Empty -> CH.Native.Data.AggregateState.ClickHouseAggregateState!
 CH.Native.Data.Block
 CH.Native.Data.Block.Block() -> void
 CH.Native.Data.Block.BlockHeader
@@ -544,11 +552,14 @@ CH.Native.Data.TypedColumn<T>.TypedColumn(T[]! values, int? length = null, Syste
 CH.Native.Data.TypedColumn<T>.Values.get -> System.ReadOnlySpan<T>
 CH.Native.Data.TypedColumn<T>.this[int index].get -> T
 CH.Native.Data.Types.ClickHouseType
+CH.Native.Data.Types.ClickHouseType.AggregateFunctionName.get -> string?
+CH.Native.Data.Types.ClickHouseType.AggregateFunctionParameters.get -> System.Collections.Generic.IReadOnlyList<string!>!
 CH.Native.Data.Types.ClickHouseType.BaseName.get -> string!
 CH.Native.Data.Types.ClickHouseType.ClickHouseType(string! baseName, System.Collections.Generic.IReadOnlyList<CH.Native.Data.Types.ClickHouseType!>? typeArguments = null, System.Collections.Generic.IReadOnlyList<string!>? parameters = null, string? originalTypeName = null, System.Collections.Generic.IReadOnlyList<string!>? fieldNames = null) -> void
 CH.Native.Data.Types.ClickHouseType.FieldNames.get -> System.Collections.Generic.IReadOnlyList<string!>!
 CH.Native.Data.Types.ClickHouseType.GetDynamicMaxTypes() -> int
 CH.Native.Data.Types.ClickHouseType.HasFieldNames.get -> bool
+CH.Native.Data.Types.ClickHouseType.IsAggregateFunction.get -> bool
 CH.Native.Data.Types.ClickHouseType.IsArray.get -> bool
 CH.Native.Data.Types.ClickHouseType.IsDateTime64.get -> bool
 CH.Native.Data.Types.ClickHouseType.IsDecimal.get -> bool
@@ -560,6 +571,7 @@ CH.Native.Data.Types.ClickHouseType.IsMap.get -> bool
 CH.Native.Data.Types.ClickHouseType.IsNested.get -> bool
 CH.Native.Data.Types.ClickHouseType.IsNullable.get -> bool
 CH.Native.Data.Types.ClickHouseType.IsParameterized.get -> bool
+CH.Native.Data.Types.ClickHouseType.IsSimpleAggregateFunction.get -> bool
 CH.Native.Data.Types.ClickHouseType.IsTuple.get -> bool
 CH.Native.Data.Types.ClickHouseType.IsVariant.get -> bool
 CH.Native.Data.Types.ClickHouseType.OriginalTypeName.get -> string!

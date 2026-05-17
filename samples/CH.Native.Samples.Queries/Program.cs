@@ -32,6 +32,7 @@ Func<string, Task>? runner = sampleName switch
     "progress"        => ProgressCancellationSample.RunAsync,
     "log-analytics"   => LogAnalyticsSample.RunAsync,
     "map"             => MapColumnSample.RunAsync,
+    "aggregate-function" => AggregateFunctionSample.RunAsync,
     _                 => null,
 };
 
@@ -72,6 +73,7 @@ static void PrintUsage()
             progress         IProgress<QueryProgress> + CancellationToken — long-running query control
             log-analytics    Log dashboard — volume by level, latency by service, error rate, top slowest
             map              Map(K, V) columns — Dictionary (lossy/default) vs ClickHouseMap (lossless, preserves duplicates)
+            aggregate-function  AggregateFunction / SimpleAggregateFunction — read MV state columns, finalize server-side
 
         All samples create a uniquely-named temp table, run the demo, and drop the table.
         """);
