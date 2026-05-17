@@ -86,6 +86,8 @@ public sealed class ColumnReaderFactory
             "LowCardinality" => CreateLowCardinalityReader(type),
             "Variant" => CreateVariantReader(type),
             "Dynamic" => CreateDynamicReader(type),
+            "SimpleAggregateFunction" => CreateSimpleAggregateFunctionReader(type),
+            "AggregateFunction" => CreateAggregateFunctionReader(type),
             "JSON" => new ColumnReaders.JsonColumnReader(this),
 
             // Parameterized simple types
@@ -285,6 +287,32 @@ public sealed class ColumnReaderFactory
     {
         var maxTypes = type.GetDynamicMaxTypes();
         return new ColumnReaders.DynamicColumnReader(this, maxTypes);
+    }
+
+    private IColumnReader CreateSimpleAggregateFunctionReader(ClickHouseType type)
+    {
+        // SimpleAggregateFunction(name, T) is a wire-format pass-through for T.
+        // The function name is a server-side merge hint, irrelevant to the client —
+        // route directly to the inner type's reader, no wrapper class.
+        if (type.TypeArguments.Count != 1)
+            throw new FormatException(
+                $"SimpleAggregateFunction requires exactly one type argument, got: {type.OriginalTypeName}");
+        return CreateReaderForType(type.TypeArguments[0]);
+    }
+
+    private IColumnReader CreateAggregateFunctionReader(ClickHouseType type)
+    {
+        if (type.AggregateFunctionName is null)
+            throw new FormatException(
+                $"AggregateFunction missing function name: {type.OriginalTypeName}");
+
+        // Zero type arguments is valid for some aggregates (e.g. AggregateFunction(count)).
+        // Whether a given (function, inner-types) combination is semantically supported
+        // is the registry's call.
+        var format = AggregateState.AggregateFunctionStateFormatRegistry.Resolve(
+            type.AggregateFunctionName, type.TypeArguments);
+        return new ColumnReaders.AggregateFunctionColumnReader(
+            type.OriginalTypeName, type.AggregateFunctionName, format);
     }
 
     private IColumnReader CreateFixedStringReader(ClickHouseType type)

@@ -510,4 +510,120 @@ public class ClickHouseTypeParserTests
         var ex = Assert.Throws<FormatException>(() => factory.CreateReader("LowCardinality(Dynamic)"));
         Assert.Contains("LowCardinality(Dynamic)", ex.Message);
     }
+
+    // AggregateFunction / SimpleAggregateFunction tests
+
+    [Fact]
+    public void Parse_SimpleAggregateFunction_NoArgs_ReturnsTwoArguments()
+    {
+        var result = ClickHouseTypeParser.Parse("SimpleAggregateFunction(sum, Int32)");
+
+        Assert.Equal("SimpleAggregateFunction", result.BaseName);
+        Assert.True(result.IsSimpleAggregateFunction);
+        Assert.Equal("sum", result.AggregateFunctionName);
+        Assert.Empty(result.AggregateFunctionParameters);
+        Assert.Single(result.TypeArguments);
+        Assert.Equal("Int32", result.TypeArguments[0].BaseName);
+    }
+
+    [Fact]
+    public void Parse_AggregateFunction_NoArgs_ReturnsTwoArguments()
+    {
+        var result = ClickHouseTypeParser.Parse("AggregateFunction(sum, Int32)");
+
+        Assert.Equal("AggregateFunction", result.BaseName);
+        Assert.True(result.IsAggregateFunction);
+        Assert.Equal("sum", result.AggregateFunctionName);
+        Assert.Empty(result.AggregateFunctionParameters);
+        Assert.Single(result.TypeArguments);
+        Assert.Equal("Int32", result.TypeArguments[0].BaseName);
+    }
+
+    [Fact]
+    public void Parse_AggregateFunction_WithFunctionArgs_ParsesParameters()
+    {
+        var result = ClickHouseTypeParser.Parse("AggregateFunction(quantilesState(0.5, 0.9), Float64)");
+
+        Assert.Equal("AggregateFunction", result.BaseName);
+        Assert.Equal("quantilesState", result.AggregateFunctionName);
+        Assert.Equal(new[] { "0.5", "0.9" }, result.AggregateFunctionParameters);
+        Assert.Single(result.TypeArguments);
+        Assert.Equal("Float64", result.TypeArguments[0].BaseName);
+    }
+
+    [Fact]
+    public void Parse_AggregateFunction_MultipleTypeArgs_ParsesAll()
+    {
+        var result = ClickHouseTypeParser.Parse("AggregateFunction(argMin, String, Int32)");
+
+        Assert.Equal("argMin", result.AggregateFunctionName);
+        Assert.Equal(2, result.TypeArguments.Count);
+        Assert.Equal("String", result.TypeArguments[0].BaseName);
+        Assert.Equal("Int32", result.TypeArguments[1].BaseName);
+    }
+
+    [Fact]
+    public void Parse_AggregateFunction_NestedTypeArg_ParsesNested()
+    {
+        var result = ClickHouseTypeParser.Parse("AggregateFunction(groupArrayState, Array(Int32))");
+
+        Assert.Equal("groupArrayState", result.AggregateFunctionName);
+        Assert.Single(result.TypeArguments);
+        Assert.Equal("Array", result.TypeArguments[0].BaseName);
+        Assert.Equal("Int32", result.TypeArguments[0].TypeArguments[0].BaseName);
+    }
+
+    [Fact]
+    public void Parse_AggregateFunction_StringLiteralParam_Preserved()
+    {
+        var result = ClickHouseTypeParser.Parse("AggregateFunction(topKState(10, 'load'), String)");
+
+        Assert.Equal("topKState", result.AggregateFunctionName);
+        Assert.Equal(2, result.AggregateFunctionParameters.Count);
+        Assert.Equal("10", result.AggregateFunctionParameters[0]);
+        Assert.Equal("'load'", result.AggregateFunctionParameters[1]);
+        Assert.Single(result.TypeArguments);
+        Assert.Equal("String", result.TypeArguments[0].BaseName);
+    }
+
+    [Fact]
+    public void Parse_AggregateFunction_CountWithNoTypeArgs_Succeeds()
+    {
+        // count() takes no input value, so `AggregateFunction(count)` is the canonical
+        // type for countState() materialized-view columns. The parser must accept this
+        // form; whether it's semantically supported is the registry's call.
+        var result = ClickHouseTypeParser.Parse("AggregateFunction(count)");
+
+        Assert.Equal("AggregateFunction", result.BaseName);
+        Assert.Equal("count", result.AggregateFunctionName);
+        Assert.Empty(result.AggregateFunctionParameters);
+        Assert.Empty(result.TypeArguments);
+    }
+
+    [Fact]
+    public void Parse_AggregateFunction_EmptyParens_ThrowsFormat()
+    {
+        Assert.Throws<FormatException>(() => ClickHouseTypeParser.Parse("AggregateFunction()"));
+    }
+
+    [Fact]
+    public void Parse_AggregateFunction_RoundTripsThroughToString()
+    {
+        const string typeName = "AggregateFunction(quantilesState(0.5, 0.9), Float64)";
+        Assert.Equal(typeName, ClickHouseTypeParser.Parse(typeName).ToString());
+    }
+
+    [Fact]
+    public void Parse_SimpleAggregateFunction_RoundTripsThroughToString()
+    {
+        const string typeName = "SimpleAggregateFunction(sum, Int32)";
+        Assert.Equal(typeName, ClickHouseTypeParser.Parse(typeName).ToString());
+    }
+
+    [Fact]
+    public void Parse_AggregateFunction_CountRoundTripsThroughToString()
+    {
+        const string typeName = "AggregateFunction(count)";
+        Assert.Equal(typeName, ClickHouseTypeParser.Parse(typeName).ToString());
+    }
 }

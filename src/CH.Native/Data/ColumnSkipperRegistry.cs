@@ -83,7 +83,8 @@ public sealed class ColumnSkipperRegistry
         return baseType is "Nullable" or "Array" or "Map" or "Tuple" or "LowCardinality"
             or "FixedString" or "DateTime" or "DateTime64" or "Time64" or "Nested"
             or "Decimal" or "Decimal32" or "Decimal64" or "Decimal128" or "Decimal256"
-            or "JSON" or "Variant" or "Dynamic";
+            or "JSON" or "Variant" or "Dynamic"
+            or "AggregateFunction" or "SimpleAggregateFunction";
     }
 
     /// <summary>

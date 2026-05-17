@@ -41,6 +41,8 @@ internal static class NullableInnerValidator
         if (inner.IsNullable)      { reason = "Nullable cannot wrap Nullable — flatten to a single Nullable layer."; return true; }
         if (inner.IsDynamic)       { reason = "Dynamic already represents NULL via its discriminator."; return true; }
         if (inner.IsVariant)       { reason = "Variant already represents NULL via its discriminator."; return true; }
+        if (inner.IsAggregateFunction)       { reason = "AggregateFunction state bytes are opaque; ClickHouse rejects Nullable(AggregateFunction(...)) at schema time."; return true; }
+        if (inner.IsSimpleAggregateFunction) { reason = "SimpleAggregateFunction is a server-side merge hint; wrap the inner type in Nullable instead."; return true; }
 
         reason = string.Empty;
         return false;

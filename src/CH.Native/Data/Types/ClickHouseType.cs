@@ -39,18 +39,51 @@ public sealed class ClickHouseType
     /// </summary>
     public string OriginalTypeName { get; }
 
+    /// <summary>
+    /// For <c>AggregateFunction</c> and <c>SimpleAggregateFunction</c> types, the name of the
+    /// aggregate function (e.g., "sum", "quantilesState", "count"). Null for all other types.
+    /// </summary>
+    public string? AggregateFunctionName { get; }
+
+    /// <summary>
+    /// For <c>AggregateFunction</c> types whose function takes literal parameters (e.g.,
+    /// <c>quantilesState(0.5, 0.9)</c>), the parameter list as preserved source strings.
+    /// Empty for functions without literal parameters and for non-aggregate types.
+    /// </summary>
+    public IReadOnlyList<string> AggregateFunctionParameters { get; }
+
     public ClickHouseType(
         string baseName,
         IReadOnlyList<ClickHouseType>? typeArguments = null,
         IReadOnlyList<string>? parameters = null,
         string? originalTypeName = null,
         IReadOnlyList<string>? fieldNames = null)
+        : this(baseName, typeArguments, parameters, originalTypeName, fieldNames, aggregateFunctionName: null, aggregateFunctionParameters: null)
+    {
+    }
+
+    /// <summary>
+    /// Internal constructor used by the parser to populate the aggregate-function
+    /// descriptor fields on <c>AggregateFunction</c> / <c>SimpleAggregateFunction</c>
+    /// types. Public callers should use the 5-arg overload; the aggregate-function
+    /// fields default to null/empty and aren't relevant for non-aggregate types.
+    /// </summary>
+    internal ClickHouseType(
+        string baseName,
+        IReadOnlyList<ClickHouseType>? typeArguments,
+        IReadOnlyList<string>? parameters,
+        string? originalTypeName,
+        IReadOnlyList<string>? fieldNames,
+        string? aggregateFunctionName,
+        IReadOnlyList<string>? aggregateFunctionParameters)
     {
         BaseName = baseName;
         TypeArguments = typeArguments ?? Array.Empty<ClickHouseType>();
         Parameters = parameters ?? Array.Empty<string>();
         OriginalTypeName = originalTypeName ?? baseName;
         FieldNames = fieldNames ?? Array.Empty<string>();
+        AggregateFunctionName = aggregateFunctionName;
+        AggregateFunctionParameters = aggregateFunctionParameters ?? Array.Empty<string>();
     }
 
     /// <summary>
@@ -124,6 +157,18 @@ public sealed class ClickHouseType
     public bool IsDynamic => BaseName == "Dynamic";
 
     /// <summary>
+    /// Whether this is an <c>AggregateFunction(name, T...)</c> type — opaque per-row
+    /// aggregate state, exposed as <c>ClickHouseAggregateState</c>.
+    /// </summary>
+    public bool IsAggregateFunction => BaseName == "AggregateFunction";
+
+    /// <summary>
+    /// Whether this is a <c>SimpleAggregateFunction(name, T)</c> type — a transparent
+    /// wire-format pass-through of the inner type <c>T</c>.
+    /// </summary>
+    public bool IsSimpleAggregateFunction => BaseName == "SimpleAggregateFunction";
+
+    /// <summary>
     /// Returns the max_types parameter for a Dynamic type, defaulting to 32 when unspecified.
     /// </summary>
     public int GetDynamicMaxTypes()
@@ -148,6 +193,23 @@ public sealed class ClickHouseType
 
     public override string ToString()
     {
+        // AggregateFunction(name, T...) / SimpleAggregateFunction(name, T): the function
+        // descriptor leads the argument list and is special-cased — it isn't a type and
+        // isn't a parameter, it's a function reference with optional literal params.
+        if (AggregateFunctionName is not null)
+        {
+            var descriptor = AggregateFunctionParameters.Count > 0
+                ? $"{AggregateFunctionName}({string.Join(", ", AggregateFunctionParameters)})"
+                : AggregateFunctionName;
+
+            if (TypeArguments.Count == 0)
+                return $"{BaseName}({descriptor})";
+
+            var aggArgs = new List<string>(1 + TypeArguments.Count) { descriptor };
+            aggArgs.AddRange(TypeArguments.Select(t => t.ToString()));
+            return $"{BaseName}({string.Join(", ", aggArgs)})";
+        }
+
         if (!IsParameterized)
             return BaseName;
 

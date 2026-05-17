@@ -80,9 +80,34 @@ public static class ClickHouseTypeParser
             var typeArguments = new List<ClickHouseType>();
             var parameters = new List<string>();
             var fieldNames = new List<string>();
+            string? aggregateFunctionName = null;
+            List<string>? aggregateFunctionParameters = null;
 
-            // Parse arguments
-            if (!IsAtEnd && Peek() != ')')
+            var isAggregateType = baseName is "AggregateFunction" or "SimpleAggregateFunction";
+
+            if (isAggregateType)
+            {
+                // Empty parens is malformed: must have at least a function name.
+                if (IsAtEnd || Peek() == ')')
+                    throw new FormatException(
+                        $"{baseName} requires at least a function name in '{_input}'");
+
+                // First argument is the aggregate-function descriptor (identifier + optional
+                // literal params). Subsequent arguments are type arguments.
+                ParseAggregateFunctionDescriptor(out aggregateFunctionName, out aggregateFunctionParameters);
+                SkipWhitespace();
+
+                while (!IsAtEnd && Peek() == ',')
+                {
+                    Advance();
+                    SkipWhitespace();
+                    if (IsAtEnd || Peek() == ')')
+                        break;
+                    typeArguments.Add(ParseType());
+                    SkipWhitespace();
+                }
+            }
+            else if (!IsAtEnd && Peek() != ')')
             {
                 ParseArguments(typeArguments, parameters, fieldNames, baseName);
             }
@@ -97,7 +122,39 @@ public static class ClickHouseTypeParser
                 typeArguments.Count > 0 ? typeArguments : null,
                 parameters.Count > 0 ? parameters : null,
                 originalTypeName: _input[startPos.._pos],
-                fieldNames: fieldNames.Count > 0 ? fieldNames : null);
+                fieldNames: fieldNames.Count > 0 ? fieldNames : null,
+                aggregateFunctionName: aggregateFunctionName,
+                aggregateFunctionParameters: aggregateFunctionParameters);
+        }
+
+        private void ParseAggregateFunctionDescriptor(out string name, out List<string>? parameters)
+        {
+            name = ParseIdentifier();
+            parameters = null;
+
+            SkipWhitespace();
+            if (IsAtEnd || Peek() != '(')
+                return;
+
+            Advance();
+            SkipWhitespace();
+            parameters = new List<string>();
+
+            while (!IsAtEnd && Peek() != ')')
+            {
+                parameters.Add(ParseParameter());
+                SkipWhitespace();
+                if (!IsAtEnd && Peek() == ',')
+                {
+                    Advance();
+                    SkipWhitespace();
+                }
+            }
+
+            if (IsAtEnd || Peek() != ')')
+                throw new FormatException(
+                    $"Expected ')' closing aggregate-function descriptor in '{_input}'");
+            Advance();
         }
 
         private void ParseArguments(List<ClickHouseType> typeArguments, List<string> parameters, List<string> fieldNames, string baseName)
