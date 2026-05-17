@@ -55,6 +55,14 @@ if (args.Length > 0)
             RunAllBenchmarks();
             break;
 
+        // Map benchmarks (no Docker required — unit-level)
+        case "map":
+            BenchmarkRunner.Run<MapColumnBenchmarks>();
+            break;
+        case "mapinspector":
+            BenchmarkRunner.Run<MapShapeInspectorBenchmarks>();
+            break;
+
         // Geo benchmarks (no Docker required — unit-level)
         case "geo":
             BenchmarkRunner.Run<GeoColumnBenchmarks>();
@@ -126,6 +134,8 @@ static void RunAllBenchmarks()
     BenchmarkRunner.Run<TypeParserBenchmarks>();
     BenchmarkRunner.Run<BulkInsertBenchmarks>();
     BenchmarkRunner.Run<BulkInsertDirectVsBoxedAllocationBenchmarks>();
+    BenchmarkRunner.Run<MapColumnBenchmarks>();
+    BenchmarkRunner.Run<MapShapeInspectorBenchmarks>();
 
     // Protocol comparison benchmarks (requires Docker)
     RunComparisonBenchmarks();
@@ -153,6 +163,8 @@ static void PrintUsage()
           bulk        - Bulk insert serialization benchmarks
           bulkalloc   - Direct vs boxed bulk-insert allocation comparison (50K+ rows)
           geo         - Geo column reader/writer/skipper benchmarks
+          map         - Map column reader/writer benchmarks (Dictionary vs ClickHouseMap)
+          mapinspector- MapShapeInspector cache lookup benchmarks
           multidim    - Multi-dim array converters + Array(Array(Int32)) pipeline
 
         Protocol Comparison Benchmarks (requires Docker):

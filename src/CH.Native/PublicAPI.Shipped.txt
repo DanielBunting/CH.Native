@@ -345,9 +345,25 @@ CH.Native.Data.BlockInfo.IsOverflows.get -> bool
 CH.Native.Data.BlockInfo.IsOverflows.init -> void
 CH.Native.Data.BlockInfo.Write(ref CH.Native.Protocol.ProtocolWriter writer) -> void
 CH.Native.Data.BlockSizeEstimator
+CH.Native.Data.ClickHouseMap<TKey, TValue>
+CH.Native.Data.ClickHouseMap<TKey, TValue>.AsSpan() -> System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<TKey, TValue>>
+CH.Native.Data.ClickHouseMap<TKey, TValue>.ClickHouseMap(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<TKey, TValue>>! entries) -> void
+CH.Native.Data.ClickHouseMap<TKey, TValue>.ClickHouseMap(System.Collections.Generic.KeyValuePair<TKey, TValue>[]! entries) -> void
+CH.Native.Data.ClickHouseMap<TKey, TValue>.ContainsKey(TKey key) -> bool
+CH.Native.Data.ClickHouseMap<TKey, TValue>.Count.get -> int
+CH.Native.Data.ClickHouseMap<TKey, TValue>.GetEnumerator() -> System.Collections.Generic.IEnumerator<System.Collections.Generic.KeyValuePair<TKey, TValue>>!
+CH.Native.Data.ClickHouseMap<TKey, TValue>.HasDuplicateKeys.get -> bool
+CH.Native.Data.ClickHouseMap<TKey, TValue>.Keys.get -> System.Collections.Generic.IEnumerable<TKey>!
+CH.Native.Data.ClickHouseMap<TKey, TValue>.this[int index].get -> System.Collections.Generic.KeyValuePair<TKey, TValue>
+CH.Native.Data.ClickHouseMap<TKey, TValue>.this[TKey key].get -> TValue
+CH.Native.Data.ClickHouseMap<TKey, TValue>.ToDictionary() -> System.Collections.Generic.Dictionary<TKey, TValue>!
+CH.Native.Data.ClickHouseMap<TKey, TValue>.ToLookup() -> System.Linq.ILookup<TKey, TValue>!
+CH.Native.Data.ClickHouseMap<TKey, TValue>.TryGetValue(TKey key, out TValue value) -> bool
+CH.Native.Data.ClickHouseMap<TKey, TValue>.Values.get -> System.Collections.Generic.IEnumerable<TValue>!
 CH.Native.Data.ColumnReaderFactory
 CH.Native.Data.ColumnReaderFactory.ColumnReaderFactory(CH.Native.Data.ColumnReaderRegistry! registry) -> void
 CH.Native.Data.ColumnReaderFactory.CreateReader(string! typeName) -> CH.Native.Data.IColumnReader!
+CH.Native.Data.ColumnReaderFactory.CreateReader(string! typeName, string? columnName) -> CH.Native.Data.IColumnReader!
 CH.Native.Data.ColumnReaderRegistry
 CH.Native.Data.ColumnReaderRegistry.GetReader(string! typeName) -> CH.Native.Data.IColumnReader!
 CH.Native.Data.ColumnReaderRegistry.TryGetReader(string! typeName, out CH.Native.Data.IColumnReader? reader) -> bool

@@ -239,6 +239,18 @@ public sealed class Block
         int rowCount,
         int protocolVersion = 0)
     {
+        return ReadColumnsWithHeader(ref reader, registry, tableName, columnCount, rowCount, protocolVersion, mapShapeHint: null);
+    }
+
+    internal static TypedBlock ReadColumnsWithHeader(
+        ref ProtocolReader reader,
+        ColumnReaderRegistry registry,
+        string tableName,
+        int columnCount,
+        int rowCount,
+        int protocolVersion,
+        MapShapeHint? mapShapeHint)
+    {
         if (columnCount == 0)
         {
             return new TypedBlock
@@ -254,6 +266,7 @@ public sealed class Block
         var columnTypes = new string[columnCount];
         var columns = new ITypedColumn[columnCount];
         var parsedColumnCount = 0;
+        var hintedFactory = mapShapeHint is not null ? new ColumnReaderFactory(registry, mapShapeHint) : null;
 
         try
         {
@@ -275,7 +288,9 @@ public sealed class Block
 
                 if (rowCount > 0)
                 {
-                    var columnReader = registry.GetReader(columnTypes[i]);
+                    var columnReader = hintedFactory is not null
+                        ? hintedFactory.CreateReader(columnTypes[i], columnNames[i])
+                        : registry.GetReader(columnTypes[i]);
                     columnReader.ReadPrefix(ref reader);
                     columns[i] = columnReader.ReadTypedColumn(ref reader, rowCount);
                 }
@@ -317,6 +332,16 @@ public sealed class Block
     /// <returns>The parsed typed block.</returns>
     public static TypedBlock ReadTypedBlockWithTableName(ref ProtocolReader reader, ColumnReaderRegistry registry, string tableName, int protocolVersion = 0)
     {
+        return ReadTypedBlockWithTableName(ref reader, registry, tableName, protocolVersion, mapShapeHint: null);
+    }
+
+    internal static TypedBlock ReadTypedBlockWithTableName(
+        ref ProtocolReader reader,
+        ColumnReaderRegistry registry,
+        string tableName,
+        int protocolVersion,
+        MapShapeHint? mapShapeHint)
+    {
         var info = BlockInfo.Read(ref reader);
         var columnCount = reader.ReadVarIntAsInt32("block column count");
         var rowCount = reader.ReadVarIntAsInt32("block row count");
@@ -336,6 +361,7 @@ public sealed class Block
         var columnTypes = new string[columnCount];
         var columns = new ITypedColumn[columnCount];
         var parsedColumnCount = 0;
+        var hintedFactory = mapShapeHint is not null ? new ColumnReaderFactory(registry, mapShapeHint) : null;
 
         try
         {
@@ -357,7 +383,9 @@ public sealed class Block
 
                 if (rowCount > 0)
                 {
-                    var columnReader = registry.GetReader(columnTypes[i]);
+                    var columnReader = hintedFactory is not null
+                        ? hintedFactory.CreateReader(columnTypes[i], columnNames[i])
+                        : registry.GetReader(columnTypes[i]);
                     columnReader.ReadPrefix(ref reader);
                     columns[i] = columnReader.ReadTypedColumn(ref reader, rowCount);
                 }

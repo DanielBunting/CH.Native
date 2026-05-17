@@ -339,6 +339,16 @@ internal sealed class TypeMapper<T>
             return Data.Conversion.JaggedToRectangularConverter.ToRectangular(jaggedArray, targetType);
         }
 
+        // Map shape conversions: a Dictionary<K, V> source can wrap into a
+        // ClickHouseMap<K, V> (and vice versa) when the column was read in one
+        // mode but the consumer asked for the other. The Dictionary → ClickHouseMap
+        // path is *not* lossless if duplicates were already collapsed by the
+        // reader; documented in GetMap's XML docs.
+        if (TryConvertMapShape(value, valueType, targetType, out var mapConverted))
+        {
+            return mapConverted;
+        }
+
         // General conversion
         try
         {
@@ -349,5 +359,71 @@ internal sealed class TypeMapper<T>
             // Return null for incompatible types
             return null;
         }
+    }
+
+    // Internal for direct unit-testing; not part of the public API.
+    internal static bool TryConvertMapShape(object value, Type valueType, Type targetType, out object? converted)
+    {
+        converted = null;
+
+        // Source must be generic (Dictionary or ClickHouseMap). Target may be either
+        // generic (Dictionary / ClickHouseMap / IReadOnly*) or an array (KeyValuePair[]).
+        if (!valueType.IsGenericType) return false;
+
+        var valueDef = valueType.GetGenericTypeDefinition();
+
+        // ClickHouseMap<K, V> → KeyValuePair<K, V>[] (entries-shape property declared as concrete array).
+        // Handle this before the generic-target gate, since arrays are not generic types.
+        // AsSpan returns ReadOnlySpan<T> — a ref struct that cannot be boxed by reflection
+        // (Invoke throws NotSupportedException), so route through Enumerable.ToArray<T> which
+        // works fine since ClickHouseMap<K, V> implements IEnumerable<KeyValuePair<K, V>>.
+        if (valueDef == typeof(Data.ClickHouseMap<,>) && targetType.IsArray)
+        {
+            var element = targetType.GetElementType();
+            if (element is not null
+                && element.IsGenericType
+                && element.GetGenericTypeDefinition() == typeof(KeyValuePair<,>)
+                && valueType.GetGenericArguments().SequenceEqual(element.GetGenericArguments()))
+            {
+                var toArray = typeof(Enumerable)
+                    .GetMethod(nameof(Enumerable.ToArray))!
+                    .MakeGenericMethod(element);
+                converted = toArray.Invoke(null, new[] { value });
+                return true;
+            }
+        }
+
+        if (!targetType.IsGenericType) return false;
+
+        var targetDef = targetType.GetGenericTypeDefinition();
+
+        // ClickHouseMap<K, V> → Dictionary<K, V> (last-wins collapse)
+        if (valueDef == typeof(Data.ClickHouseMap<,>) && targetDef == typeof(Dictionary<,>))
+        {
+            var args = valueType.GetGenericArguments();
+            if (args.SequenceEqual(targetType.GetGenericArguments()))
+            {
+                var toDictionary = valueType.GetMethod(nameof(Data.ClickHouseMap<int, int>.ToDictionary));
+                converted = toDictionary!.Invoke(value, null);
+                return true;
+            }
+        }
+
+        // Dictionary<K, V> → ClickHouseMap<K, V> (wrap; lossy w.r.t. the wire if dupes had occurred)
+        if (valueDef == typeof(Dictionary<,>) && targetDef == typeof(Data.ClickHouseMap<,>))
+        {
+            var args = valueType.GetGenericArguments();
+            if (args.SequenceEqual(targetType.GetGenericArguments()))
+            {
+                var ctor = targetType.GetConstructor(new[]
+                {
+                    typeof(IEnumerable<>).MakeGenericType(typeof(KeyValuePair<,>).MakeGenericType(args)),
+                });
+                converted = ctor!.Invoke(new[] { value });
+                return true;
+            }
+        }
+
+        return false;
     }
 }

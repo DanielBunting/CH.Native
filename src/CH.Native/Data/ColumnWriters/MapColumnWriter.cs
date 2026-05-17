@@ -142,55 +142,134 @@ internal sealed class MapColumnWriter<TKey, TValue> : IColumnWriter<Dictionary<T
 
     void IColumnWriter.WriteColumn(ref ProtocolWriter writer, object?[] values)
     {
-        // Step 1: Write offsets. Accept any IDictionary so e.g. Dictionary<string,string>
-        // can pass through to FixedStringColumnWriter (ClrType=byte[] but accepts strings
-        // via its non-generic WriteValue). Reject null rows — Map(K, V) is non-nullable;
-        // Nullable(Map(K, V)) wraps with NullableRefColumnWriter which substitutes an
-        // empty Dictionary first.
+        // First pass: categorise per row and write offsets. Most callers are pure
+        // Dictionary<TKey, TValue> — track that as a fast path that avoids per-row
+        // buffer allocation. Entries-shape variants are dispatched first so the
+        // IDictionary fallback only catches non-generic dictionaries (e.g. F# Map<,>)
+        // that don't also implement IEnumerable<KeyValuePair<,>>.
+        Dictionary<TKey, TValue>?[]? dicts = null;
+        IReadOnlyList<KeyValuePair<TKey, TValue>>?[]? entries = null;
+        System.Collections.IDictionary?[]? legacyDicts = null;
+        bool allDictionary = true;
+        bool hasLegacyDict = false;
         ulong offset = 0;
         int totalEntries = 0;
-        bool allMatch = true;
         for (int i = 0; i < values.Length; i++)
         {
+            var raw = values[i];
             int count;
-            if (values[i] is null)
+            switch (raw)
             {
-                throw NullAt(i);
-            }
-            else if (values[i] is Dictionary<TKey, TValue> typedDict)
-            {
-                count = typedDict.Count;
-            }
-            else if (values[i] is System.Collections.IDictionary d)
-            {
-                count = d.Count;
-                allMatch = false;
-            }
-            else
-            {
-                throw new InvalidOperationException(
-                    $"MapColumnWriter<{typeof(TKey).Name}, {typeof(TValue).Name}> received unsupported value type " +
-                    $"{values[i]!.GetType().Name} at row {i}. Expected Dictionary<{typeof(TKey).Name}, {typeof(TValue).Name}> or IDictionary.");
+                case null:
+                    throw NullAt(i);
+                case Dictionary<TKey, TValue> typedDict:
+                    dicts ??= new Dictionary<TKey, TValue>?[values.Length];
+                    dicts[i] = typedDict;
+                    count = typedDict.Count;
+                    break;
+                case ClickHouseMap<TKey, TValue> cmap:
+                    entries ??= new IReadOnlyList<KeyValuePair<TKey, TValue>>?[values.Length];
+                    entries[i] = cmap;
+                    count = cmap.Count;
+                    allDictionary = false;
+                    break;
+                case KeyValuePair<TKey, TValue>[] arr:
+                    entries ??= new IReadOnlyList<KeyValuePair<TKey, TValue>>?[values.Length];
+                    entries[i] = arr;
+                    count = arr.Length;
+                    allDictionary = false;
+                    break;
+                case IReadOnlyList<KeyValuePair<TKey, TValue>> rolist:
+                    entries ??= new IReadOnlyList<KeyValuePair<TKey, TValue>>?[values.Length];
+                    entries[i] = rolist;
+                    count = rolist.Count;
+                    allDictionary = false;
+                    break;
+                case IList<KeyValuePair<TKey, TValue>> ilist:
+                {
+                    // Defensive copy: a custom IList<KVP> may not also implement IReadOnlyList<KVP>.
+                    var buf = new KeyValuePair<TKey, TValue>[ilist.Count];
+                    for (int j = 0; j < buf.Length; j++) buf[j] = ilist[j];
+                    entries ??= new IReadOnlyList<KeyValuePair<TKey, TValue>>?[values.Length];
+                    entries[i] = buf;
+                    count = buf.Length;
+                    allDictionary = false;
+                    break;
+                }
+                case IEnumerable<KeyValuePair<TKey, TValue>> kvpEnumerable:
+                {
+                    var buf = new List<KeyValuePair<TKey, TValue>>();
+                    foreach (var kvp in kvpEnumerable) buf.Add(kvp);
+                    entries ??= new IReadOnlyList<KeyValuePair<TKey, TValue>>?[values.Length];
+                    entries[i] = buf;
+                    count = buf.Count;
+                    allDictionary = false;
+                    break;
+                }
+                case System.Collections.IDictionary d:
+                    legacyDicts ??= new System.Collections.IDictionary?[values.Length];
+                    legacyDicts[i] = d;
+                    hasLegacyDict = true;
+                    count = d.Count;
+                    allDictionary = false;
+                    break;
+                default:
+                    throw new InvalidOperationException(
+                        $"{MapTypeStr} received unsupported value type {raw.GetType().Name} at row {i}. " +
+                        "Expected Dictionary, ClickHouseMap, KeyValuePair[], IReadOnlyList/IList/IEnumerable<KeyValuePair>, or IDictionary.");
             }
             offset += (ulong)count;
             totalEntries += count;
             writer.WriteUInt64(offset);
         }
 
-        // Fast/correct path: when every row is the exact typed Dictionary, use the
-        // bulk WriteColumn on the inner writers (preserves per-column headers such as
-        // NullableColumnWriter's null bitmap).
-        if (allMatch)
+        // Pure-Dictionary fast path: bulk-write keys then values directly off the
+        // typed Dictionary — no per-row buffer allocation. Matches the original
+        // pre-entries-shape behaviour.
+        if (allDictionary)
         {
             var allKeys = new TKey[totalEntries];
             var allValues = new TValue[totalEntries];
             int pos = 0;
             for (int i = 0; i < values.Length; i++)
             {
-                if (values[i] is Dictionary<TKey, TValue> dict)
+                foreach (var kvp in dicts![i]!)
                 {
-                    foreach (var kvp in dict)
+                    allKeys[pos] = kvp.Key;
+                    allValues[pos] = kvp.Value;
+                    pos++;
+                }
+            }
+            _keyWriter.WriteColumn(ref writer, allKeys);
+            _valueWriter.WriteColumn(ref writer, allValues);
+            return;
+        }
+
+        // Mixed-but-no-legacy path: every row is either Dictionary or a known
+        // entries-shape, so flatten once and use the bulk inner writers. Preserves
+        // per-column headers such as NullableColumnWriter's null bitmap.
+        if (!hasLegacyDict)
+        {
+            var allKeys = new TKey[totalEntries];
+            var allValues = new TValue[totalEntries];
+            int pos = 0;
+            for (int i = 0; i < values.Length; i++)
+            {
+                if (dicts is not null && dicts[i] is { } d)
+                {
+                    foreach (var kvp in d)
                     {
+                        allKeys[pos] = kvp.Key;
+                        allValues[pos] = kvp.Value;
+                        pos++;
+                    }
+                }
+                else
+                {
+                    var rowEntries = entries![i]!;
+                    for (int j = 0; j < rowEntries.Count; j++)
+                    {
+                        var kvp = rowEntries[j];
                         allKeys[pos] = kvp.Key;
                         allValues[pos] = kvp.Value;
                         pos++;
@@ -202,15 +281,25 @@ internal sealed class MapColumnWriter<TKey, TValue> : IColumnWriter<Dictionary<T
             return;
         }
 
-        // Compat path: CLR types don't exactly match — iterate entries and write
-        // each key/value via the non-generic per-value writer. Only safe when the
-        // inner writers don't emit per-column state prefixes (true for String /
-        // FixedString / numerics; not true for Nullable / LowCardinality at inner).
+        // Compat path: at least one row was a non-generic IDictionary. Iterate via
+        // the non-generic per-value writer. Only safe when the inner writers don't
+        // emit per-column state prefixes (true for String / FixedString / numerics;
+        // not true for Nullable / LowCardinality at inner).
         IColumnWriter keyWriterNg = _keyWriter;
         IColumnWriter valueWriterNg = _valueWriter;
         for (int i = 0; i < values.Length; i++)
         {
-            if (values[i] is System.Collections.IDictionary dict)
+            if (dicts is not null && dicts[i] is { } d)
+            {
+                foreach (var kvp in d)
+                    keyWriterNg.WriteValue(ref writer, kvp.Key);
+            }
+            else if (entries is not null && entries[i] is { } rowEntries)
+            {
+                for (int j = 0; j < rowEntries.Count; j++)
+                    keyWriterNg.WriteValue(ref writer, rowEntries[j].Key);
+            }
+            else if (legacyDicts![i] is { } dict)
             {
                 foreach (System.Collections.DictionaryEntry entry in dict)
                     keyWriterNg.WriteValue(ref writer, entry.Key);
@@ -218,7 +307,17 @@ internal sealed class MapColumnWriter<TKey, TValue> : IColumnWriter<Dictionary<T
         }
         for (int i = 0; i < values.Length; i++)
         {
-            if (values[i] is System.Collections.IDictionary dict)
+            if (dicts is not null && dicts[i] is { } d)
+            {
+                foreach (var kvp in d)
+                    valueWriterNg.WriteValue(ref writer, kvp.Value);
+            }
+            else if (entries is not null && entries[i] is { } rowEntries)
+            {
+                for (int j = 0; j < rowEntries.Count; j++)
+                    valueWriterNg.WriteValue(ref writer, rowEntries[j].Value);
+            }
+            else if (legacyDicts![i] is { } dict)
             {
                 foreach (System.Collections.DictionaryEntry entry in dict)
                     valueWriterNg.WriteValue(ref writer, entry.Value);
@@ -235,12 +334,43 @@ internal sealed class MapColumnWriter<TKey, TValue> : IColumnWriter<Dictionary<T
             case Dictionary<TKey, TValue> dict:
                 WriteValue(ref writer, dict);
                 break;
+            case ClickHouseMap<TKey, TValue> cmap:
+                WriteEntriesValue(ref writer, cmap);
+                break;
+            case KeyValuePair<TKey, TValue>[] arr:
+                WriteEntriesValue(ref writer, arr);
+                break;
+            case IReadOnlyList<KeyValuePair<TKey, TValue>> rolist:
+                WriteEntriesValue(ref writer, rolist);
+                break;
+            case IEnumerable<KeyValuePair<TKey, TValue>> kvpEnumerable:
+            {
+                var buf = new List<KeyValuePair<TKey, TValue>>();
+                foreach (var kvp in kvpEnumerable) buf.Add(kvp);
+                WriteEntriesValue(ref writer, buf);
+                break;
+            }
             default:
                 throw new InvalidOperationException(
-                    $"MapColumnWriter<{typeof(TKey).Name}, {typeof(TValue).Name}> received unsupported value type " +
-                    $"{value.GetType().Name}. Expected Dictionary<{typeof(TKey).Name}, {typeof(TValue).Name}>.");
+                    $"{MapTypeStr} received unsupported value type {value.GetType().Name}. " +
+                    "Expected Dictionary, ClickHouseMap, KeyValuePair[], or IReadOnlyList/IList/IEnumerable<KeyValuePair>.");
         }
     }
+
+    private void WriteEntriesValue(ref ProtocolWriter writer, IReadOnlyList<KeyValuePair<TKey, TValue>> entries)
+    {
+        writer.WriteUInt64((ulong)entries.Count);
+        for (int i = 0; i < entries.Count; i++)
+        {
+            _keyWriter.WriteValue(ref writer, entries[i].Key);
+        }
+        for (int i = 0; i < entries.Count; i++)
+        {
+            _valueWriter.WriteValue(ref writer, entries[i].Value);
+        }
+    }
+
+    private static string MapTypeStr => $"MapColumnWriter<{typeof(TKey).Name}, {typeof(TValue).Name}>";
 
     private static InvalidOperationException NullAt(int rowIndex)
     {

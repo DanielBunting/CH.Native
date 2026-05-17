@@ -20,7 +20,9 @@
   "QueryAsync.Int64.10k": 2510632,
   "QueryAsync.LowCardinality_String.10k": 2294064,
   "QueryAsync.Lz4.NumbersAndStrings.10k": 3159168,
+  "QueryAsync.Map_String_Int32.10k": 4808560,
   "QueryAsync.Nullable_Int32.10k": 2757112,
   "QueryAsync.NumbersAndStrings.10k": 3154424,
-  "QueryAsync.UUID.10k": 2787344
+  "QueryAsync.UUID.10k": 2787344,
+  "QueryTyped.ClickHouseMap_String_Int32.10k": 4563672
 }
