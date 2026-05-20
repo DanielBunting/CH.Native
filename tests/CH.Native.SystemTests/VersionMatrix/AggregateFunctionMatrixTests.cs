@@ -161,8 +161,15 @@ public class AggregateFunctionMatrixTests
 
         try
         {
-            foreach (var (id, v) in inserts)
-                await conn.ExecuteNonQueryAsync($"INSERT INTO {src} VALUES ({id}, {v})");
+            // Single batched INSERT so the MV's GROUP BY id collapses all rows
+            // for the same id into one partial state. Separate INSERTs would
+            // leave one unmerged row per insert in the AggregatingMergeTree,
+            // and per-row finalizeAggregation on those would not match the
+            // expected aggregate (it would return the value of one arbitrary
+            // partial state, not the merged total). The CountState test in
+            // this file uses the same batched-INSERT pattern.
+            var values = string.Join(", ", inserts.Select(t => $"({t.id}, {t.v})"));
+            await conn.ExecuteNonQueryAsync($"INSERT INTO {src} VALUES {values}");
 
             var states = new Dictionary<int, ClickHouseAggregateState>();
             await foreach (var r in conn.QueryAsync($"SELECT id, s FROM {mv} ORDER BY id"))

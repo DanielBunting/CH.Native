@@ -212,8 +212,15 @@ public class AggregateFunctionEdgeCaseTests
                 },
             };
 
+            // Run the failing insert on a throwaway sub-connection: the
+            // validation fires mid-INSERT, so the BulkInserter's catch path
+            // marks the connection protocol-fatal (intended behaviour from the
+            // poisoned-connection hardening). Doing this on the outer `conn`
+            // would break the finally's DROP. Disposing `bad-conn` lets the
+            // pool drop the poisoned connection instead of handing it back.
+            await using var badConn = await OpenAsync(image);
             var ex = await Assert.ThrowsAnyAsync<Exception>(
-                () => conn.Table<AggregateRow>(table).InsertAsync(bad));
+                () => badConn.Table<AggregateRow>(table).InsertAsync(bad));
 
             // ArgumentException from the registry, possibly wrapped by the
             // BulkInserter's flush path. Either form should mention the expected
