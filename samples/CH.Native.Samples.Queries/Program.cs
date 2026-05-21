@@ -27,6 +27,7 @@ Func<string, Task>? runner = sampleName switch
     "linq-sample"     => LinqSampleClauseSample.RunAsync,
     "adonet"          => AdoNetSample.RunAsync,
     "dapper"          => DapperSample.RunAsync,
+    "dapper-di"       => DapperSample.RunWithDependencyInjectionAsync,
     "pooled"          => DataSourcePooledSample.RunAsync,
     "resilient"       => ResilientSample.RunAsync,
     "progress"        => ProgressCancellationSample.RunAsync,
@@ -68,6 +69,7 @@ static void PrintUsage()
             linq-sample      connection.Table<T>(name).Sample(0.1).WithQueryId(...) — approximate analytics
             adonet           ClickHouseDbConnection / ClickHouseDbCommand / DbDataReader
             dapper           Dapper QueryAsync / QueryFirstAsync / ExecuteScalarAsync after Register()
+            dapper-di        Dapper on a pooled connection rented from a DI-resolved ClickHouseDataSource
             pooled           dataSource.Table<T>(name) + concurrent rented-connection queries
             resilient        ResilientConnection — multi-host failover, retry policy
             progress         IProgress<QueryProgress> + CancellationToken — long-running query control

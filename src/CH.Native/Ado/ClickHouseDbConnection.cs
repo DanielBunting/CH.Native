@@ -46,6 +46,15 @@ public sealed class ClickHouseDbConnection : DbConnection
     private string _connectionString = "";
     private string? _currentDatabase;
     private ConnectionState _state = ConnectionState.Closed;
+    // True when this wrapper opened the inner connection itself (the ctor that
+    // takes a connection string) and is therefore responsible for closing /
+    // disposing it. False when the wrapper was constructed around an
+    // already-open native connection that the caller still owns — typically
+    // because the native ClickHouseConnection.CreateDbCommand override needs a
+    // DbConnection-typed facade to construct a ClickHouseDbCommand. In that
+    // case Close/Dispose must not tear the inner socket down or the caller's
+    // next native-API call lands on a corpse.
+    private bool _ownsInner = true;
 
     /// <summary>
     /// Initializes a new instance of <see cref="ClickHouseDbConnection"/>.
@@ -61,6 +70,27 @@ public sealed class ClickHouseDbConnection : DbConnection
     public ClickHouseDbConnection(string connectionString)
     {
         _connectionString = connectionString ?? "";
+    }
+
+    /// <summary>
+    /// Wraps an already-open native <see cref="ClickHouseConnection"/> in the
+    /// ADO surface without taking ownership. Disposing the wrapper does not
+    /// close the inner connection — the caller (typically a
+    /// <see cref="Connection.ClickHouseDataSource"/> rent or the native
+    /// connection's <see cref="DbConnection.CreateCommand"/> override) keeps
+    /// the lifetime contract.
+    /// </summary>
+    /// <param name="inner">An open native connection.</param>
+    public ClickHouseDbConnection(ClickHouseConnection inner)
+    {
+        _inner = inner ?? throw new ArgumentNullException(nameof(inner));
+        _connectionString = inner.ConnectionString;
+        _currentDatabase = inner.Settings.Database;
+        _ownsInner = false;
+        // The native conn is already open by construction contract — reflect
+        // that in our state so ADO callers don't think they have to Open() it
+        // themselves (which would throw, since the inner is already open).
+        _state = inner.State == ConnectionState.Open ? ConnectionState.Open : ConnectionState.Closed;
     }
 
     /// <inheritdoc />
@@ -145,7 +175,15 @@ public sealed class ClickHouseDbConnection : DbConnection
     {
         if (_inner != null)
         {
-            await _inner.CloseAsync().ConfigureAwait(false);
+            if (_ownsInner)
+            {
+                // We opened the inner; tear it down.
+                await _inner.CloseAsync().ConfigureAwait(false);
+            }
+            // Non-owning facade: drop our reference so subsequent operations
+            // throw the standard "not open" rather than reaching back into the
+            // caller's still-live native connection. The caller's native
+            // ClickHouseConnection lifetime is untouched.
             _inner = null;
         }
         _currentDatabase = null;
@@ -214,10 +252,13 @@ public sealed class ClickHouseDbConnection : DbConnection
     }
 
     /// <summary>
-    /// Gets the underlying <see cref="ClickHouseConnection"/>.
+    /// Gets the underlying native <see cref="ClickHouseConnection"/>. Use this to
+    /// mix native API calls (bulk insert, typed <c>QueryAsync&lt;T&gt;</c>,
+    /// strongly-typed parameters) with ADO/Dapper calls on the same physical
+    /// connection.
     /// </summary>
     /// <exception cref="InvalidOperationException">Connection is not open.</exception>
-    internal ClickHouseConnection Inner => _inner
+    public ClickHouseConnection Inner => _inner
         ?? throw new InvalidOperationException("Connection is not open.");
 
     /// <inheritdoc />

@@ -1,3 +1,6 @@
+using System.Data;
+using System.Data.Common;
+using CH.Native.Ado;
 using CH.Native.Connection;
 using CH.Native.Exceptions;
 using Microsoft.Extensions.Configuration;
@@ -125,19 +128,54 @@ public static class ClickHouseServiceCollectionExtensions
         var dsBuilder = new ClickHouseDataSourceBuilder(services, serviceKey);
 
         // DataSource registration. Lifetime: singleton (pool is shared).
-        // Notably we do NOT register ClickHouseConnection or ClickHouseDbConnection
-        // as transients — opening a connection is async, and sync-over-async in
-        // a DI factory risks deadlocks. Consumers take the DataSource and call
-        // OpenConnectionAsync() themselves. This matches Npgsql's guidance for
-        // async-first workloads.
+        //
+        // ClickHouseConnection / DbConnection / IDbConnection are ALSO registered
+        // as transients, but each transient just routes through the DataSource's
+        // CreateConnection() factory — an unopened, baseline-credential
+        // connection. There is no sync-over-async at registration time because
+        // CreateConnection is fully synchronous; credential providers do not
+        // fire on this path (they only run through the pool — see the docs on
+        // ClickHouseDataSource.CreateConnection). Consumers who need pooling +
+        // providers should call OpenConnectionAsync / OpenDbConnectionAsync on
+        // the injected DataSource themselves.
+        // DbProviderFactory: the singleton ClickHouseProviderFactory.Instance is
+        // registered keylessly (the factory is provider-wide, not DataSource-scoped,
+        // so keyed registrations would point at the same object). TryAdd means the
+        // first AddClickHouse call wins and subsequent calls are no-ops.
+        services.TryAddSingleton<DbProviderFactory>(ClickHouseProviderFactory.Instance);
+
         if (serviceKey is null)
         {
             services.TryAddSingleton<ClickHouseDataSource>(sp => CreateDataSource(sp, dsBuilder, builderFactory, pocoSnapshot, sectionPath));
+            services.TryAddTransient<ClickHouseConnection>(sp =>
+                sp.GetRequiredService<ClickHouseDataSource>().CreateConnection());
+            services.TryAddTransient<DbConnection>(sp =>
+                sp.GetRequiredService<ClickHouseDataSource>().CreateConnection());
+            services.TryAddTransient<IDbConnection>(sp =>
+                sp.GetRequiredService<ClickHouseDataSource>().CreateConnection());
+            // Wrapper transient for callers still on the back-compat path. The
+            // wrapper opens its own socket from a connection string, so this
+            // is unpooled — same caveat as CreateConnection() above.
+            services.TryAddTransient<ClickHouseDbConnection>(sp =>
+                new ClickHouseDbConnection(sp.GetRequiredService<ClickHouseDataSource>().Settings.ToString()));
+            // Func<DbConnection> factory delegate — many DI patterns (and some
+            // ADO-bridging frameworks) inject this rather than the connection
+            // itself so each unit of work owns disposal.
+            services.TryAddTransient<Func<DbConnection>>(sp =>
+                () => sp.GetRequiredService<ClickHouseDataSource>().CreateConnection());
         }
         else
         {
             services.TryAddKeyedSingleton<ClickHouseDataSource>(serviceKey,
                 (sp, key) => CreateDataSource(sp, dsBuilder, builderFactory, pocoSnapshot, sectionPath));
+            services.TryAddKeyedTransient<ClickHouseConnection>(serviceKey,
+                (sp, key) => sp.GetRequiredKeyedService<ClickHouseDataSource>(key).CreateConnection());
+            services.TryAddKeyedTransient<DbConnection>(serviceKey,
+                (sp, key) => sp.GetRequiredKeyedService<ClickHouseDataSource>(key).CreateConnection());
+            services.TryAddKeyedTransient<IDbConnection>(serviceKey,
+                (sp, key) => sp.GetRequiredKeyedService<ClickHouseDataSource>(key).CreateConnection());
+            services.TryAddKeyedTransient<ClickHouseDbConnection>(serviceKey,
+                (sp, key) => new ClickHouseDbConnection(sp.GetRequiredKeyedService<ClickHouseDataSource>(key).Settings.ToString()));
         }
 
         return dsBuilder;

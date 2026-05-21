@@ -1,6 +1,9 @@
 using CH.Native.Ado;
+using CH.Native.Connection;
 using CH.Native.Dapper;
+using CH.Native.DependencyInjection;
 using Dapper;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace CH.Native.Samples.Queries;
 
@@ -116,6 +119,101 @@ internal static class DapperSample
             Console.WriteLine($"  Array IN parameter    : @ids = [{string.Join(",", pickIds)}]");
             Console.WriteLine($"  Mapping               : in_stock -> InStock (MatchNamesWithUnderscores)");
             Console.WriteLine($"  Cancellation token    : threaded via Dapper CommandDefinition");
+        }
+        finally
+        {
+            await connection.ExecuteAsync($"DROP TABLE IF EXISTS {tableName}");
+            Console.WriteLine($"\nDropped table {tableName}");
+        }
+    }
+
+    /// <summary>
+    /// Dapper-via-DI: shows the canonical pattern for apps that resolve
+    /// <see cref="ClickHouseDataSource"/> through a service container and want
+    /// to use Dapper extension methods on the pooled rent. Same surface as
+    /// <see cref="RunAsync(string)"/>, just with the connection sourced from the
+    /// pool — meaning credential providers, keyed services, pool stats, and
+    /// resilience all keep working alongside Dapper.
+    /// </summary>
+    /// <remarks>
+    /// The crucial line is <c>await ds.OpenConnectionAsync()</c>: it returns a
+    /// <see cref="ClickHouseConnection"/>, which (post-Phase-2) IS-A
+    /// <see cref="System.Data.Common.DbConnection"/>, so Dapper's
+    /// <see cref="System.Data.IDbConnection"/>-bound extension methods bind
+    /// directly. No wrapper, no manual conversion, no <c>OpenDbConnectionAsync</c>
+    /// indirection — the same physical connection serves both the native API
+    /// (<see cref="ClickHouseConnection.ExecuteScalarAsync{T}(string, System.Threading.CancellationToken)"/>,
+    /// <see cref="ClickHouseConnection.CreateBulkInserter{T}(string, CH.Native.BulkInsert.BulkInsertOptions?)"/>)
+    /// and Dapper.
+    /// </remarks>
+    public static async Task RunWithDependencyInjectionAsync(string connectionString)
+    {
+        ClickHouseDapperIntegration.Register();
+
+        var tableName = $"sample_dapper_di_products_{Guid.NewGuid():N}";
+
+        // Build a minimal service provider — the exact same calls work in
+        // ASP.NET Core / Generic Host startup. AddClickHouse returns a
+        // builder that supports .WithJwtProvider<...>() / .WithPasswordProvider<...>()
+        // etc. — see the Hosting sample for those.
+        var services = new ServiceCollection();
+        services.AddClickHouse(connectionString);
+        await using var sp = services.BuildServiceProvider();
+
+        var ds = sp.GetRequiredService<ClickHouseDataSource>();
+
+        // Pool-rented connection, idiomatic await using disposal returns it to
+        // the pool. The rent is a ClickHouseConnection which is also a DbConnection.
+        await using var connection = await ds.OpenConnectionAsync();
+
+        try
+        {
+            await connection.ExecuteAsync($"""
+                CREATE TABLE {tableName} (
+                    id        UInt32,
+                    name      String,
+                    category  LowCardinality(String),
+                    price     Float64,
+                    in_stock  UInt8
+                ) ENGINE = MergeTree()
+                ORDER BY id
+                """);
+
+            await connection.ExecuteAsync($"""
+                INSERT INTO {tableName} VALUES
+                    (1, 'Laptop',     'Electronics', 1299.99, 1),
+                    (2, 'Keyboard',   'Electronics',   79.99, 1),
+                    (3, 'Coffee Mug', 'Kitchen',       12.99, 1),
+                    (4, 'Headphones', 'Electronics',  199.99, 1)
+                """);
+            Console.WriteLine($"Seeded {tableName} via DI-resolved DataSource");
+
+            // The DataSource gave us a pooled connection; Dapper extension methods
+            // bind because ClickHouseConnection : DbConnection.
+            var electronics = await connection.QueryAsync<Product>(new CommandDefinition(
+                $"SELECT id, name, category, price, in_stock FROM {tableName} WHERE category = @c ORDER BY price",
+                new { c = "Electronics" }));
+
+            Console.WriteLine();
+            Console.WriteLine("--- Dapper QueryAsync<T> on DI-rented connection ---");
+            foreach (var p in electronics)
+            {
+                Console.WriteLine($"  [{p.Id}] {p.Name,-12} ${p.Price,8:F2}  in_stock={p.InStock}");
+            }
+
+            // Native API on the SAME pooled connection — proves the two surfaces
+            // share the physical socket. Useful when you want Dapper for ad-hoc
+            // queries and the native API for bulk insert / strongly-typed reads.
+            var nativeAvg = await connection.ExecuteScalarAsync<double>(
+                $"SELECT round(avg(price), 2) FROM {tableName}");
+            Console.WriteLine($"\nNative ExecuteScalarAsync<double> avg: ${nativeAvg:F2}");
+
+            Console.WriteLine();
+            Console.WriteLine("--- Plumbing check ---");
+            Console.WriteLine($"  Resolved type         : {ds.GetType().Name}");
+            Console.WriteLine($"  Rent type             : {connection.GetType().Name}");
+            Console.WriteLine($"  Is DbConnection       : {connection is System.Data.Common.DbConnection}");
+            Console.WriteLine($"  Pool stats after rent : {ds.GetStatistics()}");
         }
         finally
         {

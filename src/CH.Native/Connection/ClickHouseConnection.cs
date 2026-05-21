@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Data;
+using System.Data.Common;
 using System.Diagnostics;
 using System.IO.Pipelines;
 using System.Net.Security;
@@ -6,6 +8,7 @@ using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
+using CH.Native.Ado;
 using CH.Native.BulkInsert;
 using CH.Native.Commands;
 using CH.Native.Compression;
@@ -22,8 +25,13 @@ namespace CH.Native.Connection;
 
 /// <summary>
 /// Represents a connection to a ClickHouse server using the native protocol.
+/// Also implements <see cref="DbConnection"/> so the same instance flows through
+/// ADO.NET-facing consumers (Dapper, EF Core's <see cref="IDbConnection"/>
+/// extension points, OpenTelemetry SqlClient instrumentation) without an
+/// intermediate wrapper. The native API (<see cref="ExecuteScalarAsync{T}(string,CancellationToken)"/>,
+/// <see cref="QueryAsync{T}(string,CancellationToken)"/>, etc.) is unchanged.
 /// </summary>
-public sealed class ClickHouseConnection : IAsyncDisposable
+public sealed class ClickHouseConnection : DbConnection
 {
     private readonly ClickHouseConnectionSettings _settings;
     private readonly ColumnReaderRegistry _columnReaderRegistry;
@@ -341,6 +349,160 @@ public sealed class ClickHouseConnection : IAsyncDisposable
         _logger = new ClickHouseLogger(_settings.Telemetry?.LoggerFactory);
     }
 
+    // ===================== DbConnection / IDbConnection surface =====================
+    //
+    // These overrides satisfy the abstract DbConnection contract so a ClickHouseConnection
+    // returned from ClickHouseDataSource.OpenConnectionAsync() flows directly into Dapper /
+    // EF Core / OpenTelemetry instrumentation without an intermediate wrapper. The native
+    // surface above is unaffected — these are additive.
+    //
+    // Settings are immutable after construction (the field is `readonly`). The
+    // ConnectionString setter therefore throws rather than silently ignoring or
+    // rebuilding state — callers using the "ctor + assign + open" ADO pattern get a
+    // clear error pointing at the strongly-typed constructor.
+
+    /// <inheritdoc />
+#pragma warning disable CS8765 // Nullability of parameter doesn't match overridden member — DbConnection's contract is [AllowNull].
+    public override string ConnectionString
+    {
+        // Settings.ToString() is the canonical password-less connection-string
+        // representation in this codebase. Matches what the wrapper's getter
+        // exposes (no credential leak through DbConnection-shape callers).
+        get => _settings.ToString();
+        set => throw new NotSupportedException(
+            "ClickHouseConnection.ConnectionString is read-only after construction. " +
+            "Pass the connection string to the ClickHouseConnection(string) constructor, " +
+            "or rent a pre-configured connection from ClickHouseDataSource.OpenConnectionAsync().");
+    }
+#pragma warning restore CS8765
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Returns the session-active database — either the one set via a
+    /// <c>USE &lt;db&gt;</c> statement (tracked by the session-state inspector
+    /// at <see cref="TrackSessionStateMutation"/>) or the connection-string
+    /// default. Mirrors the standard <see cref="DbConnection.Database"/>
+    /// contract so ADO consumers (and humans reading logs) see the database
+    /// that subsequent unqualified table references will resolve against.
+    /// </remarks>
+    public override string Database
+    {
+        get
+        {
+            lock (_sessionStateLock)
+            {
+                return _userSetDatabase ?? _settings.Database ?? "";
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public override string DataSource => $"{_settings.Host}:{_settings.EffectivePort}";
+
+    /// <inheritdoc />
+    public override string ServerVersion => ServerInfo is null
+        ? ""
+        : $"{ServerInfo.VersionMajor}.{ServerInfo.VersionMinor}";
+
+    /// <inheritdoc />
+    public override ConnectionState State
+    {
+        get
+        {
+            // Best-effort snapshot; both backing fields are volatile.
+            if (_disposed) return ConnectionState.Closed;
+            return _isOpen ? ConnectionState.Open : ConnectionState.Closed;
+        }
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Dispatched via <see cref="Task.Run(Func{Task})"/> so a captured
+    /// single-threaded <see cref="SynchronizationContext"/> (UI / classic ASP.NET)
+    /// cannot deadlock against the handshake's async continuation. Async callers
+    /// should prefer <see cref="OpenAsync(CancellationToken)"/>.
+    /// </remarks>
+    public override void Open() => Task.Run(() => OpenAsync(CancellationToken.None)).GetAwaiter().GetResult();
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Dispatched via <see cref="Task.Run(Func{Task})"/> for the same reason as
+    /// <see cref="Open"/>. Async callers should prefer <see cref="CloseAsync()"/>.
+    /// </remarks>
+    public override void Close() => Task.Run(() => CloseAsync()).GetAwaiter().GetResult();
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Issues a <c>USE</c> statement on the current connection. The new database
+    /// is tracked in the session-state inspector so the pool resets it on return.
+    /// </remarks>
+    public override void ChangeDatabase(string databaseName)
+    {
+        if (!_isOpen)
+            throw new InvalidOperationException("Connection is not open.");
+        if (string.IsNullOrWhiteSpace(databaseName))
+            throw new ArgumentException("Database name cannot be empty.", nameof(databaseName));
+        if (databaseName.Length > 255)
+            throw new ArgumentException(
+                $"Database name length ({databaseName.Length}) exceeds the 255-character ClickHouse identifier maximum.",
+                nameof(databaseName));
+        for (int i = 0; i < databaseName.Length; i++)
+        {
+            var c = databaseName[i];
+            if (char.IsControl(c))
+                throw new ArgumentException(
+                    $"Database name contains control character U+{(int)c:X4} at position {i}; reject before sending.",
+                    nameof(databaseName));
+        }
+
+        // Same quoting as the wrapper: backtick-quote, double any embedded backticks.
+        Task.Run(() => ExecuteNonQueryAsync(
+            $"USE `{databaseName.Replace("`", "``")}`",
+            cancellationToken: CancellationToken.None)).GetAwaiter().GetResult();
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// ClickHouse does not support ACID transactions. INSERTs are atomic per batch;
+    /// for mutations use <c>ALTER TABLE … DELETE/UPDATE</c>.
+    /// </remarks>
+    protected override DbTransaction BeginDbTransaction(IsolationLevel isolationLevel) =>
+        throw new NotSupportedException(
+            "ClickHouse does not support ACID transactions. " +
+            "INSERTs are atomic per batch. For mutations, use ALTER TABLE...DELETE/UPDATE.");
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Returns a <see cref="ClickHouseDbCommand"/> bound to a non-owning
+    /// <see cref="ClickHouseDbConnection"/> facade over this native connection.
+    /// Disposing the returned command does not close the native connection.
+    /// </remarks>
+    protected override DbCommand CreateDbCommand()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var facade = new ClickHouseDbConnection(this);
+        return new ClickHouseDbCommand(facade);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// The async path is the authority; this override bridges sync Dispose
+    /// (via the <see cref="System.ComponentModel.Component"/> chain) into
+    /// <see cref="DisposeAsync"/>. Async callers should prefer <c>await using</c>
+    /// for the natural completion path.
+    /// </remarks>
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && !_disposed)
+        {
+            // Same deadlock-safety dispatch as Close()/Open().
+            Task.Run(async () => await DisposeAsync().ConfigureAwait(false)).GetAwaiter().GetResult();
+        }
+        base.Dispose(disposing);
+    }
+
+    // =================== End DbConnection / IDbConnection surface ===================
+
     /// <summary>
     /// Resolves the Map-shape hint for the current operation. Returns <c>null</c>
     /// when no per-query override is in play — that's the byte-for-byte legacy path
@@ -408,7 +570,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// Opens the connection and performs the handshake.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
-    public async Task OpenAsync(CancellationToken cancellationToken = default)
+    public override async Task OpenAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -885,7 +1047,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// <summary>
     /// Closes the connection gracefully.
     /// </summary>
-    public Task CloseAsync() => CloseAsync(CancellationToken.None);
+    public override Task CloseAsync() => CloseAsync(CancellationToken.None);
 
     /// <summary>
     /// Closes the connection gracefully.
@@ -1225,8 +1387,14 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// <summary>
     /// Creates a new command associated with this connection.
     /// </summary>
+    /// <remarks>
+    /// Hides <see cref="DbConnection.CreateCommand"/> via <c>new</c> so the native
+    /// API keeps returning the rich <see cref="ClickHouseCommand"/> type. ADO.NET
+    /// consumers reach the ADO surface via <see cref="DbConnection.CreateCommand"/>
+    /// (dispatched through the <see cref="CreateDbCommand"/> override below).
+    /// </remarks>
     /// <returns>A new command instance.</returns>
-    public ClickHouseCommand CreateCommand()
+    public new ClickHouseCommand CreateCommand()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         return new ClickHouseCommand(this);
@@ -3447,7 +3615,7 @@ public sealed class ClickHouseConnection : IAsyncDisposable
     /// <summary>
     /// Disposes the connection asynchronously.
     /// </summary>
-    public async ValueTask DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         if (_disposed)
             return;

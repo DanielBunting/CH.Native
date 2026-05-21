@@ -148,7 +148,7 @@ CH.Native.Connection.ClickHouseConnection.CancelCurrentQueryAsync(System.Threadi
 CH.Native.Connection.ClickHouseConnection.ChangeRolesAsync(System.Collections.Generic.IReadOnlyList<string!>? roles, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 CH.Native.Connection.ClickHouseConnection.ClickHouseConnection(CH.Native.Connection.ClickHouseConnectionSettings! settings) -> void
 CH.Native.Connection.ClickHouseConnection.ClickHouseConnection(string! connectionString) -> void
-CH.Native.Connection.ClickHouseConnection.CloseAsync() -> System.Threading.Tasks.Task!
+override CH.Native.Connection.ClickHouseConnection.CloseAsync() -> System.Threading.Tasks.Task!
 CH.Native.Connection.ClickHouseConnection.CloseAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 CH.Native.Connection.ClickHouseConnection.CreateBulkInserter(string! database, string! tableName, System.Collections.Generic.IReadOnlyList<string!>! columnNames, CH.Native.BulkInsert.BulkInsertOptions? options = null) -> CH.Native.BulkInsert.DynamicBulkInserter!
 CH.Native.Connection.ClickHouseConnection.CreateBulkInserter(string! tableName, System.Collections.Generic.IReadOnlyList<string!>! columnNames, CH.Native.BulkInsert.BulkInsertOptions? options = null) -> CH.Native.BulkInsert.DynamicBulkInserter!
@@ -157,7 +157,7 @@ CH.Native.Connection.ClickHouseConnection.CreateBulkInserter<T>(string! tableNam
 CH.Native.Connection.ClickHouseConnection.CreateCommand() -> CH.Native.Commands.ClickHouseCommand!
 CH.Native.Connection.ClickHouseConnection.CreateCommand(string! sql) -> CH.Native.Commands.ClickHouseCommand!
 CH.Native.Connection.ClickHouseConnection.CurrentQueryId.get -> string?
-CH.Native.Connection.ClickHouseConnection.DisposeAsync() -> System.Threading.Tasks.ValueTask
+override CH.Native.Connection.ClickHouseConnection.DisposeAsync() -> System.Threading.Tasks.ValueTask
 CH.Native.Connection.ClickHouseConnection.ExecuteNonQueryAsync(string! sql, System.IProgress<CH.Native.Data.QueryProgress>? progress = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Threading.Tasks.Task<long>!
 CH.Native.Connection.ClickHouseConnection.ExecuteReaderAsync(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Threading.Tasks.Task<CH.Native.Results.ClickHouseDataReader!>!
 CH.Native.Connection.ClickHouseConnection.ExecuteScalarAsync<T>(string! sql, System.IProgress<CH.Native.Data.QueryProgress>? progress = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Threading.Tasks.Task<T?>!
@@ -167,7 +167,7 @@ CH.Native.Connection.ClickHouseConnection.IsOpen.get -> bool
 CH.Native.Connection.ClickHouseConnection.KillQueryAsync(string! queryId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 CH.Native.Connection.ClickHouseConnection.LastQueryId.get -> string?
 CH.Native.Connection.ClickHouseConnection.NegotiatedProtocolVersion.get -> int
-CH.Native.Connection.ClickHouseConnection.OpenAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+override CH.Native.Connection.ClickHouseConnection.OpenAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 CH.Native.Connection.ClickHouseConnection.QueryAsync(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Results.ClickHouseRow>!
 CH.Native.Connection.ClickHouseConnection.QueryAsync<T>(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<T>!
 CH.Native.Connection.ClickHouseConnection.QueryTypedAsync<T>(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<T>!
@@ -1399,3 +1399,17 @@ static readonly CH.Native.Telemetry.ClickHouseMeter.RetryAttemptsTotal -> System
 static readonly CH.Native.Telemetry.ClickHouseMeter.RetryDelaySeconds -> System.Diagnostics.Metrics.Histogram<double>!
 static readonly CH.Native.Telemetry.ClickHouseMeter.RowsReadTotal -> System.Diagnostics.Metrics.Counter<long>!
 static readonly CH.Native.Telemetry.ClickHouseMeter.RowsWrittenTotal -> System.Diagnostics.Metrics.Counter<long>!
+CH.Native.Ado.ClickHouseDbConnection.ClickHouseDbConnection(CH.Native.Connection.ClickHouseConnection! inner) -> void
+CH.Native.Ado.ClickHouseDbConnection.Inner.get -> CH.Native.Connection.ClickHouseConnection!
+override CH.Native.Connection.ClickHouseConnection.ChangeDatabase(string! databaseName) -> void
+override CH.Native.Connection.ClickHouseConnection.Close() -> void
+override CH.Native.Connection.ClickHouseConnection.ConnectionString.get -> string!
+override CH.Native.Connection.ClickHouseConnection.ConnectionString.set -> void
+override CH.Native.Connection.ClickHouseConnection.Database.get -> string!
+override CH.Native.Connection.ClickHouseConnection.DataSource.get -> string!
+override CH.Native.Connection.ClickHouseConnection.Open() -> void
+override CH.Native.Connection.ClickHouseConnection.ServerVersion.get -> string!
+override CH.Native.Connection.ClickHouseConnection.State.get -> System.Data.ConnectionState
+CH.Native.Connection.ClickHouseDataSource.OpenDbConnectionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.Ado.ClickHouseDbConnection!>
+CH.Native.Connection.ClickHouseDataSource.CreateConnection() -> CH.Native.Connection.ClickHouseConnection!
+CH.Native.Connection.ClickHouseDataSource.Dispose() -> void
