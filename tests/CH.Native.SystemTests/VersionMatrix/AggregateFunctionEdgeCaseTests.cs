@@ -128,7 +128,7 @@ public class AggregateFunctionEdgeCaseTests
 
             // Read the state via the new reader.
             var rows = new List<AggregateRow>();
-            await foreach (var r in conn.QueryAsync<AggregateRow>($"SELECT id, s FROM {srcTable}"))
+            await foreach (var r in conn.StreamAsync<AggregateRow>($"SELECT id, s FROM {srcTable}"))
                 rows.Add(r);
             Assert.Single(rows);
             Assert.Equal("sum", rows[0].S.FunctionName);
@@ -173,7 +173,7 @@ public class AggregateFunctionEdgeCaseTests
             await conn.ExecuteNonQueryAsync($"OPTIMIZE TABLE {table} FINAL");
 
             var got = new Dictionary<int, long>();
-            await foreach (var r in conn.QueryAsync<SimpleAggRow>(
+            await foreach (var r in conn.StreamAsync<SimpleAggRow>(
                 $"SELECT id, total FROM {table} ORDER BY id"))
             {
                 got[r.Id] = r.Total;

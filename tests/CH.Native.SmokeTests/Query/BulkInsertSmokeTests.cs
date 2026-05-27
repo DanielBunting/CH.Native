@@ -42,11 +42,11 @@ public class BulkInsertSmokeTests
             await inserter.CompleteAsync();
 
             // Cross-validate: read via CH.Native and ClickHouse.Driver
-            var native = await NativeQueryHelper.QueryAsync(
+            var native = await NativeQueryHelper.StreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT id, values FROM {table} ORDER BY id");
 
-            var driver = await DriverQueryHelper.QueryAsync(
+            var driver = await DriverQueryHelper.StreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT id, values FROM {table} ORDER BY id");
 

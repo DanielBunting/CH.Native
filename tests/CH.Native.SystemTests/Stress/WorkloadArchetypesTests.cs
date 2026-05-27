@@ -150,7 +150,7 @@ public class WorkloadArchetypesTests
         ulong checksum = 0;
         try
         {
-            await foreach (var r in conn.QueryAsync($"SELECT number FROM numbers({rows})"))
+            await foreach (var r in conn.StreamAsync($"SELECT number FROM numbers({rows})"))
             {
                 checksum += r.GetFieldValue<ulong>(0);
                 streamed++;

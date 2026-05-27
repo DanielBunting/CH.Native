@@ -63,7 +63,7 @@ public class TelemetryUnderChaosTests : IAsyncLifetime
         try
         {
             int rowsSeen = 0;
-            await foreach (var _ in conn.QueryAsync<ulong>(
+            await foreach (var _ in conn.StreamAsync<ulong>(
                 "SELECT number FROM numbers(10000000)").WithCancellation(cts.Token))
             {
                 rowsSeen++;
@@ -124,7 +124,7 @@ public class TelemetryUnderChaosTests : IAsyncLifetime
             using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(80));
             try
             {
-                await foreach (var _ in conn.QueryAsync<int>(
+                await foreach (var _ in conn.StreamAsync<int>(
                     "SELECT number FROM numbers(10000000)").WithCancellation(cts.Token))
                 {
                 }
@@ -171,7 +171,7 @@ public class TelemetryUnderChaosTests : IAsyncLifetime
         Exception? caught = null;
         try
         {
-            await foreach (var _ in conn.QueryAsync<ulong>(
+            await foreach (var _ in conn.StreamAsync<ulong>(
                 "SELECT throwIf(number = 5000, 'boom') FROM numbers(10000)"))
             {
             }

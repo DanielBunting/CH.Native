@@ -55,7 +55,7 @@ public class LazyStringTests
 
             // Query back with lazy string connection
             var results = new List<(int Id, string? Name)>();
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.StreamAsync(
                 $"SELECT Id, Name FROM {tableName} ORDER BY Id"))
             {
                 var id = row.GetFieldValue<int>("Id");
@@ -107,7 +107,7 @@ public class LazyStringTests
 
             // Query back with lazy string connection
             var results = new List<(int Id, string? Tag)>();
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.StreamAsync(
                 $"SELECT Id, Tag FROM {tableName} ORDER BY Id"))
             {
                 var id = row.GetFieldValue<int>("Id");
@@ -165,7 +165,7 @@ public class LazyStringTests
             var allocBefore = GC.GetAllocatedBytesForCurrentThread();
 
             var readValues = new List<string?>();
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.StreamAsync(
                 $"SELECT Name FROM {tableName} ORDER BY Id"))
             {
                 readValues.Add(row.GetFieldValue<string>("Name"));
@@ -232,7 +232,7 @@ public class LazyStringTests
 
             // Read with eager connection
             var eagerResults = new List<(int Id, string? Name)>();
-            await foreach (var row in eagerConnection.QueryAsync(
+            await foreach (var row in eagerConnection.StreamAsync(
                 $"SELECT Id, Name FROM {tableName} ORDER BY Id"))
             {
                 var id = row.GetFieldValue<int>("Id");
@@ -245,7 +245,7 @@ public class LazyStringTests
             await lazyConnection.OpenAsync();
 
             var lazyResults = new List<(int Id, string? Name)>();
-            await foreach (var row in lazyConnection.QueryAsync(
+            await foreach (var row in lazyConnection.StreamAsync(
                 $"SELECT Id, Name FROM {tableName} ORDER BY Id"))
             {
                 var id = row.GetFieldValue<int>("Id");
@@ -292,7 +292,7 @@ public class LazyStringTests
         {
             // Query the empty table - should return 0 rows without error
             var count = 0;
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.StreamAsync(
                 $"SELECT Id, Name FROM {tableName}"))
             {
                 count++;

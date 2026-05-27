@@ -196,7 +196,7 @@ public class ParameterTests
         command.Parameters.Add("multiplier", 2);
 
         var results = new List<(ulong Number, long Doubled)>();
-        await foreach (var row in command.QueryAsync())
+        await foreach (var row in command.StreamAsync())
         {
             results.Add(((ulong)row["number"], Convert.ToInt64(row["doubled"])));
         }

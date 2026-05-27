@@ -86,7 +86,7 @@ public class GroupByNullKeysTests : IAsyncLifetime
 
         // Raw SQL oracle (use a list of tuples; Dictionary doesn't allow null keys).
         var oracle = new List<(string? key, int count, int sum)>();
-        await foreach (var row in _conn.QueryAsync(
+        await foreach (var row in _conn.StreamAsync(
             $"SELECT category, count(), sum(amount) FROM {_table} GROUP BY category"))
         {
             oracle.Add(((string?)row[0], (int)Convert.ToInt64(row[1]), (int)Convert.ToInt64(row[2])));

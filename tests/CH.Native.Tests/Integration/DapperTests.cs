@@ -441,6 +441,31 @@ public class DapperTests
     }
 
     [Fact]
+    public async Task QuerySingleOrDefault_EmptyResult_ReturnsDefault()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var result = await connection.QuerySingleOrDefaultAsync<ScalarResult>(
+            "SELECT toInt32(1) as Value WHERE 1 = 0");
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task QuerySingleOrDefault_SingleResult_ReturnsValue()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var result = await connection.QuerySingleOrDefaultAsync<ScalarResult>(
+            "SELECT toInt32(99) as Value");
+
+        Assert.NotNull(result);
+        Assert.Equal(99, result!.Value);
+    }
+
+    [Fact]
     public async Task Query_EmptyResult_ReturnsEmptyEnumerable()
     {
         await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
@@ -450,6 +475,55 @@ public class DapperTests
             "SELECT toInt32(number) as Value FROM numbers(0)");
 
         Assert.Empty(results);
+    }
+
+    #endregion
+
+    #region ExecuteReader Tests
+
+    [Fact]
+    public async Task ExecuteReader_ReturnsWorkingDataReader()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await using var reader = await connection.ExecuteReaderAsync(
+            "SELECT toInt32(number) as Value FROM numbers(3)");
+
+        var values = new List<int>();
+        while (reader.Read())
+        {
+            values.Add(reader.GetInt32(0));
+        }
+
+        Assert.Equal(new[] { 0, 1, 2 }, values);
+    }
+
+    [Fact]
+    public async Task ExecuteReader_WithParameters_WorksCorrectly()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await using var reader = await connection.ExecuteReaderAsync(
+            "SELECT @val as Value",
+            new { val = "hello" });
+
+        Assert.True(reader.Read());
+        Assert.Equal("hello", reader.GetString(0));
+        Assert.False(reader.Read());
+    }
+
+    [Fact]
+    public async Task ExecuteReader_EmptyResult_ReadsNothing()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await using var reader = await connection.ExecuteReaderAsync(
+            "SELECT toInt32(1) as Value WHERE 1 = 0");
+
+        Assert.False(reader.Read());
     }
 
     #endregion

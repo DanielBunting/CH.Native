@@ -107,17 +107,20 @@ public static class ClickHouseConnectionExtensions
 
     #endregion
 
-    #region QueryAsync (ClickHouseRow)
+    #region StreamAsync (ClickHouseRow)
 
     /// <summary>
-    /// Executes a query with anonymous object parameters and returns rows.
+    /// Streams query results (ClickHouseRow) with anonymous-object parameters.
+    /// Renamed from <c>QueryAsync</c> in Phase 2 so the call-site name no longer
+    /// shadows Dapper's <c>IDbConnection.QueryAsync&lt;T&gt;</c> extension on
+    /// <see cref="ClickHouseConnection"/>-typed variables.
     /// </summary>
     /// <param name="connection">The connection.</param>
     /// <param name="sql">The SQL query with @param placeholders.</param>
     /// <param name="parameters">Anonymous object with properties matching parameter names.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An async enumerable of rows.</returns>
-    public static async IAsyncEnumerable<ClickHouseRow> QueryAsync(
+    public static async IAsyncEnumerable<ClickHouseRow> StreamAsync(
         this ClickHouseConnection connection,
         string sql,
         object parameters,
@@ -126,21 +129,21 @@ public static class ClickHouseConnectionExtensions
         await using var command = connection.CreateCommand(sql);
         AddParametersFromObject(command.Parameters, parameters);
 
-        await foreach (var row in command.QueryAsync(cancellationToken))
+        await foreach (var row in command.StreamAsync(cancellationToken))
         {
             yield return row;
         }
     }
 
     /// <summary>
-    /// Executes a query with dictionary parameters and returns rows.
+    /// Streams query results (ClickHouseRow) with dictionary parameters.
     /// </summary>
     /// <param name="connection">The connection.</param>
     /// <param name="sql">The SQL query with @param placeholders.</param>
     /// <param name="parameters">Dictionary of parameter names and values.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An async enumerable of rows.</returns>
-    public static async IAsyncEnumerable<ClickHouseRow> QueryAsync(
+    public static async IAsyncEnumerable<ClickHouseRow> StreamAsync(
         this ClickHouseConnection connection,
         string sql,
         IDictionary<string, object?> parameters,
@@ -149,7 +152,7 @@ public static class ClickHouseConnectionExtensions
         await using var command = connection.CreateCommand(sql);
         AddParametersFromDictionary(command.Parameters, parameters);
 
-        await foreach (var row in command.QueryAsync(cancellationToken))
+        await foreach (var row in command.StreamAsync(cancellationToken))
         {
             yield return row;
         }
@@ -157,10 +160,10 @@ public static class ClickHouseConnectionExtensions
 
     #endregion
 
-    #region QueryAsync<T> (typed)
+    #region StreamAsync<T> (typed)
 
     /// <summary>
-    /// Executes a query with anonymous object parameters and returns mapped objects.
+    /// Streams typed query results with anonymous-object parameters.
     /// </summary>
     /// <typeparam name="T">The type to map rows to. Must have a parameterless constructor.</typeparam>
     /// <param name="connection">The connection.</param>
@@ -168,7 +171,7 @@ public static class ClickHouseConnectionExtensions
     /// <param name="parameters">Anonymous object with properties matching parameter names.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An async enumerable of mapped objects.</returns>
-    public static async IAsyncEnumerable<T> QueryAsync<T>(
+    public static async IAsyncEnumerable<T> StreamAsync<T>(
         this ClickHouseConnection connection,
         string sql,
         object parameters,
@@ -177,14 +180,14 @@ public static class ClickHouseConnectionExtensions
         await using var command = connection.CreateCommand(sql);
         AddParametersFromObject(command.Parameters, parameters);
 
-        await foreach (var item in command.QueryAsync<T>(cancellationToken))
+        await foreach (var item in command.StreamAsync<T>(cancellationToken))
         {
             yield return item;
         }
     }
 
     /// <summary>
-    /// Executes a query with dictionary parameters and returns mapped objects.
+    /// Streams typed query results with dictionary parameters.
     /// </summary>
     /// <typeparam name="T">The type to map rows to. Must have a parameterless constructor.</typeparam>
     /// <param name="connection">The connection.</param>
@@ -192,7 +195,7 @@ public static class ClickHouseConnectionExtensions
     /// <param name="parameters">Dictionary of parameter names and values.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An async enumerable of mapped objects.</returns>
-    public static async IAsyncEnumerable<T> QueryAsync<T>(
+    public static async IAsyncEnumerable<T> StreamAsync<T>(
         this ClickHouseConnection connection,
         string sql,
         IDictionary<string, object?> parameters,
@@ -201,7 +204,7 @@ public static class ClickHouseConnectionExtensions
         await using var command = connection.CreateCommand(sql);
         AddParametersFromDictionary(command.Parameters, parameters);
 
-        await foreach (var item in command.QueryAsync<T>(cancellationToken))
+        await foreach (var item in command.StreamAsync<T>(cancellationToken))
         {
             yield return item;
         }

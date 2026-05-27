@@ -47,7 +47,7 @@ public class BulkInsertCompositeTypeTests
             Assert.Equal(3, count);
 
             var results = new List<(int id, int[][] arr)>();
-            await foreach (var row in connection.QueryAsync($"SELECT id, nested_arr FROM {tableName} ORDER BY id"))
+            await foreach (var row in connection.StreamAsync($"SELECT id, nested_arr FROM {tableName} ORDER BY id"))
             {
                 var id = row.GetFieldValue<int>("id");
                 var arr = (int[][])row.GetFieldValue<object>("nested_arr");
@@ -101,7 +101,7 @@ public class BulkInsertCompositeTypeTests
             await inserter.CompleteAsync();
 
             var results = new List<(int id, int[][] grid)>();
-            await foreach (var row in connection.QueryAsync($"SELECT id, grid FROM {tableName} ORDER BY id"))
+            await foreach (var row in connection.StreamAsync($"SELECT id, grid FROM {tableName} ORDER BY id"))
             {
                 results.Add((row.GetFieldValue<int>("id"), (int[][])row.GetFieldValue<object>("grid")));
             }
@@ -148,7 +148,7 @@ public class BulkInsertCompositeTypeTests
             await inserter.CompleteAsync();
 
             var read = new List<RectInt2DRow>();
-            await foreach (var row in connection.QueryAsync<RectInt2DRow>($"SELECT id, grid FROM {tableName} ORDER BY id"))
+            await foreach (var row in connection.StreamAsync<RectInt2DRow>($"SELECT id, grid FROM {tableName} ORDER BY id"))
             {
                 read.Add(row);
             }
@@ -190,7 +190,7 @@ public class BulkInsertCompositeTypeTests
 
             var ex = await Assert.ThrowsAsync<ClickHouseTypeConversionException>(async () =>
             {
-                await foreach (var _ in connection.QueryAsync<RectInt2DRow>($"SELECT id, grid FROM {tableName}"))
+                await foreach (var _ in connection.StreamAsync<RectInt2DRow>($"SELECT id, grid FROM {tableName}"))
                 {
                     // Expect failure during row mapping.
                 }
@@ -234,7 +234,7 @@ public class BulkInsertCompositeTypeTests
             });
             await inserter.CompleteAsync();
 
-            await foreach (var row in connection.QueryAsync($"SELECT grid FROM {tableName} WHERE id = 1"))
+            await foreach (var row in connection.StreamAsync($"SELECT grid FROM {tableName} WHERE id = 1"))
             {
                 var grid = (int?[][])row.GetFieldValue<object>("grid");
                 Assert.Equal(2, grid.Length);
@@ -276,7 +276,7 @@ public class BulkInsertCompositeTypeTests
 
             await inserter.CompleteAsync();
 
-            await foreach (var row in connection.QueryAsync($"SELECT cube FROM {tableName} WHERE id = 1"))
+            await foreach (var row in connection.StreamAsync($"SELECT cube FROM {tableName} WHERE id = 1"))
             {
                 var cube = (int[][][])row.GetFieldValue<object>("cube");
                 Assert.Equal(2, cube.Length);
@@ -321,7 +321,7 @@ public class BulkInsertCompositeTypeTests
 
             await inserter.CompleteAsync();
 
-            await foreach (var row in connection.QueryAsync($"SELECT grid FROM {tableName} WHERE id = 1"))
+            await foreach (var row in connection.StreamAsync($"SELECT grid FROM {tableName} WHERE id = 1"))
             {
                 var grid = (double[][])row.GetFieldValue<object>("grid");
                 Assert.Equal(2, grid.Length);
@@ -364,7 +364,7 @@ public class BulkInsertCompositeTypeTests
 
             await inserter.CompleteAsync();
 
-            await foreach (var row in connection.QueryAsync($"SELECT grid FROM {tableName} WHERE id = 1"))
+            await foreach (var row in connection.StreamAsync($"SELECT grid FROM {tableName} WHERE id = 1"))
             {
                 var grid = (string[][])row.GetFieldValue<object>("grid");
                 Assert.Equal(2, grid.Length);
@@ -412,7 +412,7 @@ public class BulkInsertCompositeTypeTests
 
             await inserter.CompleteAsync();
 
-            await foreach (var row in connection.QueryAsync($"SELECT grid FROM {tableName} WHERE id = 1"))
+            await foreach (var row in connection.StreamAsync($"SELECT grid FROM {tableName} WHERE id = 1"))
             {
                 var grid = (DateTime[][])row.GetFieldValue<object>("grid");
                 Assert.Equal(2, grid.Length);
@@ -461,7 +461,7 @@ public class BulkInsertCompositeTypeTests
             await inserter.AddAsync(new RectInt4DRow { Id = 1, Tess = data });
             await inserter.CompleteAsync();
 
-            await foreach (var row in connection.QueryAsync($"SELECT tess FROM {tableName} WHERE id = 1"))
+            await foreach (var row in connection.StreamAsync($"SELECT tess FROM {tableName} WHERE id = 1"))
             {
                 var tess = (int[][][][])row.GetFieldValue<object>("tess");
                 Assert.Equal(2, tess.Length);
@@ -511,7 +511,7 @@ public class BulkInsertCompositeTypeTests
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
             Assert.Equal(1, count);
 
-            await foreach (var row in connection.QueryAsync($"SELECT tags FROM {tableName}"))
+            await foreach (var row in connection.StreamAsync($"SELECT tags FROM {tableName}"))
             {
                 var tags = (string?[])row.GetFieldValue<object>("tags");
                 Assert.Equal(3, tags.Length);
@@ -561,7 +561,7 @@ public class BulkInsertCompositeTypeTests
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
             Assert.Equal(1, count);
 
-            await foreach (var row in connection.QueryAsync($"SELECT metadata FROM {tableName}"))
+            await foreach (var row in connection.StreamAsync($"SELECT metadata FROM {tableName}"))
             {
                 var map = (Dictionary<string, int?>)row.GetFieldValue<object>("metadata");
                 Assert.Equal(3, map.Count);
@@ -611,7 +611,7 @@ public class BulkInsertCompositeTypeTests
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
             Assert.Equal(1, count);
 
-            await foreach (var row in connection.QueryAsync($"SELECT data FROM {tableName}"))
+            await foreach (var row in connection.StreamAsync($"SELECT data FROM {tableName}"))
             {
                 var map = (Dictionary<string, int[]>)row.GetFieldValue<object>("data");
                 Assert.Single(map);
@@ -657,7 +657,7 @@ public class BulkInsertCompositeTypeTests
             Assert.Equal(2, count);
 
             var results = new List<System.Runtime.CompilerServices.ITuple>();
-            await foreach (var row in connection.QueryAsync($"SELECT pair FROM {tableName} ORDER BY id"))
+            await foreach (var row in connection.StreamAsync($"SELECT pair FROM {tableName} ORDER BY id"))
             {
                 results.Add((System.Runtime.CompilerServices.ITuple)row.GetFieldValue<object>("pair"));
             }
@@ -709,7 +709,7 @@ public class BulkInsertCompositeTypeTests
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
             Assert.Equal(1, count);
 
-            await foreach (var row in connection.QueryAsync($"SELECT items FROM {tableName}"))
+            await foreach (var row in connection.StreamAsync($"SELECT items FROM {tableName}"))
             {
                 var items = (object[])row.GetFieldValue<object>("items");
                 Assert.Equal(2, items.Length);
@@ -764,7 +764,7 @@ public class BulkInsertCompositeTypeTests
 
             // FixedString reads back as byte[]
             var results = new List<byte[]>();
-            await foreach (var row in connection.QueryAsync($"SELECT code FROM {tableName} ORDER BY id"))
+            await foreach (var row in connection.StreamAsync($"SELECT code FROM {tableName} ORDER BY id"))
             {
                 results.Add(row.GetFieldValue<byte[]>("code"));
             }
@@ -920,7 +920,7 @@ public class BulkInsertCompositeTypeTests
             Assert.Equal(3, count);
 
             var results = new List<(int id, int[] a, string[] b)>();
-            await foreach (var row in connection.QueryAsync($"SELECT id, a, b FROM {tableName} ORDER BY id"))
+            await foreach (var row in connection.StreamAsync($"SELECT id, a, b FROM {tableName} ORDER BY id"))
             {
                 var id = row.GetFieldValue<int>("id");
                 var a = (int[])row.GetFieldValue<object>("a");

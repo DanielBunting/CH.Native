@@ -76,7 +76,7 @@ internal static class SingleRecordSample
             Console.WriteLine($"Inserted {total:N0} audit events.");
 
             Console.WriteLine("\n--- Events per actor ---");
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.StreamAsync(
                 $"SELECT actor_id, count() AS n FROM {tableName} GROUP BY actor_id ORDER BY actor_id"))
             {
                 Console.WriteLine($"  actor {row["actor_id"]}: {row["n"]} event(s)");

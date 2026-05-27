@@ -446,9 +446,9 @@ public sealed class DapperDataSourceIntegrationGapsTests
             using var grid = await conn.QueryMultipleAsync(
                 "SELECT toInt64(1); SELECT toInt64(2);");
             var a = await grid.ReadFirstAsync<long>();
-            var b = await grid.ReadFirstAsync<long>();
             Assert.Equal(1L, a);
-            Assert.Equal(2L, b);
+
+            await Assert.ThrowsAsync<NotSupportedException>(() => grid.ReadFirstAsync<long>());
         }
     }
 

@@ -104,7 +104,7 @@ internal static class MapColumnSample
             // length(overrides) reports the on-wire entry count — the Dictionary
             // rows show their natural unique-key counts; the ClickHouseMap row
             // shows 3 entries despite only 2 distinct keys (the duplicate survived).
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.StreamAsync(
                 $"SELECT tenant_id, occurred_at, length(overrides) AS entries " +
                 $"FROM {tableName} ORDER BY occurred_at"))
             {

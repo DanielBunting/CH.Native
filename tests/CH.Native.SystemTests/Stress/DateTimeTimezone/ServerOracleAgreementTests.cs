@@ -65,7 +65,7 @@ public class ServerOracleAgreementTests
             for (int i = 0; i < SeasonalInstants.Length; i++)
             {
                 DateTimeOffset clientRead = default;
-                await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table} WHERE id = {i}"))
+                await foreach (var r in conn.StreamAsync($"SELECT ts FROM {table} WHERE id = {i}"))
                     clientRead = r.GetFieldValue<DateTimeOffset>(0);
 
                 var serverRendering = await conn.ExecuteScalarAsync<string>(

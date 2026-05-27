@@ -86,8 +86,8 @@ CH.Native.Commands.ClickHouseCommand.ExecuteNonQueryAsync(System.IProgress<CH.Na
 CH.Native.Commands.ClickHouseCommand.ExecuteReaderAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<CH.Native.Results.ClickHouseDataReader!>!
 CH.Native.Commands.ClickHouseCommand.ExecuteScalarAsync<T>(System.IProgress<CH.Native.Data.QueryProgress>? progress = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<T?>!
 CH.Native.Commands.ClickHouseCommand.Parameters.get -> CH.Native.Commands.ClickHouseParameterCollection!
-CH.Native.Commands.ClickHouseCommand.QueryAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Results.ClickHouseRow>!
-CH.Native.Commands.ClickHouseCommand.QueryAsync<T>(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<T>!
+CH.Native.Commands.ClickHouseCommand.StreamAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Results.ClickHouseRow>!
+CH.Native.Commands.ClickHouseCommand.StreamAsync<T>(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<T>!
 CH.Native.Commands.ClickHouseParameter
 CH.Native.Commands.ClickHouseParameter.ClickHouseParameter() -> void
 CH.Native.Commands.ClickHouseParameter.ClickHouseParameter(string! name, object? value) -> void
@@ -168,8 +168,8 @@ CH.Native.Connection.ClickHouseConnection.KillQueryAsync(string! queryId, System
 CH.Native.Connection.ClickHouseConnection.LastQueryId.get -> string?
 CH.Native.Connection.ClickHouseConnection.NegotiatedProtocolVersion.get -> int
 override CH.Native.Connection.ClickHouseConnection.OpenAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
-CH.Native.Connection.ClickHouseConnection.QueryAsync(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Results.ClickHouseRow>!
-CH.Native.Connection.ClickHouseConnection.QueryAsync<T>(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<T>!
+CH.Native.Connection.ClickHouseConnection.StreamAsync(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Results.ClickHouseRow>!
+CH.Native.Connection.ClickHouseConnection.StreamAsync<T>(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<T>!
 CH.Native.Connection.ClickHouseConnection.QueryTypedAsync<T>(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<T>!
 CH.Native.Connection.ClickHouseConnection.ServerInfo.get -> CH.Native.Protocol.Messages.ServerHello?
 CH.Native.Connection.ClickHouseConnection.Settings.get -> CH.Native.Connection.ClickHouseConnectionSettings!
@@ -937,8 +937,8 @@ CH.Native.Resilience.ResilientConnection.GetConnectionAsync(System.Threading.Can
 CH.Native.Resilience.ResilientConnection.HealthyServerCount.get -> int
 CH.Native.Resilience.ResilientConnection.IsOpen.get -> bool
 CH.Native.Resilience.ResilientConnection.OpenAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
-CH.Native.Resilience.ResilientConnection.QueryAsync(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Results.ClickHouseRow>!
-CH.Native.Resilience.ResilientConnection.QueryAsync<T>(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<T>!
+CH.Native.Resilience.ResilientConnection.StreamAsync(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Results.ClickHouseRow>!
+CH.Native.Resilience.ResilientConnection.StreamAsync<T>(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<T>!
 CH.Native.Resilience.ResilientConnection.ResilientConnection(CH.Native.Connection.ClickHouseConnectionSettings! settings) -> void
 CH.Native.Resilience.ResilientConnection.ResilientConnection(string! connectionString) -> void
 CH.Native.Resilience.ResilientConnection.Settings.get -> CH.Native.Connection.ClickHouseConnectionSettings!
@@ -1225,10 +1225,10 @@ static CH.Native.Connection.ClickHouseConnectionExtensions.ExecuteNonQueryAsync(
 static CH.Native.Connection.ClickHouseConnectionExtensions.ExecuteNonQueryAsync(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, object! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!
 static CH.Native.Connection.ClickHouseConnectionExtensions.ExecuteScalarAsync<T>(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, System.Collections.Generic.IDictionary<string!, object?>! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<T?>!
 static CH.Native.Connection.ClickHouseConnectionExtensions.ExecuteScalarAsync<T>(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, object! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<T?>!
-static CH.Native.Connection.ClickHouseConnectionExtensions.QueryAsync(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, System.Collections.Generic.IDictionary<string!, object?>! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Results.ClickHouseRow>!
-static CH.Native.Connection.ClickHouseConnectionExtensions.QueryAsync(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, object! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Results.ClickHouseRow>!
-static CH.Native.Connection.ClickHouseConnectionExtensions.QueryAsync<T>(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, System.Collections.Generic.IDictionary<string!, object?>! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<T>!
-static CH.Native.Connection.ClickHouseConnectionExtensions.QueryAsync<T>(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, object! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<T>!
+static CH.Native.Connection.ClickHouseConnectionExtensions.StreamAsync(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, System.Collections.Generic.IDictionary<string!, object?>! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Results.ClickHouseRow>!
+static CH.Native.Connection.ClickHouseConnectionExtensions.StreamAsync(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, object! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Results.ClickHouseRow>!
+static CH.Native.Connection.ClickHouseConnectionExtensions.StreamAsync<T>(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, System.Collections.Generic.IDictionary<string!, object?>! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<T>!
+static CH.Native.Connection.ClickHouseConnectionExtensions.StreamAsync<T>(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, object! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<T>!
 static CH.Native.Connection.ClickHouseConnectionSettings.CreateBuilder() -> CH.Native.Connection.ClickHouseConnectionSettingsBuilder!
 static CH.Native.Connection.ClickHouseConnectionSettings.Parse(string! connectionString) -> CH.Native.Connection.ClickHouseConnectionSettings!
 static CH.Native.Data.Block.Empty.get -> CH.Native.Data.Block!
@@ -1410,6 +1410,5 @@ override CH.Native.Connection.ClickHouseConnection.DataSource.get -> string!
 override CH.Native.Connection.ClickHouseConnection.Open() -> void
 override CH.Native.Connection.ClickHouseConnection.ServerVersion.get -> string!
 override CH.Native.Connection.ClickHouseConnection.State.get -> System.Data.ConnectionState
-CH.Native.Connection.ClickHouseDataSource.OpenDbConnectionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.Ado.ClickHouseDbConnection!>
 CH.Native.Connection.ClickHouseDataSource.CreateConnection() -> CH.Native.Connection.ClickHouseConnection!
 CH.Native.Connection.ClickHouseDataSource.Dispose() -> void

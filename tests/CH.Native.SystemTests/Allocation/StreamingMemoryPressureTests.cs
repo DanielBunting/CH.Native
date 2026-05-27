@@ -74,7 +74,7 @@ public class StreamingMemoryPressureTests
         var start = GC.GetTotalMemory(forceFullCollection: true);
 
         ulong sum = 0;
-        await foreach (var row in conn.QueryAsync($"SELECT number FROM numbers({rowCount})"))
+        await foreach (var row in conn.StreamAsync($"SELECT number FROM numbers({rowCount})"))
         {
             sum += Convert.ToUInt64(row[0]);
         }
@@ -104,7 +104,7 @@ public class StreamingMemoryPressureTests
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         long rowCount = 0;
-        await foreach (var _ in conn.QueryAsync("SELECT number FROM numbers(5000000)"))
+        await foreach (var _ in conn.StreamAsync("SELECT number FROM numbers(5000000)"))
         {
             rowCount++;
         }

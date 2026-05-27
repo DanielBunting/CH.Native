@@ -84,7 +84,7 @@ public class CancellationTests
 
         // Start streaming a large result set but break early
         int count = 0;
-        await foreach (var row in connection.QueryAsync("SELECT number FROM numbers(1000000)"))
+        await foreach (var row in connection.StreamAsync("SELECT number FROM numbers(1000000)"))
         {
             count++;
             if (count >= 10)
@@ -174,7 +174,7 @@ public class CancellationTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
         {
             // Large result set - cancellation should kick in while streaming
-            await foreach (var row in connection.QueryAsync("SELECT number FROM numbers(10000000000)", cts.Token))
+            await foreach (var row in connection.StreamAsync("SELECT number FROM numbers(10000000000)", cts.Token))
             {
                 count++;
             }

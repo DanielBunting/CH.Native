@@ -35,7 +35,7 @@ public class MidStreamExceptionContractTests
         // very next MoveNextAsync — not silently dropped.
         var ex = await Assert.ThrowsAsync<ClickHouseServerException>(async () =>
         {
-            await foreach (var _ in conn.QueryAsync(
+            await foreach (var _ in conn.StreamAsync(
                 "SELECT throwIf(number = 4, 'mid-stream') FROM numbers(10)"))
             {
                 // consume rows until throwIf fires

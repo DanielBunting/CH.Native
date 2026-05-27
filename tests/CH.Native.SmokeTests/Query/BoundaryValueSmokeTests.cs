@@ -27,11 +27,11 @@ public class BoundaryValueSmokeTests
                 _fixture.NativeConnectionString,
                 $"INSERT INTO {table} VALUES {insertValues}");
 
-            var native = await NativeQueryHelper.QueryAsync(
+            var native = await NativeQueryHelper.StreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT {selectExpr} FROM {table}");
 
-            var driver = await DriverQueryHelper.QueryAsync(
+            var driver = await DriverQueryHelper.StreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT {selectExpr} FROM {table}");
 
@@ -49,9 +49,9 @@ public class BoundaryValueSmokeTests
     public async Task Float64_NaN()
     {
         // Use SELECT with literal since NaN can't be inserted directly via VALUES
-        var native = await NativeQueryHelper.QueryAsync(
+        var native = await NativeQueryHelper.StreamAsync(
             _fixture.NativeConnectionString, "SELECT nan::Float64");
-        var driver = await DriverQueryHelper.QueryAsync(
+        var driver = await DriverQueryHelper.StreamAsync(
             _fixture.DriverConnectionString, "SELECT nan::Float64");
         ResultComparer.AssertResultsEqual(native, driver, "Float64 NaN");
     }
@@ -59,9 +59,9 @@ public class BoundaryValueSmokeTests
     [Fact]
     public async Task Float64_PositiveInfinity()
     {
-        var native = await NativeQueryHelper.QueryAsync(
+        var native = await NativeQueryHelper.StreamAsync(
             _fixture.NativeConnectionString, "SELECT inf::Float64");
-        var driver = await DriverQueryHelper.QueryAsync(
+        var driver = await DriverQueryHelper.StreamAsync(
             _fixture.DriverConnectionString, "SELECT inf::Float64");
         ResultComparer.AssertResultsEqual(native, driver, "Float64 +Inf");
     }
@@ -69,9 +69,9 @@ public class BoundaryValueSmokeTests
     [Fact]
     public async Task Float64_NegativeInfinity()
     {
-        var native = await NativeQueryHelper.QueryAsync(
+        var native = await NativeQueryHelper.StreamAsync(
             _fixture.NativeConnectionString, "SELECT -inf::Float64");
-        var driver = await DriverQueryHelper.QueryAsync(
+        var driver = await DriverQueryHelper.StreamAsync(
             _fixture.DriverConnectionString, "SELECT -inf::Float64");
         ResultComparer.AssertResultsEqual(native, driver, "Float64 -Inf");
     }
@@ -79,9 +79,9 @@ public class BoundaryValueSmokeTests
     [Fact]
     public async Task Float64_NegativeZero()
     {
-        var native = await NativeQueryHelper.QueryAsync(
+        var native = await NativeQueryHelper.StreamAsync(
             _fixture.NativeConnectionString, "SELECT -0.0::Float64");
-        var driver = await DriverQueryHelper.QueryAsync(
+        var driver = await DriverQueryHelper.StreamAsync(
             _fixture.DriverConnectionString, "SELECT -0.0::Float64");
         ResultComparer.AssertResultsEqual(native, driver, "Float64 -0.0");
     }
@@ -90,9 +90,9 @@ public class BoundaryValueSmokeTests
     public async Task Float64_Subnormal()
     {
         // Smallest positive subnormal Float64
-        var native = await NativeQueryHelper.QueryAsync(
+        var native = await NativeQueryHelper.StreamAsync(
             _fixture.NativeConnectionString, "SELECT 5e-324::Float64");
-        var driver = await DriverQueryHelper.QueryAsync(
+        var driver = await DriverQueryHelper.StreamAsync(
             _fixture.DriverConnectionString, "SELECT 5e-324::Float64");
         ResultComparer.AssertResultsEqual(native, driver, "Float64 subnormal");
     }
@@ -100,9 +100,9 @@ public class BoundaryValueSmokeTests
     [Fact]
     public async Task Float64_MaxMin()
     {
-        var native = await NativeQueryHelper.QueryAsync(
+        var native = await NativeQueryHelper.StreamAsync(
             _fixture.NativeConnectionString, "SELECT 1.7976931348623157e308::Float64, -1.7976931348623157e308::Float64");
-        var driver = await DriverQueryHelper.QueryAsync(
+        var driver = await DriverQueryHelper.StreamAsync(
             _fixture.DriverConnectionString, "SELECT 1.7976931348623157e308::Float64, -1.7976931348623157e308::Float64");
         ResultComparer.AssertResultsEqual(native, driver, "Float64 max/min");
     }
@@ -124,20 +124,20 @@ public class BoundaryValueSmokeTests
                 $"INSERT INTO {table} VALUES ('{largeStr}')");
 
             // Compare lengths instead of full content for performance
-            var nativeLen = await NativeQueryHelper.QueryAsync(
+            var nativeLen = await NativeQueryHelper.StreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT length(val) FROM {table}");
-            var driverLen = await DriverQueryHelper.QueryAsync(
+            var driverLen = await DriverQueryHelper.StreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT length(val) FROM {table}");
 
             ResultComparer.AssertResultsEqual(nativeLen, driverLen, "Large string length");
 
             // Also verify a hash to ensure content matches
-            var nativeHash = await NativeQueryHelper.QueryAsync(
+            var nativeHash = await NativeQueryHelper.StreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT sipHash64(val) FROM {table}");
-            var driverHash = await DriverQueryHelper.QueryAsync(
+            var driverHash = await DriverQueryHelper.StreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT sipHash64(val) FROM {table}");
 
@@ -155,10 +155,10 @@ public class BoundaryValueSmokeTests
     public async Task StringWithNullBytes()
     {
         // ClickHouse strings can contain null bytes
-        var native = await NativeQueryHelper.QueryAsync(
+        var native = await NativeQueryHelper.StreamAsync(
             _fixture.NativeConnectionString,
             "SELECT 'hello\\0world'");
-        var driver = await DriverQueryHelper.QueryAsync(
+        var driver = await DriverQueryHelper.StreamAsync(
             _fixture.DriverConnectionString,
             "SELECT 'hello\\0world'");
         ResultComparer.AssertResultsEqual(native, driver, "Null bytes in string");

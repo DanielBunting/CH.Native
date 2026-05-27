@@ -150,7 +150,7 @@ public class StringMaterializationLazyAsymmetryTests
         var collected = new List<string>();
         string? firstRowField = null;
 
-        var enumerator = conn.QueryAsync(
+        var enumerator = conn.StreamAsync(
             "SELECT toString(number) AS c FROM numbers(50)").GetAsyncEnumerator();
         try
         {
@@ -184,7 +184,7 @@ public class StringMaterializationLazyAsymmetryTests
         await conn.OpenAsync();
 
         // Warm caches
-        await foreach (var row in conn.QueryAsync(WideRowSql))
+        await foreach (var row in conn.StreamAsync(WideRowSql))
         {
             _ = row.GetFieldValue<string>("c0");
             if (accessAllColumns)
@@ -196,7 +196,7 @@ public class StringMaterializationLazyAsymmetryTests
 
         return await AllocationProbe.MeasureAsync(async () =>
         {
-            await foreach (var row in conn.QueryAsync(WideRowSql))
+            await foreach (var row in conn.StreamAsync(WideRowSql))
             {
                 _ = row.GetFieldValue<string>("c0");
                 if (accessAllColumns)
@@ -214,11 +214,11 @@ public class StringMaterializationLazyAsymmetryTests
             _fx.BuildSettings(b => b.WithStringMaterialization(mode)));
         await conn.OpenAsync();
 
-        await foreach (var _ in conn.QueryAsync<TenStringRow>(WideRowSql)) { }
+        await foreach (var _ in conn.StreamAsync<TenStringRow>(WideRowSql)) { }
 
         return await AllocationProbe.MeasureAsync(async () =>
         {
-            await foreach (var row in conn.QueryAsync<TenStringRow>(WideRowSql))
+            await foreach (var row in conn.StreamAsync<TenStringRow>(WideRowSql))
             {
                 _ = row.C0;
             }

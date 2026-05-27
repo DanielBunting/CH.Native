@@ -225,7 +225,7 @@ public class ResilientConnectionTests
         await using var connection = new ResilientConnection(settings);
 
         var results = new List<ulong>();
-        await foreach (var row in connection.QueryAsync("SELECT number FROM system.numbers LIMIT 10"))
+        await foreach (var row in connection.StreamAsync("SELECT number FROM system.numbers LIMIT 10"))
         {
             results.Add(row.GetFieldValue<ulong>("number"));
         }
@@ -255,7 +255,7 @@ public class ResilientConnectionTests
                 $"INSERT INTO {tableName} VALUES (1, 'Alice'), (2, 'Bob')");
 
             var results = new List<TestRecord>();
-            await foreach (var item in connection.QueryAsync<TestRecord>($"SELECT id, name FROM {tableName} ORDER BY id"))
+            await foreach (var item in connection.StreamAsync<TestRecord>($"SELECT id, name FROM {tableName} ORDER BY id"))
             {
                 results.Add(item);
             }
@@ -372,7 +372,7 @@ public class ResilientConnectionTests
 
             // Stream query
             var sum = 0.0;
-            await foreach (var row in connection.QueryAsync($"SELECT value FROM {tableName}"))
+            await foreach (var row in connection.StreamAsync($"SELECT value FROM {tableName}"))
             {
                 sum += row.GetFieldValue<double>("value");
             }

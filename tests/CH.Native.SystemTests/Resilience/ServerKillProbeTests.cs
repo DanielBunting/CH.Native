@@ -94,7 +94,7 @@ public sealed class ServerKillProbeTests : IAsyncLifetime
             int rows = 0;
             try
             {
-                await foreach (var _ in conn.QueryAsync<ulong>(
+                await foreach (var _ in conn.StreamAsync<ulong>(
                     "SELECT number FROM numbers(50_000_000)"))
                 {
                     rows++;

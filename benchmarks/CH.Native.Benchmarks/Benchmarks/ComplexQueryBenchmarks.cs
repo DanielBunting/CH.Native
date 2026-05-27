@@ -59,7 +59,7 @@ public class ComplexQueryBenchmarks
     public async Task<int> Native_Aggregation()
     {
         int count = 0;
-        await foreach (var row in _nativeConnection.QueryAsync(AggregationQuery))
+        await foreach (var row in _nativeConnection.StreamAsync(AggregationQuery))
         {
             count++;
         }
@@ -109,7 +109,7 @@ public class ComplexQueryBenchmarks
     public async Task<int> Native_FilteredQuery()
     {
         int count = 0;
-        await foreach (var row in _nativeConnection.QueryAsync(FilteredQuery))
+        await foreach (var row in _nativeConnection.StreamAsync(FilteredQuery))
         {
             count++;
         }
@@ -164,7 +164,7 @@ public class ComplexQueryBenchmarks
     public async Task<int> Native_JoinQuery()
     {
         int count = 0;
-        await foreach (var row in _nativeConnection.QueryAsync(JoinQuery))
+        await foreach (var row in _nativeConnection.StreamAsync(JoinQuery))
         {
             count++;
         }
@@ -212,7 +212,7 @@ public class ComplexQueryBenchmarks
     public async Task<int> Native_SortedQuery()
     {
         int count = 0;
-        await foreach (var row in _nativeConnection.QueryAsync(SortedQuery))
+        await foreach (var row in _nativeConnection.StreamAsync(SortedQuery))
         {
             count++;
         }

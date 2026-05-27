@@ -70,8 +70,8 @@ public class CommandBehaviorMatrixTests
         await using var reader = await cmd.ExecuteReaderAsync(CommandBehavior.SingleResult);
 
         Assert.True(await reader.ReadAsync());
-        // NextResult should always be false — ClickHouse is single-result-set per query.
-        Assert.False(await reader.NextResultAsync());
+        // NextResult throws — ClickHouse does not support multiple result sets.
+        await Assert.ThrowsAsync<NotSupportedException>(() => reader.NextResultAsync());
     }
 
     [Fact]

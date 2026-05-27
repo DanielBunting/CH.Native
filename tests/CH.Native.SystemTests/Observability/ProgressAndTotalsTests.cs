@@ -80,7 +80,7 @@ public class ProgressAndTotalsTests
 
             var observedKeys = new List<string>();
             var observedSums = new List<long>();
-            await foreach (var r in conn.QueryAsync(
+            await foreach (var r in conn.StreamAsync(
                 $"SELECT k, sum(v) FROM {table} GROUP BY k WITH TOTALS"))
             {
                 observedKeys.Add(r.GetFieldValue<string>(0));
@@ -111,7 +111,7 @@ public class ProgressAndTotalsTests
         await conn.OpenAsync();
 
         var seen = new List<ulong>();
-        await foreach (var r in conn.QueryAsync(
+        await foreach (var r in conn.StreamAsync(
             "SELECT number AS x FROM numbers(10) SETTINGS extremes = 1"))
         {
             seen.Add(r.GetFieldValue<ulong>(0));

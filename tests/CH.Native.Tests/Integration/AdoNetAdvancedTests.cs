@@ -184,24 +184,16 @@ public class AdoNetAdvancedTests
     }
 
     [Fact]
-    public async Task Dapper_QueryMultiple_NotSupported()
+    public async Task Dapper_QueryMultiple_ThrowsNotSupported()
     {
         await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
-        // ClickHouse handles multi-statement queries — verify it doesn't throw
-        // (this is different from SQL Server/PostgreSQL which may reject or handle separately)
-        try
-        {
-            using var multi = await connection.QueryMultipleAsync("SELECT 1; SELECT 2");
-            // If it succeeds, we just verify no crash
-            var first = await multi.ReadFirstAsync<int>();
-            Assert.Equal(1, first);
-        }
-        catch (Exception)
-        {
-            // If it does throw, that's also acceptable behavior
-        }
+        using var multi = await connection.QueryMultipleAsync("SELECT 1; SELECT 2");
+        var first = await multi.ReadFirstAsync<int>();
+        Assert.Equal(1, first);
+
+        await Assert.ThrowsAsync<NotSupportedException>(() => multi.ReadFirstAsync<int>());
     }
 
     [Fact]

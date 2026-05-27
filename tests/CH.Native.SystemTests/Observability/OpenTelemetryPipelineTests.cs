@@ -95,7 +95,7 @@ public class OpenTelemetryPipelineTests
             }
 
             var read = 0;
-            await foreach (var r in conn.QueryAsync($"SELECT id, name FROM {table}"))
+            await foreach (var r in conn.StreamAsync($"SELECT id, name FROM {table}"))
             {
                 _ = r.GetFieldValue<int>(0);
                 _ = r.GetFieldValue<string>(1);

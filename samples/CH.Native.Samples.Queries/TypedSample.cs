@@ -68,7 +68,7 @@ internal static class TypedSample
 
             Console.WriteLine();
             Console.WriteLine($"--- Active users with score >= {minScore} (parameterised) ---");
-            await foreach (var user in connection.QueryAsync<User>(sql, new { minScore }, cts.Token))
+            await foreach (var user in connection.StreamAsync<User>(sql, new { minScore }, cts.Token))
             {
                 Console.WriteLine(
                     $"  [{user.Id}] {user.Name,-7} {user.Email,-22} " +
@@ -79,7 +79,7 @@ internal static class TypedSample
             // queryId we can echo back via connection.LastQueryId.
             var queryId = $"typed-recent-active-{Guid.NewGuid():N}";
             var recent = new List<User>();
-            await foreach (var user in connection.QueryAsync<User>(
+            await foreach (var user in connection.StreamAsync<User>(
                 $"SELECT id, name, email, active, created_at, score FROM {tableName} WHERE active = 1 ORDER BY created_at DESC LIMIT 3",
                 cts.Token,
                 queryId: queryId))

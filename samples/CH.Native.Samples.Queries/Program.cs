@@ -59,10 +59,10 @@ static void PrintUsage()
         Samples:
             scalar           connection.ExecuteScalarAsync<T>(sql, ...)
             reader           connection.ExecuteReaderAsync(sql, ...) — ClickHouseDataReader
-            rows             connection.QueryAsync(sql) — IAsyncEnumerable<ClickHouseRow>
-            typed            connection.QueryAsync<T>(sql) — reflection-mapped POCOs
+            rows             connection.StreamAsync(sql) — IAsyncEnumerable<ClickHouseRow>
+            typed            connection.StreamAsync<T>(sql) — reflection-mapped POCOs
             typed-fast       connection.QueryTypedAsync<T>(sql) — high-perf, no boxing
-            parameterized    QueryAsync<T>(sql, params) — anon-obj / IDictionary parameters
+            parameterized    StreamAsync<T>(sql, params) — anon-obj / IDictionary parameters
             linq             connection.Table<T>(name).Where/Select/OrderBy/Take + ToSql
             linq-aggregates  CountAsync / SumAsync / AverageAsync / MinAsync / MaxAsync / Any / First / Single
             linq-final       connection.Table<T>(name).Final() — ReplacingMergeTree current state

@@ -11,7 +11,7 @@ public static class NativeQueryHelper
         await using var connection = new ClickHouseConnection(connectionString);
         await connection.OpenAsync();
 
-        await foreach (var row in connection.QueryAsync(sql))
+        await foreach (var row in connection.StreamAsync(sql))
         {
             var values = new object?[row.FieldCount];
             for (int i = 0; i < row.FieldCount; i++)

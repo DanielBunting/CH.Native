@@ -75,7 +75,7 @@ public class PrecisionMismatchTests
             // Read as ClickHouseDecimal first to confirm the wire round-trip
             // is exact at the native type.
             CH.Native.Numerics.ClickHouseDecimal nativeValue = default;
-            await foreach (var row in conn.QueryAsync<NativeDecimalRow>($"SELECT id, v FROM {table}"))
+            await foreach (var row in conn.StreamAsync<NativeDecimalRow>($"SELECT id, v FROM {table}"))
                 nativeValue = row.V;
 
             _output.WriteLine($"Decimal128 native read: {nativeValue}");
@@ -89,7 +89,7 @@ public class PrecisionMismatchTests
             await conn.ExecuteNonQueryAsync(
                 $"INSERT INTO {table} VALUES (2, toDecimal128('-100000000000000000000000000000000000', 0))");
             CH.Native.Numerics.ClickHouseDecimal negNative = default;
-            await foreach (var row in conn.QueryAsync<NativeDecimalRow>($"SELECT id, v FROM {table} WHERE id = 2"))
+            await foreach (var row in conn.StreamAsync<NativeDecimalRow>($"SELECT id, v FROM {table} WHERE id = 2"))
                 negNative = row.V;
 
             var negClamped = (decimal)negNative;
@@ -133,7 +133,7 @@ public class PrecisionMismatchTests
                 $"INSERT INTO {table} VALUES (1, toDecimal128('79228162514264337593543950335', 0))");
 
             DecimalRow? row = null;
-            await foreach (var r in conn.QueryAsync<DecimalRow>($"SELECT id, v FROM {table}"))
+            await foreach (var r in conn.StreamAsync<DecimalRow>($"SELECT id, v FROM {table}"))
                 row = r;
 
             Assert.NotNull(row);
@@ -163,7 +163,7 @@ public class PrecisionMismatchTests
                 $"INSERT INTO {table} VALUES (1, toDecimal128('123456789012345.67', 2))");
 
             DecimalRow? row = null;
-            await foreach (var r in conn.QueryAsync<DecimalRow>($"SELECT id, v FROM {table}"))
+            await foreach (var r in conn.StreamAsync<DecimalRow>($"SELECT id, v FROM {table}"))
                 row = r;
 
             Assert.NotNull(row);
@@ -197,7 +197,7 @@ public class PrecisionMismatchTests
             // on the wire, then experiment with a `float` field if the path supports
             // narrowing.
             DoubleRow? doubleRow = null;
-            await foreach (var r in conn.QueryAsync<DoubleRow>($"SELECT id, v FROM {table}"))
+            await foreach (var r in conn.StreamAsync<DoubleRow>($"SELECT id, v FROM {table}"))
                 doubleRow = r;
 
             Assert.NotNull(doubleRow);
@@ -209,7 +209,7 @@ public class PrecisionMismatchTests
             FloatRow? floatRow = null;
             try
             {
-                await foreach (var r in conn.QueryAsync<FloatRow>($"SELECT id, v FROM {table}"))
+                await foreach (var r in conn.StreamAsync<FloatRow>($"SELECT id, v FROM {table}"))
                     floatRow = r;
             }
             catch (Exception ex) { caught = ex; }
@@ -250,7 +250,7 @@ public class PrecisionMismatchTests
             await inserter.CompleteAsync();
 
             var rows = new List<ULongRow>();
-            await foreach (var r in conn.QueryAsync<ULongRow>($"SELECT id, v FROM {table} ORDER BY id"))
+            await foreach (var r in conn.StreamAsync<ULongRow>($"SELECT id, v FROM {table} ORDER BY id"))
                 rows.Add(r);
 
             Assert.Equal(2, rows.Count);
@@ -280,7 +280,7 @@ public class PrecisionMismatchTests
                 $"INSERT INTO {table} VALUES (1, 12345.6789)");
 
             DecimalRow? row = null;
-            await foreach (var r in conn.QueryAsync<DecimalRow>($"SELECT id, v FROM {table}"))
+            await foreach (var r in conn.StreamAsync<DecimalRow>($"SELECT id, v FROM {table}"))
                 row = r;
 
             Assert.NotNull(row);

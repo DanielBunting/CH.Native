@@ -60,7 +60,7 @@ public class StreamFailureTests
             Exception? caught = null;
             try
             {
-                await foreach (var row in conn.QueryAsync("SELECT number FROM numbers(2000000)"))
+                await foreach (var row in conn.StreamAsync("SELECT number FROM numbers(2000000)"))
                 {
                     _ = row.GetFieldValue<ulong>(0);
                     seen++;
@@ -299,7 +299,7 @@ public class StreamFailureTests
             try
             {
                 // groupArray on a huge sequence forces big in-memory state per block.
-                await foreach (var r in conn.QueryAsync(
+                await foreach (var r in conn.StreamAsync(
                     "SELECT groupArray(number) FROM numbers(10000000) " +
                     "GROUP BY number % 1000 " +
                     "SETTINGS max_memory_usage = 500000"))
@@ -336,7 +336,7 @@ public class StreamFailureTests
             Exception? caught = null;
             try
             {
-                await foreach (var r in conn.QueryAsync(
+                await foreach (var r in conn.StreamAsync(
                     "SELECT number FROM numbers(100000000000) " +
                     "SETTINGS max_execution_time = 1, timeout_overflow_mode = 'throw'"))
                 {

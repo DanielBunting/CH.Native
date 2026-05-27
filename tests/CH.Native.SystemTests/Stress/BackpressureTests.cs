@@ -76,7 +76,7 @@ public class BackpressureTests
 
         try
         {
-            await foreach (var row in conn.QueryAsync(
+            await foreach (var row in conn.StreamAsync(
                 $"SELECT number FROM numbers({rows})"))
             {
                 _ = row.GetFieldValue<ulong>(0);

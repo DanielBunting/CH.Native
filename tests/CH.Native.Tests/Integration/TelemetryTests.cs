@@ -141,7 +141,7 @@ public class TelemetryTests : IDisposable
         await connection.OpenAsync();
         _activities.Clear();
 
-        await foreach (var row in connection.QueryAsync("SELECT number FROM system.numbers LIMIT 5"))
+        await foreach (var row in connection.StreamAsync("SELECT number FROM system.numbers LIMIT 5"))
         {
             // Just iterate through
         }

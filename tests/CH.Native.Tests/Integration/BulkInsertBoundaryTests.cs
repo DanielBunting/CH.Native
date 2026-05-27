@@ -238,7 +238,7 @@ public class BulkInsertBoundaryTests
             Assert.Equal(11, length);
 
             string readBack = null!;
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} WHERE Id = 1"))
+            await foreach (var row in connection.StreamAsync($"SELECT Value FROM {tableName} WHERE Id = 1"))
             {
                 readBack = row.GetFieldValue<string>("Value");
             }
@@ -279,7 +279,7 @@ public class BulkInsertBoundaryTests
             Assert.Equal(1, count);
 
             string readBack = null!;
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} WHERE Id = 1"))
+            await foreach (var row in connection.StreamAsync($"SELECT Value FROM {tableName} WHERE Id = 1"))
             {
                 readBack = row.GetFieldValue<string>("Value");
             }
@@ -680,7 +680,7 @@ public class BulkInsertBoundaryTests
             Assert.Equal(1, count);
 
             string readBack = null!;
-            await foreach (var row in connection.QueryAsync($"SELECT Name FROM {tableName} WHERE Id = 42"))
+            await foreach (var row in connection.StreamAsync($"SELECT Name FROM {tableName} WHERE Id = 42"))
             {
                 readBack = row.GetFieldValue<string>("Name");
             }

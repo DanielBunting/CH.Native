@@ -85,7 +85,7 @@ public class CompressionBenchmarks
     public async Task<int> Native_NoCompression()
     {
         int count = 0;
-        await foreach (var row in _nativeNoCompression.QueryAsync(_query))
+        await foreach (var row in _nativeNoCompression.StreamAsync(_query))
         {
             count++;
         }
@@ -98,7 +98,7 @@ public class CompressionBenchmarks
     public async Task<int> Native_LZ4()
     {
         int count = 0;
-        await foreach (var row in _nativeLz4.QueryAsync(_query))
+        await foreach (var row in _nativeLz4.StreamAsync(_query))
         {
             count++;
         }
@@ -111,7 +111,7 @@ public class CompressionBenchmarks
     public async Task<int> Native_Zstd()
     {
         int count = 0;
-        await foreach (var row in _nativeZstd.QueryAsync(_query))
+        await foreach (var row in _nativeZstd.StreamAsync(_query))
         {
             count++;
         }

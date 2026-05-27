@@ -129,7 +129,7 @@ public class HealthCheckTimingProbeTests : IAsyncLifetime
 
             try
             {
-                await foreach (var _ in conn.QueryAsync<ulong>(
+                await foreach (var _ in conn.StreamAsync<ulong>(
                     "SELECT number FROM numbers(10000000)").WithCancellation(cts.Token)) { }
             }
             catch { /* expected — cancellation or read failure */ }

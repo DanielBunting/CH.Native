@@ -58,7 +58,7 @@ public class VersionMatrixTests
 
         // DateTime via a real column, since literal toDateTime(...) returns DateTime('TZ')
         // which the scalar convert path doesn't unwrap on every server version.
-        await foreach (var row in conn.QueryAsync(
+        await foreach (var row in conn.StreamAsync(
             "SELECT toDateTime('2024-01-02 03:04:05', 'UTC') AS dt"))
         {
             var dt = row.GetFieldValue<DateTime>(0);
@@ -75,7 +75,7 @@ public class VersionMatrixTests
         await conn.OpenAsync();
 
         var values = new List<string>();
-        await foreach (var row in conn.QueryAsync(
+        await foreach (var row in conn.StreamAsync(
             "SELECT toString(number % 4) AS k FROM numbers(20)"))
         {
             values.Add(row.GetFieldValue<string>(0));
@@ -94,7 +94,7 @@ public class VersionMatrixTests
 
         // Cast literals to fix element types — without this the array literal types
         // depend on the server version's inference and break the requested .NET type.
-        await foreach (var row in conn.QueryAsync(
+        await foreach (var row in conn.StreamAsync(
             "SELECT cast([1, 2, 3] AS Array(Int32)), " +
             "cast([toNullable('a'), NULL, toNullable('c')] AS Array(Nullable(String)))"))
         {

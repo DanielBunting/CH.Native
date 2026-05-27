@@ -49,7 +49,7 @@ public class BulkInsertTests
             Assert.Equal(3, count);
 
             var names = new List<string>();
-            await foreach (var row in connection.QueryAsync($"SELECT Name FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.StreamAsync($"SELECT Name FROM {tableName} ORDER BY Id"))
             {
                 names.Add(row.GetFieldValue<string>("Name"));
             }
@@ -342,7 +342,7 @@ public class BulkInsertTests
             await inserter.CompleteAsync();
 
             var names = new List<string>();
-            await foreach (var row in connection.QueryAsync($"SELECT Name FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.StreamAsync($"SELECT Name FROM {tableName} ORDER BY Id"))
             {
                 names.Add(row.GetFieldValue<string>("Name"));
             }
@@ -934,7 +934,7 @@ public class BulkInsertTests
             Assert.Equal(5, count);
 
             var statuses = new List<string>();
-            await foreach (var row in connection.QueryAsync($"SELECT Status FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.StreamAsync($"SELECT Status FROM {tableName} ORDER BY Id"))
             {
                 statuses.Add(row.GetFieldValue<string>("Status"));
             }
@@ -1020,7 +1020,7 @@ public class BulkInsertTests
 
             var levels = new List<string>();
             var services = new List<string>();
-            await foreach (var row in connection.QueryAsync($"SELECT Level, Service FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.StreamAsync($"SELECT Level, Service FROM {tableName} ORDER BY Id"))
             {
                 levels.Add(row.GetFieldValue<string>("Level"));
                 services.Add(row.GetFieldValue<string>("Service"));

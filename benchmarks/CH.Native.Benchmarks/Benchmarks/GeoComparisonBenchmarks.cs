@@ -142,7 +142,7 @@ public class GeoComparisonBenchmarks
         await using var connection = new NativeConnection(_nativeConnectionString);
         await connection.OpenAsync();
         int count = 0;
-        await foreach (var row in connection.QueryAsync($"SELECT geom FROM {PointTable}"))
+        await foreach (var row in connection.StreamAsync($"SELECT geom FROM {PointTable}"))
         {
             _ = row.GetFieldValue<Point>("geom");
             count++;
@@ -173,7 +173,7 @@ public class GeoComparisonBenchmarks
         await using var connection = new NativeConnection(_nativeConnectionString);
         await connection.OpenAsync();
         int count = 0;
-        await foreach (var row in connection.QueryAsync($"SELECT geom FROM {RingTable}"))
+        await foreach (var row in connection.StreamAsync($"SELECT geom FROM {RingTable}"))
         {
             _ = (Point[])row.GetFieldValue<object>("geom");
             count++;
@@ -204,7 +204,7 @@ public class GeoComparisonBenchmarks
         await using var connection = new NativeConnection(_nativeConnectionString);
         await connection.OpenAsync();
         int count = 0;
-        await foreach (var row in connection.QueryAsync($"SELECT geom FROM {MultiPolygonTable}"))
+        await foreach (var row in connection.StreamAsync($"SELECT geom FROM {MultiPolygonTable}"))
         {
             _ = (Point[][][])row.GetFieldValue<object>("geom");
             count++;
@@ -237,7 +237,7 @@ public class GeoComparisonBenchmarks
         await using var connection = new NativeConnection(_nativeConnectionString);
         await connection.OpenAsync();
         int count = 0;
-        await foreach (var row in connection.QueryAsync($"SELECT geom FROM {GeometryTable}"))
+        await foreach (var row in connection.StreamAsync($"SELECT geom FROM {GeometryTable}"))
         {
             _ = row.GetFieldValue<Geometry>("geom");
             count++;

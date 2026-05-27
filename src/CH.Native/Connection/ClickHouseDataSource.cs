@@ -254,39 +254,6 @@ public sealed class ClickHouseDataSource : IAsyncDisposable, IDisposable
     }
 
     /// <summary>
-    /// Rents a pooled connection and returns it wrapped as a
-    /// <see cref="DbConnection"/> so Dapper / EF Core / any other
-    /// <see cref="System.Data.IDbConnection"/>-bound consumer can use it
-    /// directly. Disposing the wrapper returns the underlying native
-    /// connection to the pool (via its pool-return hook) — it does not tear
-    /// the socket down.
-    /// </summary>
-    /// <remarks>
-    /// The wrapper is non-owning: the lifetime is governed by the pooled
-    /// native connection underneath. After Phase 2 (where
-    /// <see cref="ClickHouseConnection"/> itself derives from
-    /// <see cref="DbConnection"/>), callers can also pass the result of
-    /// <see cref="OpenConnectionAsync"/> directly into Dapper extension
-    /// methods — this method exists for callers who prefer the explicit
-    /// ADO-shaped return type.
-    /// </remarks>
-    public async ValueTask<ClickHouseDbConnection> OpenDbConnectionAsync(CancellationToken cancellationToken = default)
-    {
-        var native = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            return new ClickHouseDbConnection(native);
-        }
-        catch
-        {
-            // Wrapper construction is currently allocation-only, but be defensive
-            // so a future failure mode doesn't leak a rented native connection.
-            await native.DisposeAsync().ConfigureAwait(false);
-            throw;
-        }
-    }
-
-    /// <summary>
     /// Creates an <i>unopened</i> native connection bound to this DataSource's
     /// <b>baseline</b> settings. Mirrors <see cref="DbDataSource.CreateConnection"/>
     /// in shape: the returned instance is NOT pooled — it exists so callers

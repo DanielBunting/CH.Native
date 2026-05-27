@@ -165,7 +165,7 @@ public class BenchmarkTypeSuite
     private async Task<long> NativeBulkAsync<T>(string table) where T : struct
     {
         long count = 0;
-        await foreach (var row in _native.QueryAsync($"SELECT v FROM {table}{Settings}"))
+        await foreach (var row in _native.StreamAsync($"SELECT v FROM {table}{Settings}"))
         {
             row.GetFieldValue<T>("v");
             count++;
@@ -176,7 +176,7 @@ public class BenchmarkTypeSuite
     private async Task<long> NativeBulkRefAsync<T>(string table) where T : class
     {
         long count = 0;
-        await foreach (var row in _native.QueryAsync($"SELECT v FROM {table}{Settings}"))
+        await foreach (var row in _native.StreamAsync($"SELECT v FROM {table}{Settings}"))
         {
             row.GetFieldValue<T>("v");
             count++;
@@ -186,7 +186,7 @@ public class BenchmarkTypeSuite
 
     private async Task<T> NativeSingleAsync<T>(string table) where T : struct
     {
-        await foreach (var row in _native.QueryAsync($"SELECT v FROM {table} LIMIT 1{Settings}"))
+        await foreach (var row in _native.StreamAsync($"SELECT v FROM {table} LIMIT 1{Settings}"))
         {
             return row.GetFieldValue<T>("v");
         }
@@ -195,7 +195,7 @@ public class BenchmarkTypeSuite
 
     private async Task<T?> NativeSingleRefAsync<T>(string table) where T : class
     {
-        await foreach (var row in _native.QueryAsync($"SELECT v FROM {table} LIMIT 1{Settings}"))
+        await foreach (var row in _native.StreamAsync($"SELECT v FROM {table} LIMIT 1{Settings}"))
         {
             return row.GetFieldValue<T>("v");
         }

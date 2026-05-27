@@ -64,7 +64,7 @@ public class DateTime64TimezoneRoundTripTests
                 $"INSERT INTO {table} VALUES (1, parseDateTime64BestEffort('2024-06-15 12:00:00', 3, 'America/New_York'))");
 
             TimestampRow? row = null;
-            await foreach (var r in conn.QueryAsync<TimestampRow>($"SELECT id, ts FROM {table}"))
+            await foreach (var r in conn.StreamAsync<TimestampRow>($"SELECT id, ts FROM {table}"))
                 row = r;
 
             Assert.NotNull(row);
@@ -105,7 +105,7 @@ public class DateTime64TimezoneRoundTripTests
                 $"INSERT INTO {table} VALUES (1, toDateTime('2024-06-15 12:00:00', 'UTC'))");
 
             TimestampRow? row = null;
-            await foreach (var r in conn.QueryAsync<TimestampRow>($"SELECT id, ts FROM {table}"))
+            await foreach (var r in conn.StreamAsync<TimestampRow>($"SELECT id, ts FROM {table}"))
                 row = r;
 
             Assert.NotNull(row);
@@ -136,7 +136,7 @@ public class DateTime64TimezoneRoundTripTests
                 $"INSERT INTO {table} VALUES (1, parseDateTime64BestEffort('2024-01-01 12:00:00.123456789', 9))");
 
             TimestampRow? row = null;
-            await foreach (var r in conn.QueryAsync<TimestampRow>($"SELECT id, ts FROM {table}"))
+            await foreach (var r in conn.StreamAsync<TimestampRow>($"SELECT id, ts FROM {table}"))
                 row = r;
 
             Assert.NotNull(row);

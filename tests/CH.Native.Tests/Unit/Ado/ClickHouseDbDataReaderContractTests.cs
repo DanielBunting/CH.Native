@@ -99,21 +99,21 @@ public class ClickHouseDbDataReaderContractTests
     }
 
     [Fact]
-    public void NextResult_AlwaysReturnsFalse()
+    public void NextResult_ThrowsNotSupported()
     {
         using var inner = BuildReader(IntCol);
         using var sut = new ClickHouseDbDataReader(inner);
 
-        Assert.False(sut.NextResult());
+        Assert.Throws<NotSupportedException>(() => sut.NextResult());
     }
 
     [Fact]
-    public async Task NextResultAsync_AlwaysReturnsFalse()
+    public async Task NextResultAsync_ThrowsNotSupported()
     {
         using var inner = BuildReader(IntCol);
         using var sut = new ClickHouseDbDataReader(inner);
 
-        Assert.False(await sut.NextResultAsync(CancellationToken.None));
+        await Assert.ThrowsAsync<NotSupportedException>(() => sut.NextResultAsync(CancellationToken.None));
     }
 
     [Fact]

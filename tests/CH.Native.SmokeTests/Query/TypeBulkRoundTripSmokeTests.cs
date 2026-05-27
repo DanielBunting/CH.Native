@@ -94,7 +94,7 @@ public class TypeBulkRoundTripSmokeTests
     {
         if (sessionSettings is null || sessionSettings.Length == 0)
         {
-            return await NativeQueryHelper.QueryAsync(connectionString, sql);
+            return await NativeQueryHelper.StreamAsync(connectionString, sql);
         }
 
         await using var conn = new ClickHouseConnection(connectionString);
@@ -105,7 +105,7 @@ public class TypeBulkRoundTripSmokeTests
         }
 
         var rows = new List<object?[]>();
-        await foreach (var row in conn.QueryAsync(sql))
+        await foreach (var row in conn.StreamAsync(sql))
         {
             var values = new object?[row.FieldCount];
             for (int i = 0; i < row.FieldCount; i++)
@@ -1224,7 +1224,7 @@ public class TypeBulkRoundTripSmokeTests
             });
             await inserter.CompleteAsync();
 
-            var postRead = await NativeQueryHelper.QueryAsync(
+            var postRead = await NativeQueryHelper.StreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT id, nested.key, nested.value FROM {table} ORDER BY id");
 
@@ -1270,7 +1270,7 @@ public class TypeBulkRoundTripSmokeTests
                 _fixture.NativeConnectionString,
                 $"INSERT INTO {table} VALUES {insertValues}");
 
-            var rows = await NativeQueryHelper.QueryAsync(
+            var rows = await NativeQueryHelper.StreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT {selectExpr} FROM {table} ORDER BY 1");
 
@@ -1346,7 +1346,7 @@ public class TypeBulkRoundTripSmokeTests
             await inserter.CompleteAsync();
 
             // SELECT only id — skippers handle all other columns.
-            var postRead = await NativeQueryHelper.QueryAsync(
+            var postRead = await NativeQueryHelper.StreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT id FROM {table} ORDER BY id");
 
@@ -1416,7 +1416,7 @@ public class TypeBulkRoundTripSmokeTests
             await inserter.CompleteAsync();
 
             // SELECT only id + trailing — skippers must walk every LC-containing column.
-            var postRead = await NativeQueryHelper.QueryAsync(
+            var postRead = await NativeQueryHelper.StreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT id, trailing FROM {table} ORDER BY id");
 
@@ -1513,7 +1513,7 @@ public class TypeBulkRoundTripSmokeTests
             }
             await inserter.CompleteAsync();
 
-            var postRead = await NativeQueryHelper.QueryAsync(
+            var postRead = await NativeQueryHelper.StreamAsync(
                 connStr,
                 $"SELECT id, val FROM {table} ORDER BY id LIMIT 3");
             Assert.Equal(3, postRead.Count);
@@ -1851,7 +1851,7 @@ public class TypeBulkRoundTripSmokeTests
             await inserter.AddAsync(new LowCardArrayRow { Id = 2, Lc = "red", Arr = new[] { 3 } });
             await inserter.CompleteAsync();
 
-            var native = await NativeQueryHelper.QueryAsync(
+            var native = await NativeQueryHelper.StreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT id, lc, arr FROM {table} ORDER BY id");
 

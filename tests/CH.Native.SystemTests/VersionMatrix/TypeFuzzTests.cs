@@ -61,7 +61,7 @@ public class TypeFuzzTests
             }
 
             var got = new List<DecRow>();
-            await foreach (var r in conn.QueryAsync($"SELECT id, d32, d64, ts FROM {table} ORDER BY id"))
+            await foreach (var r in conn.StreamAsync($"SELECT id, d32, d64, ts FROM {table} ORDER BY id"))
             {
                 got.Add(new DecRow
                 {
@@ -96,7 +96,7 @@ public class TypeFuzzTests
         await using var conn = new ClickHouseConnection(settings);
         await conn.OpenAsync();
 
-        await foreach (var r in conn.QueryAsync(
+        await foreach (var r in conn.StreamAsync(
             "SELECT cast([[1,2],[3,4,5],[]] AS Array(Array(Int32)))"))
         {
             var outer = r.GetFieldValue<int[][]>(0);

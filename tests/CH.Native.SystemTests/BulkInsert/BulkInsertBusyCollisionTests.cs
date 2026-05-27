@@ -57,7 +57,7 @@ public class BulkInsertBusyCollisionTests
         // exception without scheduler noise.
         var ex = await Assert.ThrowsAsync<ClickHouseConnectionBusyException>(async () =>
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1")) { }
+            await foreach (var _ in conn.StreamAsync<int>("SELECT 1")) { }
         });
 
         _output.WriteLine($"Busy-collision threw: {ex.GetType().Name}: {ex.Message}");

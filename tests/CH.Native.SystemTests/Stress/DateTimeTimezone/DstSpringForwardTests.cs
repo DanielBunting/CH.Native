@@ -62,7 +62,7 @@ public class DstSpringForwardTests
             }
 
             var read = new List<DateTime>();
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table} ORDER BY id"))
+            await foreach (var r in conn.StreamAsync($"SELECT ts FROM {table} ORDER BY id"))
                 read.Add(r.GetFieldValue<DateTime>(0));
 
             Assert.Equal(2, read.Count);

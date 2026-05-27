@@ -50,7 +50,7 @@ public class HistoricalTimezoneTests
             }
 
             DateTime read = default;
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table}"))
+            await foreach (var r in conn.StreamAsync($"SELECT ts FROM {table}"))
                 read = r.GetFieldValue<DateTime>(0);
             Assert.Equal(instant, read);
 

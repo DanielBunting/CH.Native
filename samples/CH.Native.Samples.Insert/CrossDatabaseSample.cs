@@ -110,7 +110,7 @@ internal static class CrossDatabaseSample
             Console.WriteLine($"{dbInventory}.stock_movements: {stockRows:N0} rows");
 
             Console.WriteLine("\n--- Top 5 SKUs by ordered quantity ---");
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.StreamAsync(
                 $"""
                 SELECT sku, sum(qty) AS total_qty
                 FROM {dbOrders}.line_items
@@ -123,7 +123,7 @@ internal static class CrossDatabaseSample
             }
 
             Console.WriteLine("\n--- Net stock change per warehouse ---");
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.StreamAsync(
                 $"""
                 SELECT warehouse, sum(delta) AS net_delta
                 FROM {dbInventory}.stock_movements

@@ -10,7 +10,7 @@ namespace CH.Native.Samples.Queries;
 /// <remarks>
 /// Pure query showcase — table is seeded server-side via <c>INSERT … SELECT FROM numbers()</c>
 /// so the sample stays focused on the read shapes. Each query uses
-/// <c>connection.QueryAsync(sql)</c> → <c>IAsyncEnumerable&lt;ClickHouseRow&gt;</c>
+/// <c>connection.StreamAsync(sql)</c> → <c>IAsyncEnumerable&lt;ClickHouseRow&gt;</c>
 /// for schemaless access by column name; swap to <c>QueryAsync&lt;T&gt;</c> if you want
 /// POCO mapping. For the bulk-insert side of log ingestion see the
 /// <c>long-lived</c> and <c>async-stream</c> samples in <c>CH.Native.Samples.Insert</c>.
@@ -68,7 +68,7 @@ internal static class LogAnalyticsSample
             var volumeQueryId = $"log-analytics-volume-{Guid.NewGuid():N}";
 
             Console.WriteLine("\n--- Log volume by level ---");
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.StreamAsync(
                 $"SELECT level, count() AS cnt FROM {tableName} GROUP BY level ORDER BY cnt DESC",
                 cts.Token,
                 queryId: volumeQueryId))
@@ -83,7 +83,7 @@ internal static class LogAnalyticsSample
             var windowEnd = windowStart.AddHours(28);
 
             Console.WriteLine("\n--- Average duration by service (parameterised window) ---");
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.StreamAsync(
                 $"""
                 SELECT
                     service,
@@ -111,7 +111,7 @@ internal static class LogAnalyticsSample
             };
 
             Console.WriteLine("\n--- Error rate by hour ---");
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.StreamAsync(
                 $"""
                 SELECT
                     toStartOfHour(timestamp)                                        AS hour,
@@ -136,7 +136,7 @@ internal static class LogAnalyticsSample
             const int topN = 10;
 
             Console.WriteLine($"\n--- Top {topN} slowest requests (>= {minDurationMs}ms) ---");
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.StreamAsync(
                 $"""
                 SELECT timestamp, service, level, duration_ms, message
                 FROM {tableName}

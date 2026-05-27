@@ -144,7 +144,7 @@ public class TimeoutPrecedenceTests
         var sw = System.Diagnostics.Stopwatch.StartNew();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT sleep(2)").WithCancellation(cts.Token)) { }
+            await foreach (var _ in conn.StreamAsync<int>("SELECT sleep(2)").WithCancellation(cts.Token)) { }
         });
         sw.Stop();
 

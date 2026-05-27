@@ -96,7 +96,7 @@ public class SimpleQueryBenchmarks
     public async Task<int> Native_Select100()
     {
         int count = 0;
-        await foreach (var row in _nativeConnection.QueryAsync(
+        await foreach (var row in _nativeConnection.StreamAsync(
             $"SELECT * FROM {TestDataGenerator.SimpleTable}"))
         {
             count++;

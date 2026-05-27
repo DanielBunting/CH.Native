@@ -52,7 +52,7 @@ internal static class MapColumnSample
             // Pre-existing behaviour. The duplicate-key entry from tenant 4001
             // becomes a single ['payments.timeout' => '500ms'] (last-wins).
             Console.WriteLine("\n--- Read as Dictionary<,> (default; lossy for duplicates) ---");
-            await foreach (var row in connection.QueryAsync<TenantOverridesAsDictionary>(
+            await foreach (var row in connection.StreamAsync<TenantOverridesAsDictionary>(
                 $"SELECT tenant_id, overrides FROM {tableName} ORDER BY tenant_id"))
             {
                 Console.WriteLine($"  tenant {row.TenantId}: {row.Overrides.Count} entries");
@@ -64,7 +64,7 @@ internal static class MapColumnSample
             // Same query, same wire bytes, different POCO. The property type
             // alone selects the entries reader for this call.
             Console.WriteLine("\n--- Read as ClickHouseMap<,> (lossless; preserves duplicates and order) ---");
-            await foreach (var row in connection.QueryAsync<TenantOverridesAsClickHouseMap>(
+            await foreach (var row in connection.StreamAsync<TenantOverridesAsClickHouseMap>(
                 $"SELECT tenant_id, overrides FROM {tableName} ORDER BY tenant_id"))
             {
                 Console.WriteLine(

@@ -143,7 +143,7 @@ public class DateTimeKindSemanticsTests
                 $"INSERT INTO {table} VALUES (toDateTime('2024-06-15 12:00:00', 'UTC'))");
 
             DateTime read = default;
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table}"))
+            await foreach (var r in conn.StreamAsync($"SELECT ts FROM {table}"))
                 read = r.GetFieldValue<DateTime>(0);
 
             Assert.Equal(DateTimeKind.Utc, read.Kind);
@@ -174,7 +174,7 @@ public class DateTimeKindSemanticsTests
                 $"INSERT INTO {table} VALUES (toDateTime('{utcLiteral}', 'UTC'))");
 
             DateTimeOffset read = default;
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table}"))
+            await foreach (var r in conn.StreamAsync($"SELECT ts FROM {table}"))
                 read = r.GetFieldValue<DateTimeOffset>(0);
 
             Assert.Equal(TimeSpan.FromHours(expectedHours), read.Offset);
@@ -206,7 +206,7 @@ public class DateTimeKindSemanticsTests
             }
 
             DateTime read = default;
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table}"))
+            await foreach (var r in conn.StreamAsync($"SELECT ts FROM {table}"))
                 read = r.GetFieldValue<DateTime>(0);
 
             Assert.Equal(DateTimeKind.Utc, read.Kind);

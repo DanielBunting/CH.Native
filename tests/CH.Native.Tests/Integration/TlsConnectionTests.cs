@@ -165,7 +165,7 @@ public class TlsConnectionTests
         await connection.OpenAsync();
 
         var count = 0;
-        await foreach (var row in connection.QueryAsync("SELECT number FROM system.numbers LIMIT 10"))
+        await foreach (var row in connection.StreamAsync("SELECT number FROM system.numbers LIMIT 10"))
         {
             count++;
         }

@@ -45,7 +45,7 @@ public class DynamicBulkInsertTests
             Assert.Equal(2, count);
 
             var types = new List<string>();
-            await foreach (var row in connection.QueryAsync($"SELECT event_type FROM {tableName} ORDER BY ts"))
+            await foreach (var row in connection.StreamAsync($"SELECT event_type FROM {tableName} ORDER BY ts"))
             {
                 types.Add(row.GetFieldValue<string>("event_type"));
             }

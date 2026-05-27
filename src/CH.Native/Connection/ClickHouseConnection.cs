@@ -29,7 +29,7 @@ namespace CH.Native.Connection;
 /// ADO.NET-facing consumers (Dapper, EF Core's <see cref="IDbConnection"/>
 /// extension points, OpenTelemetry SqlClient instrumentation) without an
 /// intermediate wrapper. The native API (<see cref="ExecuteScalarAsync{T}(string,CancellationToken)"/>,
-/// <see cref="QueryAsync{T}(string,CancellationToken)"/>, etc.) is unchanged.
+/// <see cref="StreamAsync{T}(string,CancellationToken,string?)"/>, etc.) is unchanged.
 /// </summary>
 public sealed class ClickHouseConnection : DbConnection
 {
@@ -1990,13 +1990,19 @@ public sealed class ClickHouseConnection : DbConnection
     }
 
     /// <summary>
-    /// Executes a query and returns an async enumerable of rows.
+    /// Streams query results as an async enumerable of rows. Use <c>await foreach</c>
+    /// to iterate; rows arrive lazily without buffering the full result set in
+    /// memory. Renamed from <c>QueryAsync</c> in Phase 2 so the call site name
+    /// no longer collides with Dapper's materialized
+    /// <see cref="System.Data.IDbConnection"/> extension methods — bare
+    /// <c>conn.QueryAsync&lt;T&gt;(sql)</c> on a <see cref="ClickHouseConnection"/>
+    /// now binds to Dapper (returns <c>Task&lt;IEnumerable&lt;T&gt;&gt;</c>).
     /// </summary>
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>An async enumerable of rows.</returns>
-    public async IAsyncEnumerable<ClickHouseRow> QueryAsync(
+    public async IAsyncEnumerable<ClickHouseRow> StreamAsync(
         string sql,
         [EnumeratorCancellation] CancellationToken cancellationToken = default,
         string? queryId = null)
@@ -2010,14 +2016,16 @@ public sealed class ClickHouseConnection : DbConnection
     }
 
     /// <summary>
-    /// Executes a query and returns an async enumerable of mapped objects.
+    /// Streams query results as an async enumerable of mapped objects.
+    /// Renamed from <c>QueryAsync</c> in Phase 2 to free the call-site name for
+    /// Dapper's <see cref="System.Data.IDbConnection"/> extension methods.
     /// </summary>
     /// <typeparam name="T">The type to map rows to. Must have a parameterless constructor.</typeparam>
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>An async enumerable of mapped objects.</returns>
-    public async IAsyncEnumerable<T> QueryAsync<T>(
+    public async IAsyncEnumerable<T> StreamAsync<T>(
         string sql,
         [EnumeratorCancellation] CancellationToken cancellationToken = default,
         string? queryId = null)

@@ -80,7 +80,7 @@ internal static class AsyncStreamSample
                               $"{sw.Elapsed.TotalMilliseconds:F0}ms.");
 
             Console.WriteLine("\n--- Counts by event_type ---");
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.StreamAsync(
                 $"SELECT event_type, count() AS n FROM {tableName} GROUP BY event_type ORDER BY n DESC"))
             {
                 Console.WriteLine($"  {row["event_type"]}: {row["n"]:N0}");

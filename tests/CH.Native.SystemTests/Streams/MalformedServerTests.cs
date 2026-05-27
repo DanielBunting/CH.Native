@@ -48,7 +48,7 @@ public class MalformedServerTests
         // regression deadlock to fail the test instead of hanging the run.
         var query = Task.Run(async () =>
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1")) { }
+            await foreach (var _ in conn.StreamAsync<int>("SELECT 1")) { }
         });
 
         var winner = await Task.WhenAny(query, Task.Delay(AntiHangTimeout));
@@ -81,7 +81,7 @@ public class MalformedServerTests
 
         var query = Task.Run(async () =>
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1")) { }
+            await foreach (var _ in conn.StreamAsync<int>("SELECT 1")) { }
         });
 
         var winner = await Task.WhenAny(query, Task.Delay(AntiHangTimeout));
@@ -130,7 +130,7 @@ public class MalformedServerTests
 
         var query = Task.Run(async () =>
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1")) { }
+            await foreach (var _ in conn.StreamAsync<int>("SELECT 1")) { }
         });
 
         var winner = await Task.WhenAny(query, Task.Delay(AntiHangTimeout));
@@ -166,7 +166,7 @@ public class MalformedServerTests
         ClickHouseServerException? thrown = null;
         try
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1")) { }
+            await foreach (var _ in conn.StreamAsync<int>("SELECT 1")) { }
         }
         catch (ClickHouseServerException ex) { thrown = ex; }
 
@@ -197,7 +197,7 @@ public class MalformedServerTests
         ClickHouseServerException? thrown = null;
         try
         {
-            await foreach (var row in conn.QueryAsync<int>("SELECT 1"))
+            await foreach (var row in conn.StreamAsync<int>("SELECT 1"))
             {
                 blocksObserved++;
             }
@@ -229,7 +229,7 @@ public class MalformedServerTests
 
         var query = Task.Run(async () =>
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1")) { }
+            await foreach (var _ in conn.StreamAsync<int>("SELECT 1")) { }
         });
 
         var winner = await Task.WhenAny(query, Task.Delay(TimeSpan.FromSeconds(10)));
@@ -260,7 +260,7 @@ public class MalformedServerTests
 
         var query = Task.Run(async () =>
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1")) { }
+            await foreach (var _ in conn.StreamAsync<int>("SELECT 1")) { }
         });
 
         var winner = await Task.WhenAny(query, Task.Delay(TimeSpan.FromSeconds(10)));
@@ -291,7 +291,7 @@ public class MalformedServerTests
         OperationCanceledException? caught = null;
         try
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1").WithCancellation(cts.Token)) { }
+            await foreach (var _ in conn.StreamAsync<int>("SELECT 1").WithCancellation(cts.Token)) { }
         }
         catch (OperationCanceledException ex) { caught = ex; }
 
@@ -364,7 +364,7 @@ public class MalformedServerTests
 
         // Query 1 response — drained by the first foreach.
         mock.EnqueueBytes(BuildEmptyBlockPlusEosPlusJunk(junkBytes: 0));
-        await foreach (var _ in conn.QueryAsync<int>("SELECT 1")) { }
+        await foreach (var _ in conn.StreamAsync<int>("SELECT 1")) { }
 
         Assert.True(conn.CanBePooled, "after a clean EOS the connection must remain reusable");
 
@@ -376,7 +376,7 @@ public class MalformedServerTests
 
         var query2 = Task.Run(async () =>
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 2")) { }
+            await foreach (var _ in conn.StreamAsync<int>("SELECT 2")) { }
         });
         var winner = await Task.WhenAny(query2, Task.Delay(AntiHangTimeout));
         Assert.Same(query2, winner);
@@ -401,7 +401,7 @@ public class MalformedServerTests
 
         // First query: clean response.
         mock.EnqueueBytes(BuildEmptyBlockPlusEosPlusJunk(junkBytes: 0));
-        await foreach (var _ in conn.QueryAsync<int>("SELECT 1")) { }
+        await foreach (var _ in conn.StreamAsync<int>("SELECT 1")) { }
         Assert.True(conn.CanBePooled, "clean first query must not poison");
 
         // Inject 16 bytes of junk that the server has no business sending. They
@@ -413,7 +413,7 @@ public class MalformedServerTests
 
         var query2 = Task.Run(async () =>
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 2")) { }
+            await foreach (var _ in conn.StreamAsync<int>("SELECT 2")) { }
         });
         var winner = await Task.WhenAny(query2, Task.Delay(AntiHangTimeout));
         Assert.Same(query2, winner);
@@ -450,7 +450,7 @@ public class MalformedServerTests
 
         // --- q1 ---
         mock.EnqueueBytes(BuildEmptyBlockPlusEosPlusJunk(junkBytes: 0));
-        await foreach (var _ in conn.QueryAsync<int>("SELECT 1")) { }
+        await foreach (var _ in conn.StreamAsync<int>("SELECT 1")) { }
         Assert.True(conn.CanBePooled);
 
         // --- q2 ---
@@ -461,7 +461,7 @@ public class MalformedServerTests
         ClickHouseServerException? q2Ex = null;
         try
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 2")) { }
+            await foreach (var _ in conn.StreamAsync<int>("SELECT 2")) { }
         }
         catch (ClickHouseServerException ex) { q2Ex = ex; }
 
@@ -474,7 +474,7 @@ public class MalformedServerTests
         mock.EnqueueBytes(BuildEmptyBlockPlusEosPlusJunk(junkBytes: 0));
         var q3 = Task.Run(async () =>
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 3")) { }
+            await foreach (var _ in conn.StreamAsync<int>("SELECT 3")) { }
         });
         var winner = await Task.WhenAny(q3, Task.Delay(AntiHangTimeout));
         Assert.Same(q3, winner);
@@ -508,7 +508,7 @@ public class MalformedServerTests
 
         var query = Task.Run(async () =>
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1")) { }
+            await foreach (var _ in conn.StreamAsync<int>("SELECT 1")) { }
         });
 
         var winner = await Task.WhenAny(query, Task.Delay(AntiHangTimeout));
