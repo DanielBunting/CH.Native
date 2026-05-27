@@ -163,6 +163,8 @@ Global
 		{B8721C2B-D296-48F0-A62A-3BBB12F50E77}.Release|x64.Build.0 = Release|Any CPU
 		{B8721C2B-D296-48F0-A62A-3BBB12F50E77}.Release|x86.ActiveCfg = Release|Any CPU
 		{B8721C2B-D296-48F0-A62A-3BBB12F50E77}.Release|x86.Build.0 = Release|Any CPU
+		{B32B8BE6-2FCB-5924-16A0-73331F9A8734}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B32B8BE6-2FCB-5924-16A0-73331F9A8734}.Debug|Any CPU.Build.0 = Debug|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

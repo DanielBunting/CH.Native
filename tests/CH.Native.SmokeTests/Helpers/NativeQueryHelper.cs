@@ -4,7 +4,7 @@ namespace CH.Native.SmokeTests.Helpers;
 
 public static class NativeQueryHelper
 {
-    public static async Task<List<object?[]>> QueryAsync(string connectionString, string sql)
+    public static async Task<List<object?[]>> StreamAsync(string connectionString, string sql)
     {
         var results = new List<object?[]>();
 

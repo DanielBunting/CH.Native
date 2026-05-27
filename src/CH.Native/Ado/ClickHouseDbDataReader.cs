@@ -177,14 +177,11 @@ public sealed class ClickHouseDbDataReader : DbDataReader
     }
 
     /// <inheritdoc />
-    /// <exception cref="NotSupportedException">ClickHouse does not support multiple result sets.</exception>
-    public override bool NextResult()
-        => throw new NotSupportedException("ClickHouse does not support multiple result sets. Use separate queries instead.");
+    public override bool NextResult() => false;
 
     /// <inheritdoc />
-    /// <exception cref="NotSupportedException">ClickHouse does not support multiple result sets.</exception>
     public override Task<bool> NextResultAsync(CancellationToken cancellationToken)
-        => Task.FromException<bool>(new NotSupportedException("ClickHouse does not support multiple result sets. Use separate queries instead."));
+        => Task.FromResult(false);
 
     /// <inheritdoc />
     /// <remarks>

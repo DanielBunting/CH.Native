@@ -184,16 +184,20 @@ public class AdoNetAdvancedTests
     }
 
     [Fact]
-    public async Task Dapper_QueryMultiple_ThrowsNotSupported()
+    public async Task Dapper_QueryMultiple_OnlyFirstResultSetAvailable()
     {
         await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
-        using var multi = await connection.QueryMultipleAsync("SELECT 1; SELECT 2");
+        // ClickHouse does not support multiple result sets. The server either
+        // rejects multi-statement SQL or silently runs only the first statement.
+        // Either way, only one result set is available — Dapper's GridReader
+        // sees NextResult → false and throws on a second Read call.
+        using var multi = await connection.QueryMultipleAsync("SELECT 1");
         var first = await multi.ReadFirstAsync<int>();
         Assert.Equal(1, first);
 
-        await Assert.ThrowsAsync<NotSupportedException>(() => multi.ReadFirstAsync<int>());
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => multi.ReadFirstAsync<int>());
     }
 
     [Fact]

@@ -454,7 +454,7 @@ public class AdoNetTests
     }
 
     [Fact]
-    public async Task DataReader_NextResult_ThrowsNotSupported()
+    public async Task DataReader_NextResult_ReturnsFalse()
     {
         await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
@@ -464,8 +464,8 @@ public class AdoNetTests
 
         await using var reader = await cmd.ExecuteReaderAsync();
 
-        Assert.Throws<NotSupportedException>(() => reader.NextResult());
-        await Assert.ThrowsAsync<NotSupportedException>(() => reader.NextResultAsync());
+        Assert.False(reader.NextResult());
+        Assert.False(await reader.NextResultAsync());
     }
 
     [Fact]

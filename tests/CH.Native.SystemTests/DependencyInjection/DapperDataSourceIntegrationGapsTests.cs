@@ -448,7 +448,9 @@ public sealed class DapperDataSourceIntegrationGapsTests
             var a = await grid.ReadFirstAsync<long>();
             Assert.Equal(1L, a);
 
-            await Assert.ThrowsAsync<NotSupportedException>(() => grid.ReadFirstAsync<long>());
+            // NextResult returns false, so Dapper's GridReader throws ObjectDisposedException
+            // when attempting to read a second result set.
+            await Assert.ThrowsAsync<ObjectDisposedException>(() => grid.ReadFirstAsync<long>());
         }
     }
 
