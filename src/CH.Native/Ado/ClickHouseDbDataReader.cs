@@ -133,11 +133,42 @@ public sealed class ClickHouseDbDataReader : DbDataReader
         return Task.Run(() => ReadAsync(CancellationToken.None)).GetAwaiter().GetResult();
     }
 
-    /// <inheritdoc />
-    public override async Task<bool> ReadAsync(CancellationToken cancellationToken)
-    {
-        ThrowIfClosed();
+    // Hot-path cached Tasks. The async builder caches these for Task<bool>,
+    // but the explicit references make the synchronous-completion fast path
+    // below allocation-free and self-documenting.
+    private static readonly Task<bool> s_completedTrue = Task.FromResult(true);
+    private static readonly Task<bool> s_completedFalse = Task.FromResult(false);
 
+    /// <inheritdoc />
+    public override Task<bool> ReadAsync(CancellationToken cancellationToken)
+    {
+        if (_closed)
+            return Task.FromException<bool>(
+                new ObjectDisposedException(nameof(ClickHouseDbDataReader), "The DataReader has been closed."));
+
+        // Fast path: no per-command timeout, no caller-cancellation request, and the
+        // schema-priming Read has already happened. This covers ~all calls past the
+        // first row on a successful query and avoids both the async state-machine
+        // allocation and the linked-CTS allocation on every row.
+        if (_timeoutCts is null && !cancellationToken.IsCancellationRequested && _initialized)
+        {
+            if (!_firstRowConsumed && _hasFirstRow)
+            {
+                _firstRowConsumed = true;
+                return s_completedTrue;
+            }
+
+            var vt = _inner.ReadAsync(cancellationToken);
+            if (vt.IsCompletedSuccessfully)
+                return vt.Result ? s_completedTrue : s_completedFalse;
+            return vt.AsTask();
+        }
+
+        return ReadAsyncSlow(cancellationToken);
+    }
+
+    private async Task<bool> ReadAsyncSlow(CancellationToken cancellationToken)
+    {
         // Combine the caller's token with the CommandTimeout CTS (if one was
         // set up by ExecuteDbDataReaderAsync) so the timeout fires per-row,
         // not just at the initial query dispatch.
@@ -152,17 +183,14 @@ public sealed class ClickHouseDbDataReader : DbDataReader
 
         try
         {
-            // First ensure we're initialized (gets schema + first row if any)
             await EnsureInitializedAsync(token).ConfigureAwait(false);
 
-            // If this is the first Read() call and we have a first row buffered, return it
             if (!_firstRowConsumed && _hasFirstRow)
             {
                 _firstRowConsumed = true;
                 return true;
             }
 
-            // Otherwise, read the next row
             return await _inner.ReadAsync(token).ConfigureAwait(false);
         }
         finally

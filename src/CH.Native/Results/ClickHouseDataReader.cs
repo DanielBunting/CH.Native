@@ -176,6 +176,17 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
             return VariantValueDispatcher<T>.Read(_currentBlock!, _currentRowIndex, ordinal);
         }
 
+        // Fast path: column storage matches the requested T exactly — read
+        // straight from TypedColumn<T>'s typed indexer with no boxing. Cuts
+        // ~24B/row for value-type columns on the Dapper-style row mapper hot
+        // path (which calls GetXxx via GetFieldValue<T> per column per row).
+        if (_currentBlock is not null && (uint)ordinal < (uint)_currentBlock.ColumnCount
+            && _currentBlock.Columns[ordinal] is TypedColumn<T> typedColumn)
+        {
+            EnsureCanRead();
+            return typedColumn[_currentRowIndex];
+        }
+
         var value = GetValue(ordinal);
 
         if (value is null)
@@ -288,7 +299,12 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
     /// <returns>True if the value is null; otherwise false.</returns>
     public bool IsDBNull(int ordinal)
     {
-        return GetValue(ordinal) is null;
+        EnsureCanRead();
+        ValidateOrdinal(ordinal);
+        // ITypedColumn.IsNull avoids the GetValue boxing for non-nullable
+        // value-type storage — TypedColumn<long/double/DateTime/...>
+        // short-circuits to `return false`.
+        return _currentBlock!.Columns[ordinal].IsNull(_currentRowIndex);
     }
 
     /// <summary>

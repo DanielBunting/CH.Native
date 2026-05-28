@@ -24,6 +24,14 @@ public interface ITypedColumn : IDisposable
     /// Use typed access via TypedColumn&lt;T&gt; when possible.
     /// </summary>
     object? GetValue(int index);
+
+    /// <summary>
+    /// Returns true if the value at <paramref name="index"/> is null.
+    /// The default implementation materialises via <see cref="GetValue(int)"/> and
+    /// boxes the value for the check; override in subclasses (e.g. <see cref="TypedColumn{T}"/>)
+    /// to skip the allocation for non-nullable storage.
+    /// </summary>
+    bool IsNull(int index) => GetValue(index) is null;
 }
 
 /// <summary>
@@ -83,6 +91,25 @@ public sealed class TypedColumn<T> : ITypedColumn
         if ((uint)index >= (uint)_length)
             throw new ArgumentOutOfRangeException(nameof(index));
         return _values[index];
+    }
+
+    /// <inheritdoc />
+    public bool IsNull(int index)
+    {
+        if (_values == null)
+            throw new ObjectDisposedException(nameof(TypedColumn<T>));
+        if ((uint)index >= (uint)_length)
+            throw new ArgumentOutOfRangeException(nameof(index));
+
+        // Non-nullable value-type storage cannot hold null. The JIT folds
+        // `default(T) is not null` to a constant for value types, so this
+        // becomes a direct `return false` per specialised T (long, double,
+        // DateTime, …). For string and Nullable<T>, fall through to a
+        // default-equality check that does not allocate.
+        if (default(T) is not null)
+            return false;
+
+        return EqualityComparer<T>.Default.Equals(_values[index], default!);
     }
 
     /// <inheritdoc />

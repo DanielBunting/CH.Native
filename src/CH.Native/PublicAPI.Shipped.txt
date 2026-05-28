@@ -497,6 +497,7 @@ CH.Native.Data.ITypedColumn
 CH.Native.Data.ITypedColumn.Count.get -> int
 CH.Native.Data.ITypedColumn.ElementType.get -> System.Type!
 CH.Native.Data.ITypedColumn.GetValue(int index) -> object?
+CH.Native.Data.ITypedColumn.IsNull(int index) -> bool
 CH.Native.Data.Json.JsonBinaryDecoder
 CH.Native.Data.NullableRawStringColumn
 CH.Native.Data.NullableRawStringColumn.Count.get -> int
@@ -548,6 +549,7 @@ CH.Native.Data.TypedColumn<T>.Count.get -> int
 CH.Native.Data.TypedColumn<T>.Dispose() -> void
 CH.Native.Data.TypedColumn<T>.ElementType.get -> System.Type!
 CH.Native.Data.TypedColumn<T>.GetValue(int index) -> object?
+CH.Native.Data.TypedColumn<T>.IsNull(int index) -> bool
 CH.Native.Data.TypedColumn<T>.TypedColumn(T[]! values, int? length = null, System.Buffers.ArrayPool<T>? pool = null) -> void
 CH.Native.Data.TypedColumn<T>.Values.get -> System.ReadOnlySpan<T>
 CH.Native.Data.TypedColumn<T>.this[int index].get -> T

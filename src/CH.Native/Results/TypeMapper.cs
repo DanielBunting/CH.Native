@@ -29,17 +29,10 @@ namespace CH.Native.Results;
 internal sealed class TypeMapper<T>
 {
     private readonly bool _useArgsCtor;
-    private readonly PropertyMap[] _propertyMaps;
+    private readonly Action<T, ClickHouseDataReader>[] _accessors;
     private readonly ConstructorInfo? _argsCtor;
     private readonly int[] _argsCtorOrdinals;
     private readonly Type[] _argsCtorParamTypes;
-
-    private readonly struct PropertyMap
-    {
-        public required int Ordinal { get; init; }
-        public required Action<T, object?> Setter { get; init; }
-        public required Type PropertyType { get; init; }
-    }
 
     /// <summary>
     /// Creates a new TypeMapper for the specified reader schema.
@@ -70,7 +63,7 @@ internal sealed class TypeMapper<T>
         if (parameterlessCtor is not null || t.IsValueType)
         {
             _useArgsCtor = false;
-            _propertyMaps = BuildPropertyMaps(reader);
+            _accessors = BuildAccessors(reader);
             _argsCtor = null;
             _argsCtorOrdinals = Array.Empty<int>();
             _argsCtorParamTypes = Array.Empty<Type>();
@@ -107,7 +100,7 @@ internal sealed class TypeMapper<T>
             }
 
             _useArgsCtor = true;
-            _propertyMaps = Array.Empty<PropertyMap>();
+            _accessors = Array.Empty<Action<T, ClickHouseDataReader>>();
         }
     }
 
@@ -122,11 +115,9 @@ internal sealed class TypeMapper<T>
             return MapViaArgsCtor(reader);
 
         var instance = Activator.CreateInstance<T>();
-        foreach (ref readonly var map in _propertyMaps.AsSpan())
+        foreach (var accessor in _accessors)
         {
-            var value = reader.GetValue(map.Ordinal);
-            var convertedValue = ConvertValue(value, map.PropertyType);
-            map.Setter(instance, convertedValue);
+            accessor(instance, reader);
         }
         return instance;
     }
@@ -180,12 +171,12 @@ internal sealed class TypeMapper<T>
         return param.Name ?? string.Empty;
     }
 
-    private static PropertyMap[] BuildPropertyMaps(ClickHouseDataReader reader)
+    private static Action<T, ClickHouseDataReader>[] BuildAccessors(ClickHouseDataReader reader)
     {
         var properties = typeof(T).GetProperties(
             BindingFlags.Public | BindingFlags.Instance);
 
-        var maps = new List<PropertyMap>();
+        var accessors = new List<Action<T, ClickHouseDataReader>>();
 
         foreach (var prop in properties)
         {
@@ -207,15 +198,121 @@ internal sealed class TypeMapper<T>
             if (ordinal < 0)
                 continue;
 
-            maps.Add(new PropertyMap
-            {
-                Ordinal = ordinal,
-                Setter = CreateSetter(prop),
-                PropertyType = prop.PropertyType
-            });
+            accessors.Add(CreateAccessor(prop, ordinal));
         }
 
-        return maps.ToArray();
+        return accessors.ToArray();
+    }
+
+    /// <summary>
+    /// Builds a per-property accessor that reads from the data reader and assigns
+    /// to the target instance. For "well-known" property types (primitives, string,
+    /// Guid, DateTime, DateTimeOffset, DateOnly, TimeOnly, and Nullable variants),
+    /// uses a typed Expression-compiled delegate that calls <c>GetFieldValue&lt;TProp&gt;</c>
+    /// directly — avoiding the per-value boxing of the legacy GetValue path.
+    /// For everything else (enums, arrays, dictionaries, ClickHouseMap, etc.),
+    /// falls back to the GetValue + ConvertValue + reflection-setter path.
+    /// </summary>
+    private static Action<T, ClickHouseDataReader> CreateAccessor(PropertyInfo property, int ordinal)
+    {
+        if (IsTypedAccessorEligible(property.PropertyType))
+            return CreateTypedAccessor(property, ordinal);
+
+        return CreateSlowAccessor(property, ordinal);
+    }
+
+    /// <summary>
+    /// Returns true if the property type maps 1:1 to a <see cref="Data.TypedColumn{T}"/>
+    /// storage we know the column readers emit (or its Nullable wrapper). Excludes types
+    /// that require additional conversion via <see cref="ConvertValue(object?, Type)"/>
+    /// (enums, arrays, ClickHouseMap/Dictionary shape conversions, etc.).
+    /// </summary>
+    private static bool IsTypedAccessorEligible(Type t)
+    {
+        var underlying = Nullable.GetUnderlyingType(t) ?? t;
+
+        return underlying == typeof(string)
+            || underlying == typeof(bool)
+            || underlying == typeof(byte)
+            || underlying == typeof(sbyte)
+            || underlying == typeof(short)
+            || underlying == typeof(ushort)
+            || underlying == typeof(int)
+            || underlying == typeof(uint)
+            || underlying == typeof(long)
+            || underlying == typeof(ulong)
+            || underlying == typeof(float)
+            || underlying == typeof(double)
+            || underlying == typeof(decimal)
+            || underlying == typeof(Guid)
+            || underlying == typeof(DateTime)
+            || underlying == typeof(DateTimeOffset)
+            || underlying == typeof(DateOnly)
+            || underlying == typeof(TimeOnly);
+    }
+
+    private static readonly MethodInfo GetFieldValueMethod = typeof(ClickHouseDataReader)
+        .GetMethods(BindingFlags.Public | BindingFlags.Instance)
+        .Single(m => m.Name == nameof(ClickHouseDataReader.GetFieldValue)
+            && m.IsGenericMethodDefinition
+            && m.GetParameters().Length == 1
+            && m.GetParameters()[0].ParameterType == typeof(int));
+
+    private static readonly MethodInfo IsDBNullMethod = typeof(ClickHouseDataReader)
+        .GetMethod(nameof(ClickHouseDataReader.IsDBNull), new[] { typeof(int) })!;
+
+    /// <summary>
+    /// Compiles an accessor that calls <c>reader.GetFieldValue&lt;TProp&gt;(ordinal)</c>
+    /// and assigns directly into the property setter — no boxing for value types.
+    /// For non-nullable value-type targets, skips the assignment when the column is
+    /// null (preserving the existing TypeMapper behaviour of leaving the property
+    /// at <c>default(T)</c> rather than throwing).
+    /// </summary>
+    private static Action<T, ClickHouseDataReader> CreateTypedAccessor(PropertyInfo property, int ordinal)
+    {
+        var targetParam = Expression.Parameter(typeof(T), "target");
+        var readerParam = Expression.Parameter(typeof(ClickHouseDataReader), "reader");
+        var propType = property.PropertyType;
+
+        var getFieldValueGeneric = GetFieldValueMethod.MakeGenericMethod(propType);
+        var ordinalExpr = Expression.Constant(ordinal);
+        var readCall = Expression.Call(readerParam, getFieldValueGeneric, ordinalExpr);
+        var propAccess = Expression.Property(targetParam, property);
+        var assign = Expression.Assign(propAccess, readCall);
+
+        // Non-nullable value type targets: skip the assign on null. Matches the
+        // legacy CreateSetter null-guard so callers that rely on default(T)
+        // semantics for null Nullable columns aren't surprised.
+        var isNullable = !propType.IsValueType || Nullable.GetUnderlyingType(propType) is not null;
+        Expression body;
+        if (isNullable)
+        {
+            body = assign;
+        }
+        else
+        {
+            var isDbNullCall = Expression.Call(readerParam, IsDBNullMethod, ordinalExpr);
+            body = Expression.IfThen(Expression.Not(isDbNullCall), assign);
+        }
+
+        return Expression.Lambda<Action<T, ClickHouseDataReader>>(body, targetParam, readerParam).Compile();
+    }
+
+    /// <summary>
+    /// Fallback for property types that need <see cref="ConvertValue(object?, Type)"/>
+    /// — enums, multi-dim array reshaping, Dictionary↔ClickHouseMap conversion, etc.
+    /// Pays the same per-value boxing cost as the legacy mapper.
+    /// </summary>
+    private static Action<T, ClickHouseDataReader> CreateSlowAccessor(PropertyInfo property, int ordinal)
+    {
+        var setter = CreateSetter(property);
+        var propType = property.PropertyType;
+        return (target, reader) =>
+        {
+            var value = reader.GetValue(ordinal);
+            var convertedValue = ConvertValue(value, propType);
+            setter(target, convertedValue);
+        };
     }
 
     private static int TryGetOrdinal(ClickHouseDataReader reader, string propertyName)

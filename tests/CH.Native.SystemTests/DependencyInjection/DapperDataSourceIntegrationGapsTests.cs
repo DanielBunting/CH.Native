@@ -3,7 +3,11 @@ using System.Data.Common;
 using System.Reflection;
 using CH.Native.Ado;
 using CH.Native.Connection;
-using CH.Native.Dapper;
+// CH.Native.Dapper intentionally NOT imported — `using Dapper;` below brings
+// Dapper's IDbConnection extensions into scope, and importing CH.Native.Dapper
+// here would create ambiguity with our IDbConnectionDapperExtensions. The only
+// call from CH.Native.Dapper in this file is the Register() one-shot below,
+// which is fully qualified.
 using CH.Native.DependencyInjection;
 using CH.Native.SystemTests.Fixtures;
 using Dapper;
@@ -48,7 +52,7 @@ public sealed class DapperDataSourceIntegrationGapsTests
         // calls below honour CH.Native's array handlers and snake_case
         // matching — without it the Dapper-path baseline would diverge
         // from the typed-row-mapper path.
-        ClickHouseDapperIntegration.Register();
+        CH.Native.Dapper.ClickHouseDapperIntegration.Register();
     }
 
     public DapperDataSourceIntegrationGapsTests(SingleNodeFixture fx, ITestOutputHelper output)
@@ -631,6 +635,9 @@ public sealed class DapperDataSourceIntegrationGapsTests
         await using (p)
         await using (s)
         {
+            // Qualified to disambiguate from CH.Native.Dapper.IDbConnectionDapperExtensions,
+            // which is now in scope via the project ref. The test asserts behaviour of
+            // Dapper's classic path against a DataSource-opened DbConnection.
             Assert.Equal(1L, (await p.QueryAsync<long>("SELECT toInt64(1)")).Single());
             Assert.Equal(2L, (await s.QueryAsync<long>("SELECT toInt64(2)")).Single());
         }

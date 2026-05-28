@@ -178,4 +178,73 @@ public class LargeResultSetBenchmarks
         }
         return results;
     }
+
+    // -------------------------------------------------------------------------
+    // String-reading streaming benchmarks. The existing streaming benchmarks
+    // only read `id` (long), so they don't measure the string path. These
+    // variants read BOTH `id` and `name` (String column) and aggregate both:
+    // sum of ids + total string length. Same workload across all paths so the
+    // numbers are directly comparable. Returning the (sum, totalLen) tuple to
+    // BenchmarkDotNet ensures the JIT can't elide the string read.
+    // -------------------------------------------------------------------------
+
+    [Benchmark(Description = "Streaming Read+String - Native")]
+    public async Task<(long sum, long totalLen)> Native_StreamingRead_WithString()
+    {
+        long sum = 0;
+        long totalLen = 0;
+        await foreach (var row in _nativeConnection.QueryStreamAsync(
+            $"SELECT id, name FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}"))
+        {
+            sum += row.GetFieldValue<long>("id");
+            totalLen += row.GetFieldValue<string>("name").Length;
+        }
+        return (sum, totalLen);
+    }
+
+    [Benchmark(Description = "Streaming Read+String - Native (Lazy)")]
+    public async Task<(long sum, long totalLen)> NativeLazy_StreamingRead_WithString()
+    {
+        long sum = 0;
+        long totalLen = 0;
+        await foreach (var row in _nativeLazyConnection.QueryStreamAsync(
+            $"SELECT id, name FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}"))
+        {
+            sum += row.GetFieldValue<long>("id");
+            totalLen += row.GetFieldValue<string>("name").Length;
+        }
+        return (sum, totalLen);
+    }
+
+    [Benchmark(Description = "Streaming Read+String - Driver")]
+    public async Task<(long sum, long totalLen)> Driver_StreamingRead_WithString()
+    {
+        long sum = 0;
+        long totalLen = 0;
+        using var cmd = _driverConnection.CreateCommand();
+        cmd.CommandText = $"SELECT id, name FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}";
+        using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            sum += reader.GetInt64(0);
+            totalLen += reader.GetString(1).Length;
+        }
+        return (sum, totalLen);
+    }
+
+    [Benchmark(Description = "Streaming Read+String - Octonica")]
+    public async Task<(long sum, long totalLen)> Octonica_StreamingRead_WithString()
+    {
+        long sum = 0;
+        long totalLen = 0;
+        using var cmd = _octonicaConnection.CreateCommand(
+            $"SELECT id, name FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}");
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            sum += reader.GetInt64(0);
+            totalLen += reader.GetString(1).Length;
+        }
+        return (sum, totalLen);
+    }
 }

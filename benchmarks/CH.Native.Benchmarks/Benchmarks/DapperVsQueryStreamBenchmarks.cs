@@ -1,10 +1,15 @@
 using BenchmarkDotNet.Attributes;
 using CH.Native.Benchmarks.Infrastructure;
-using CH.Native.Dapper;
 using Dapper;
 using NativeConnection = CH.Native.Connection.ClickHouseConnection;
 using NativeAdoConnection = CH.Native.Ado.ClickHouseDbConnection;
 using DriverConnection = ClickHouse.Driver.ADO.ClickHouseConnection;
+// CH.Native.Dapper is NOT imported because its IDbConnectionDapperExtensions
+// conflicts with Dapper.SqlMapper at the IDbConnection-typed call sites used
+// by the existing Driver benchmarks. The new CH.Native.Dapper-backed
+// benchmarks call its static classes explicitly to disambiguate.
+using ChNativeDapper = CH.Native.Dapper.ClickHouseDbConnectionDapperExtensions;
+using ChNativeDapperIDb = CH.Native.Dapper.IDbConnectionDapperExtensions;
 
 namespace CH.Native.Benchmarks.Benchmarks;
 
@@ -38,7 +43,7 @@ public class DapperVsQueryStreamBenchmarks
         await BenchmarkContainerManager.Instance.EnsureInitializedAsync();
         await TestDataGenerator.EnsureTablesCreatedAsync();
 
-        ClickHouseDapperIntegration.Register();
+        CH.Native.Dapper.ClickHouseDapperIntegration.Register();
 
         var manager = BenchmarkContainerManager.Instance;
 
@@ -164,6 +169,172 @@ public class DapperVsQueryStreamBenchmarks
             count++;
         }
         return count;
+    }
+
+    // Diagnostic: bypass Dapper entirely and exercise IsDBNull + GetXxx on
+    // ClickHouseDbDataReader directly. Confirms whether per-row boxing is on
+    // our side or somewhere in Dapper's codegen.
+
+    [Benchmark(Description = "1M rows - Direct IsDBNull+GetXxx (no Dapper)")]
+    public async Task<long> Direct_IsDBNull_GetXxx_Large()
+    {
+        using var cmd = _nativeAdoConnection.CreateCommand();
+        cmd.CommandText = LargeSql;
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        long sum = 0;
+        while (await reader.ReadAsync())
+        {
+            if (!reader.IsDBNull(0)) sum += reader.GetInt64(0);
+            if (!reader.IsDBNull(2)) sum += (long)reader.GetDouble(2);
+            if (!reader.IsDBNull(3)) sum += reader.GetDateTime(3).Ticks;
+        }
+        return sum;
+    }
+
+    // Diagnostic: simulate Dapper's actual access pattern — `reader[i]` which
+    // calls GetValue(int) and boxes value types. If this matches Dapper's
+    // allocation profile, we know the indexer is the hot path.
+    [Benchmark(Description = "1M rows - Direct GetValue (indexer) (no Dapper)")]
+    public async Task<long> Direct_GetValue_Large()
+    {
+        using var cmd = _nativeAdoConnection.CreateCommand();
+        cmd.CommandText = LargeSql;
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        long sum = 0;
+        while (await reader.ReadAsync())
+        {
+            var v0 = reader.GetValue(0);
+            var v2 = reader.GetValue(2);
+            var v3 = reader.GetValue(3);
+            if (v0 is long l) sum += l;
+            if (v2 is double d) sum += (long)d;
+            if (v3 is DateTime dt) sum += dt.Ticks;
+        }
+        return sum;
+    }
+
+    // Diagnostic: hand-rolled mapper that mirrors what an optimal Dapper-style
+    // mapper would do — IsDBNull + typed GetXxx per column, materialise into
+    // SimpleRow, accumulate in a List<T>. If this is close to Dapper's number,
+    // the gap is Dapper's own machinery (delegate dispatch, parameter array,
+    // member set). If it's far below, Dapper is using a slower access pattern
+    // (e.g. GetValue indexer with boxing).
+    [Benchmark(Description = "1M rows - Hand-rolled mapper (typed accessors)")]
+    public async Task<int> Direct_HandRolledMapper_Large()
+    {
+        using var cmd = _nativeAdoConnection.CreateCommand();
+        cmd.CommandText = LargeSql;
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        var list = new List<SimpleRow>(capacity: 1_048_576);
+        while (await reader.ReadAsync())
+        {
+            list.Add(new SimpleRow
+            {
+                Id = reader.IsDBNull(0) ? 0L : reader.GetInt64(0),
+                Name = reader.IsDBNull(1) ? "" : reader.GetString(1),
+                Value = reader.IsDBNull(2) ? 0d : reader.GetDouble(2),
+                Created = reader.IsDBNull(3) ? default : reader.GetDateTime(3),
+            });
+        }
+        return list.Count;
+    }
+
+    // ----------------------------------------------------------------------
+    // CH.Native.Dapper fast-path benchmarks (the deliverable of this work).
+    // Same Dapper-style call shape, but routed through CH.Native's typed
+    // mapper. Expect allocations to match the hand-rolled-typed-accessor
+    // floor (~172 MB / 1M rows) instead of the boxing-tax ~304 MB.
+    // ----------------------------------------------------------------------
+
+    // --- 100 rows ---
+
+    [Benchmark(Description = "100 rows - CH.Native.Dapper QueryAsync<T> (typed conn)")]
+    public async Task<int> ChDapper_QueryAsync_Typed_Small()
+    {
+        var rows = await ChNativeDapper.QueryAsync<SimpleRow>(_nativeAdoConnection, SmallSql);
+        return rows.Count;
+    }
+
+    [Benchmark(Description = "100 rows - CH.Native.Dapper QueryStreamAsync<T> (typed conn)")]
+    public async Task<int> ChDapper_QueryStream_Typed_Small()
+    {
+        int count = 0;
+        await foreach (var _ in ChNativeDapper.QueryStreamAsync<SimpleRow>(_nativeAdoConnection, SmallSql))
+        {
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "100 rows - CH.Native.Dapper QueryAsync<T> (via IDbConnection)")]
+    public async Task<int> ChDapper_QueryAsync_ViaIDbConnection_Small()
+    {
+        System.Data.IDbConnection conn = _nativeAdoConnection;
+        // Mirrors the user pattern of replacing `using Dapper;` with
+        // `using CH.Native.Dapper;`. We qualify explicitly because both
+        // namespaces are imported in this benchmark file.
+        var rows = await ChNativeDapperIDb.QueryAsync<SimpleRow>(conn, SmallSql);
+        return rows.Count();
+    }
+
+    // --- 1M rows ---
+
+    [Benchmark(Description = "1M rows - CH.Native.Dapper QueryAsync<T> (typed conn)")]
+    public async Task<int> ChDapper_QueryAsync_Typed_Large()
+    {
+        var rows = await ChNativeDapper.QueryAsync<SimpleRow>(_nativeAdoConnection, LargeSql);
+        return rows.Count;
+    }
+
+    [Benchmark(Description = "1M rows - CH.Native.Dapper QueryStreamAsync<T> (typed conn)")]
+    public async Task<int> ChDapper_QueryStream_Typed_Large()
+    {
+        int count = 0;
+        await foreach (var _ in ChNativeDapper.QueryStreamAsync<SimpleRow>(_nativeAdoConnection, LargeSql))
+        {
+            count++;
+        }
+        return count;
+    }
+
+    [Benchmark(Description = "1M rows - CH.Native.Dapper QueryAsync<T> (via IDbConnection)")]
+    public async Task<int> ChDapper_QueryAsync_ViaIDbConnection_Large()
+    {
+        System.Data.IDbConnection conn = _nativeAdoConnection;
+        var rows = await ChNativeDapperIDb.QueryAsync<SimpleRow>(conn, LargeSql);
+        return rows.Count();
+    }
+
+    // Diagnostic: hand-rolled mapper that mirrors what Dapper's compiled
+    // delegate actually emits — GetValue(i) + DBNull/null check + cast. If this
+    // matches Dapper's allocation profile, we've confirmed Dapper bypasses the
+    // typed accessors and routes everything through GetValue (boxing).
+    [Benchmark(Description = "1M rows - Hand-rolled mapper (GetValue + cast)")]
+    public async Task<int> Direct_HandRolledMapper_GetValue_Large()
+    {
+        using var cmd = _nativeAdoConnection.CreateCommand();
+        cmd.CommandText = LargeSql;
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        var list = new List<SimpleRow>(capacity: 1_048_576);
+        while (await reader.ReadAsync())
+        {
+            var v0 = reader.GetValue(0);
+            var v1 = reader.GetValue(1);
+            var v2 = reader.GetValue(2);
+            var v3 = reader.GetValue(3);
+            list.Add(new SimpleRow
+            {
+                Id = v0 is long id ? id : 0L,
+                Name = v1 as string ?? "",
+                Value = v2 is double val ? val : 0d,
+                Created = v3 is DateTime dt ? dt : default,
+            });
+        }
+        return list.Count;
     }
 
     public sealed class SimpleRow

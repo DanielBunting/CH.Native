@@ -454,6 +454,91 @@ public class AdoNetTests
     }
 
     [Fact]
+    public async Task DataReader_ReadAsync_ReturnsCorrectValuesAcrossManyRows()
+    {
+        // Pins the exact values returned by ReadAsync across a multi-block result
+        // set. Acts as a correctness guard for any future fast-path / state-machine
+        // optimisation on the hot Read/ReadAsync path.
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT
+                toInt64(number)        AS id,
+                concat('row_', toString(number)) AS name,
+                toFloat64(number) * 1.5 AS value,
+                toDateTime('2026-01-01 00:00:00', 'UTC') + INTERVAL number SECOND AS created
+            FROM numbers(5000)
+            ORDER BY number";
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        var baseDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        int expected = 0;
+        while (await reader.ReadAsync())
+        {
+            Assert.Equal(expected, reader.GetInt64(0));
+            Assert.Equal($"row_{expected}", reader.GetString(1));
+            Assert.Equal(expected * 1.5, reader.GetDouble(2), precision: 9);
+            Assert.Equal(baseDate.AddSeconds(expected), reader.GetDateTime(3));
+
+            // Indexer and IsDBNull paths must agree
+            Assert.False(reader.IsDBNull(0));
+            Assert.False(reader.IsDBNull(1));
+            Assert.Equal((long)expected, (long)reader[0]);
+            Assert.Equal($"row_{expected}", (string)reader["name"]);
+
+            expected++;
+        }
+
+        Assert.Equal(5000, expected);
+        Assert.False(await reader.ReadAsync()); // exhausted reader returns false
+        Assert.False(await reader.ReadAsync()); // and stays false on subsequent calls
+    }
+
+    [Fact]
+    public async Task DataReader_SyncRead_MatchesReadAsync()
+    {
+        // Sync Read() is called by Dapper's unbuffered enumerator. Verify it
+        // returns identical values to the async path so any sync-path
+        // optimisation can't silently diverge.
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT toInt32(number) AS n FROM numbers(1000)";
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        int expected = 0;
+        while (reader.Read())
+        {
+            Assert.Equal(expected, reader.GetInt32(0));
+            expected++;
+        }
+
+        Assert.Equal(1000, expected);
+        Assert.False(reader.Read());
+    }
+
+    [Fact]
+    public async Task DataReader_ReadAsync_EmptyResultSet_ReturnsFalseImmediately()
+    {
+        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT toInt32(1) AS n WHERE 1 = 0";
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        Assert.False(await reader.ReadAsync());
+        Assert.False(await reader.ReadAsync()); // idempotent
+        Assert.False(reader.Read());
+    }
+
+    [Fact]
     public async Task DataReader_NextResult_ReturnsFalse()
     {
         await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);

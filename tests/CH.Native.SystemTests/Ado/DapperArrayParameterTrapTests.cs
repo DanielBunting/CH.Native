@@ -1,6 +1,6 @@
 using System.Data;
 using CH.Native.Ado;
-using CH.Native.Dapper;
+// CH.Native.Dapper not imported to avoid IDbConnection extension ambiguity with Dapper namespace; qualify Register() calls below.
 using CH.Native.Exceptions;
 using CH.Native.SystemTests.Fixtures;
 using Dapper;
@@ -29,7 +29,7 @@ namespace CH.Native.SystemTests.Ado;
 /// <para>
 /// The trap demonstration uses <see cref="List{T}"/> rather than <c>T[]</c> so
 /// it is robust against another test class having already called
-/// <c>ClickHouseDapperIntegration.Register()</c> earlier in the run — the array
+/// <c>CH.Native.Dapper.ClickHouseDapperIntegration.Register()</c> earlier in the run — the array
 /// handler covers <c>T[]</c>, not <c>List&lt;T&gt;</c>.
 /// </para>
 /// </summary>
@@ -125,7 +125,7 @@ public class DapperArrayParameterTrapTests
         // parameters bind verbatim and the wire SQL gets Array(Int32) rather
         // than a tuple expansion. Registration is idempotent and process-wide;
         // safe to call here without affecting other tests.
-        ClickHouseDapperIntegration.Register();
+        CH.Native.Dapper.ClickHouseDapperIntegration.Register();
 
         await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
         await conn.OpenAsync();

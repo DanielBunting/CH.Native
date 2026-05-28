@@ -1,7 +1,9 @@
 using System.Net.Sockets;
 using CH.Native.Ado;
 using CH.Native.Connection;
-using CH.Native.Dapper;
+// CH.Native.Dapper not imported — `using Dapper;` brings Dapper's IDbConnection
+// extensions into scope, and importing CH.Native.Dapper here would conflict.
+// The one Register() call is fully qualified below.
 using CH.Native.Exceptions;
 using CH.Native.SystemTests.BulkInsertFailures.Helpers;
 using CH.Native.SystemTests.Fixtures;
@@ -25,7 +27,7 @@ public class DapperChaosTests : IAsyncLifetime
 
     static DapperChaosTests()
     {
-        ClickHouseDapperIntegration.Register();
+        CH.Native.Dapper.ClickHouseDapperIntegration.Register();
     }
 
     public DapperChaosTests(ToxiproxyFixture proxy, ITestOutputHelper output)
