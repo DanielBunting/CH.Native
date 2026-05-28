@@ -27,11 +27,11 @@ public class TypeRoundTripSmokeTests
                 _fixture.NativeConnectionString,
                 $"INSERT INTO {table} VALUES {insertValues}");
 
-            var native = await NativeQueryHelper.StreamAsync(
+            var native = await NativeQueryHelper.QueryStreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT {selectExpr} FROM {table} ORDER BY 1");
 
-            var driver = await DriverQueryHelper.StreamAsync(
+            var driver = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT {selectExpr} FROM {table} ORDER BY 1");
 

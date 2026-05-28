@@ -57,11 +57,11 @@ public class AllocationBudgetTests
         const string sql = "SELECT number, toString(number) FROM numbers(10000)";
 
         // Warm.
-        await foreach (var _ in conn.StreamAsync(sql)) { }
+        await foreach (var _ in conn.QueryStreamAsync(sql)) { }
 
         var bytes = await AllocationProbe.MeasureAsync(async () =>
         {
-            await foreach (var row in conn.StreamAsync(sql))
+            await foreach (var row in conn.QueryStreamAsync(sql))
             {
                 _ = row.GetFieldValue<ulong>(0);
                 _ = row.GetFieldValue<string>(1);
@@ -158,11 +158,11 @@ public class AllocationBudgetTests
         const string sql = "SELECT number, toString(number) FROM numbers(10000)";
 
         // Warm.
-        await foreach (var _ in conn.StreamAsync(sql)) { }
+        await foreach (var _ in conn.QueryStreamAsync(sql)) { }
 
         var bytes = await AllocationProbe.MeasureAsync(async () =>
         {
-            await foreach (var row in conn.StreamAsync(sql))
+            await foreach (var row in conn.QueryStreamAsync(sql))
             {
                 _ = row.GetFieldValue<ulong>(0);
                 _ = row.GetFieldValue<string>(1);
@@ -274,11 +274,11 @@ public class AllocationBudgetTests
             "FROM numbers(10000)";
 
         // Warm.
-        await foreach (var _ in conn.StreamAsync<MapBudgetPoco>(sql)) { }
+        await foreach (var _ in conn.QueryStreamAsync<MapBudgetPoco>(sql)) { }
 
         var bytes = await AllocationProbe.MeasureAsync(async () =>
         {
-            await foreach (var row in conn.StreamAsync<MapBudgetPoco>(sql))
+            await foreach (var row in conn.QueryStreamAsync<MapBudgetPoco>(sql))
             {
                 _ = row.Tags.Count;
             }
@@ -293,11 +293,11 @@ public class AllocationBudgetTests
         await conn.OpenAsync();
 
         // Warm.
-        await foreach (var row in conn.StreamAsync(sql)) { read(row); }
+        await foreach (var row in conn.QueryStreamAsync(sql)) { read(row); }
 
         var bytes = await AllocationProbe.MeasureAsync(async () =>
         {
-            await foreach (var row in conn.StreamAsync(sql))
+            await foreach (var row in conn.QueryStreamAsync(sql))
                 read(row);
         });
 

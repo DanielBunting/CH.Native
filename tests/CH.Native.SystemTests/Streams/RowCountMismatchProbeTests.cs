@@ -47,7 +47,7 @@ public class RowCountMismatchProbeTests
         Exception? caught = null;
         try
         {
-            await foreach (var _ in conn.StreamAsync<ulong>("SELECT n FROM mock")
+            await foreach (var _ in conn.QueryStreamAsync<ulong>("SELECT n FROM mock")
                 .WithCancellation(cts.Token)) { }
         }
         catch (Exception ex) { caught = ex; }
@@ -75,7 +75,7 @@ public class RowCountMismatchProbeTests
         Exception? caught = null;
         try
         {
-            await foreach (var _ in conn.StreamAsync<ulong>("SELECT n FROM mock")
+            await foreach (var _ in conn.QueryStreamAsync<ulong>("SELECT n FROM mock")
                 .WithCancellation(cts.Token)) { }
         }
         catch (Exception ex) { caught = ex; }
@@ -115,7 +115,7 @@ public class RowCountMismatchProbeTests
         using var cts = new CancellationTokenSource(AntiHangTimeout);
         try
         {
-            await foreach (var _ in conn.StreamAsync<ulong>("SELECT n FROM mock")
+            await foreach (var _ in conn.QueryStreamAsync<ulong>("SELECT n FROM mock")
                 .WithCancellation(cts.Token))
             {
                 rowsObserved++;

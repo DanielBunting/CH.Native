@@ -120,7 +120,7 @@ internal static class DynamicBulkInsertSample
             Console.WriteLine($"\nTotal rows: {total:N0}");
 
             Console.WriteLine("\n--- Counts by event_type ---");
-            await foreach (var row in connection.StreamAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT event_type, count() AS n FROM {tableName} GROUP BY event_type ORDER BY n DESC"))
             {
                 Console.WriteLine($"  {row["event_type"]}: {row["n"]:N0}");

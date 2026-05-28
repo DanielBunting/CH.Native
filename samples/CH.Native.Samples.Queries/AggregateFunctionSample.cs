@@ -66,7 +66,7 @@ internal static class AggregateFunctionSample
             // SELECT * on a *State() MV used to throw NotSupportedException; this
             // is the path that now works for tier-1 aggregates.
             Console.WriteLine("\n--- SELECT id, *_state FROM mv — reads as ClickHouseAggregateState ---");
-            await foreach (var row in connection.StreamAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT user_id, event_count_state, value_sum_state, min_event_state, max_event_state " +
                 $"FROM {mv} ORDER BY user_id"))
             {
@@ -89,7 +89,7 @@ internal static class AggregateFunctionSample
             // finalizeAggregation() (or the *Merge() variant) when you want the
             // final scalar.
             Console.WriteLine("\n--- SELECT finalizeAggregation(*) — server materializes the scalar ---");
-            await foreach (var row in connection.StreamAsync($"""
+            await foreach (var row in connection.QueryStreamAsync($"""
                 SELECT
                     user_id,
                     toInt64(finalizeAggregation(event_count_state)) AS event_count,
@@ -148,7 +148,7 @@ internal static class AggregateFunctionSample
                     $"INSERT INTO {simpleTable} VALUES (1, 100), (1, 200), (2, 5)");
                 await connection.ExecuteNonQueryAsync($"OPTIMIZE TABLE {simpleTable} FINAL");
 
-                await foreach (var row in connection.StreamAsync<UserTotal>(
+                await foreach (var row in connection.QueryStreamAsync<UserTotal>(
                     $"SELECT id, total FROM {simpleTable} ORDER BY id"))
                 {
                     Console.WriteLine($"  user {row.Id}: total={row.Total} (CLR type: long, no wrapper)");

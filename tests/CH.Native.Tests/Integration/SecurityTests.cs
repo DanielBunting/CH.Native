@@ -109,7 +109,7 @@ public class SecurityTests
 
             // Read back and verify the literal string is preserved
             var result = new List<string>();
-            await foreach (var row in connection.StreamAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT Value FROM {tableName} WHERE Id = 1"))
             {
                 result.Add(row.GetFieldValue<string>("Value"));

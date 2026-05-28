@@ -44,7 +44,7 @@ public class PreEpochAndOverflowTests
             }
 
             DateTime read = default;
-            await foreach (var r in conn.StreamAsync($"SELECT ts FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table}"))
                 read = r.GetFieldValue<DateTime>(0);
             Assert.Equal(input, read);
 
@@ -151,7 +151,7 @@ public class PreEpochAndOverflowTests
             }
 
             DateTime read = default;
-            await foreach (var r in conn.StreamAsync($"SELECT ts FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table}"))
                 read = r.GetFieldValue<DateTime>(0);
 
             Assert.True(Math.Abs((input - read).Ticks) <= TimeSpan.TicksPerMillisecond);

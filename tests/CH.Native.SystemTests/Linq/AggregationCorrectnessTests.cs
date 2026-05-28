@@ -56,7 +56,7 @@ public class AggregationCorrectnessTests : IAsyncLifetime
 
         // Raw oracle.
         var oracle = new List<CountryTotal>();
-        await foreach (var row in _conn.StreamAsync(
+        await foreach (var row in _conn.QueryStreamAsync(
             $"SELECT country, sum(amount) AS total FROM {_facts.TableName} GROUP BY country"))
         {
             oracle.Add(new CountryTotal

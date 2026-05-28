@@ -68,7 +68,7 @@ public class DapperVsTypedRowMapperDivergenceTests : IAsyncLifetime
         await conn.OpenAsync();
 
         var rows = new List<UserRowWithAttribute>();
-        await foreach (var row in conn.StreamAsync<UserRowWithAttribute>(
+        await foreach (var row in conn.QueryStreamAsync<UserRowWithAttribute>(
             $"SELECT user_id, display_name FROM {_table} ORDER BY user_id"))
         {
             rows.Add(row);
@@ -90,7 +90,7 @@ public class DapperVsTypedRowMapperDivergenceTests : IAsyncLifetime
         await conn.OpenAsync();
 
         var rows = new List<UserRowNoAttribute>();
-        await foreach (var row in conn.StreamAsync<UserRowNoAttribute>(
+        await foreach (var row in conn.QueryStreamAsync<UserRowNoAttribute>(
             $"SELECT user_id, display_name FROM {_table} ORDER BY user_id"))
         {
             rows.Add(row);
@@ -180,7 +180,7 @@ public class DapperVsTypedRowMapperDivergenceTests : IAsyncLifetime
         await dbConn.OpenAsync();
 
         var typedCount = 0;
-        await foreach (var _ in nativeConn.StreamAsync<UserRowWithAttribute>(
+        await foreach (var _ in nativeConn.QueryStreamAsync<UserRowWithAttribute>(
             $"SELECT user_id, display_name FROM {_table}"))
             typedCount++;
 

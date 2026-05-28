@@ -102,8 +102,8 @@ public class AggregateFunctionSmokeTests
 
             var sql = $"SELECT {selectExpr} FROM {table} ORDER BY {orderBy}";
 
-            var native = await NativeQueryHelper.StreamAsync(_fixture.NativeConnectionString, sql);
-            var driver = await DriverQueryHelper.StreamAsync(_fixture.DriverConnectionString, sql);
+            var native = await NativeQueryHelper.QueryStreamAsync(_fixture.NativeConnectionString, sql);
+            var driver = await DriverQueryHelper.QueryStreamAsync(_fixture.DriverConnectionString, sql);
 
             ResultComparer.AssertResultsEqual(native, driver, $"SimpleAggregate: {columnDef}");
         }
@@ -137,8 +137,8 @@ public class AggregateFunctionSmokeTests
 
             var sql = $"SELECT {finalizeWrapper} FROM {table}";
 
-            var native = await NativeQueryHelper.StreamAsync(_fixture.NativeConnectionString, sql);
-            var driver = await DriverQueryHelper.StreamAsync(_fixture.DriverConnectionString, sql);
+            var native = await NativeQueryHelper.QueryStreamAsync(_fixture.NativeConnectionString, sql);
+            var driver = await DriverQueryHelper.QueryStreamAsync(_fixture.DriverConnectionString, sql);
 
             ResultComparer.AssertResultsEqual(native, driver, $"finalizeAggregation: {stateColumnType}");
         }

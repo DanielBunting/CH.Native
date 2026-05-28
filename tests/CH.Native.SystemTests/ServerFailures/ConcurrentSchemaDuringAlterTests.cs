@@ -117,7 +117,7 @@ public class ConcurrentSchemaDuringAlterTests
         ClickHouseConnection conn, string table)
     {
         var cols = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var row in conn.StreamAsync(
+        await foreach (var row in conn.QueryStreamAsync(
             $"SELECT name FROM system.columns WHERE database = currentDatabase() AND table = '{table}' ORDER BY position"))
         {
             var name = row[0] as string;

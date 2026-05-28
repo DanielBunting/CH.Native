@@ -64,7 +64,7 @@ public class TelemetryFailureProbeTests
             Exception? caught = null;
             try
             {
-                await foreach (var _ in conn.StreamAsync<ulong>(
+                await foreach (var _ in conn.QueryStreamAsync<ulong>(
                     "SELECT throwIf(number = 5000, 'boom') FROM numbers(10000)")) { }
             }
             catch (Exception ex) { caught = ex; }
@@ -94,7 +94,7 @@ public class TelemetryFailureProbeTests
 
             try
             {
-                await foreach (var _ in conn.StreamAsync<ulong>(
+                await foreach (var _ in conn.QueryStreamAsync<ulong>(
                     "SELECT throwIf(number = 100, 'boom') FROM numbers(1000)")) { }
             }
             catch { /* expected */ }
@@ -120,7 +120,7 @@ public class TelemetryFailureProbeTests
             await conn.OpenAsync();
             try
             {
-                await foreach (var _ in conn.StreamAsync<ulong>(
+                await foreach (var _ in conn.QueryStreamAsync<ulong>(
                     "SELECT throwIf(number = 0, 'deliberate failure') FROM numbers(10)")) { }
             }
             catch { /* expected */ }
@@ -149,7 +149,7 @@ public class TelemetryFailureProbeTests
 
         try
         {
-            await foreach (var _ in conn.StreamAsync<int>("SELECT throwIf(1, 'fail')")) { }
+            await foreach (var _ in conn.QueryStreamAsync<int>("SELECT throwIf(1, 'fail')")) { }
         }
         catch { /* expected */ }
 
@@ -183,7 +183,7 @@ public class TelemetryFailureProbeTests
 
         try
         {
-            await foreach (var _ in conn.StreamAsync<int>("SELECT throwIf(1, 'fail')")) { }
+            await foreach (var _ in conn.QueryStreamAsync<int>("SELECT throwIf(1, 'fail')")) { }
         }
         catch { /* expected */ }
 
@@ -318,7 +318,7 @@ public class TelemetryFailureProbeTests
             Interlocked.Increment(ref progressEvents));
 
         int rows = 0;
-        await foreach (var _ in conn.StreamAsync<ulong>(
+        await foreach (var _ in conn.QueryStreamAsync<ulong>(
             "SELECT number FROM numbers(5000000) SETTINGS max_block_size=8192"))
         {
             rows++;

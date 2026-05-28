@@ -75,7 +75,7 @@ internal static class DataSourcePooledSample
 
             await using var verifyConn = await dataSource.OpenConnectionAsync();
             Console.WriteLine("\n--- Mean value per metric ---");
-            await foreach (var row in verifyConn.StreamAsync(
+            await foreach (var row in verifyConn.QueryStreamAsync(
                 $"""
                 SELECT metric_name, round(avg(value), 2) AS mean
                 FROM {tableName}

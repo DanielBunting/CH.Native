@@ -55,7 +55,7 @@ public class ComplexTypeMatrixProbeTests
                 "(2, map())");
 
             var got = new List<Dictionary<string, Dictionary<string, int>>>();
-            await foreach (var r in conn.StreamAsync($"SELECT m FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT m FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<Dictionary<string, Dictionary<string, int>>>(0));
 
             Assert.Equal(2, got.Count);
@@ -85,7 +85,7 @@ public class ComplexTypeMatrixProbeTests
                 "(1, map('', 0, ' ', 1, 'with space', 2, 'unicode_\\u00e9', 3))");
 
             var got = new Dictionary<string, int>();
-            await foreach (var r in conn.StreamAsync($"SELECT m FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT m FROM {table}"))
                 got = r.GetFieldValue<Dictionary<string, int>>(0);
 
             Assert.True(got.ContainsKey(""));
@@ -123,7 +123,7 @@ public class ComplexTypeMatrixProbeTests
             // Wire round-trip via positional access (named-tuple destructuring depends
             // on whether the library exposes the names in its type system).
             int rows = 0;
-            await foreach (var r in conn.StreamAsync($"SELECT t.a, t.b FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT t.a, t.b FROM {table}"))
             {
                 Assert.Equal(42, r.GetFieldValue<int>(0));
                 Assert.Equal("hello", r.GetFieldValue<string>(1));
@@ -156,7 +156,7 @@ public class ComplexTypeMatrixProbeTests
                 "(3, toUUID('01020304-0506-0708-090a-0b0c0d0e0f10'))");
 
             var got = new List<Guid>();
-            await foreach (var r in conn.StreamAsync($"SELECT u FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT u FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<Guid>(0));
 
             Assert.Equal(3, got.Count);
@@ -188,7 +188,7 @@ public class ComplexTypeMatrixProbeTests
                 "(2, toIPv6('2001:db8::1'))");
 
             var got = new List<IPAddress>();
-            await foreach (var r in conn.StreamAsync($"SELECT addr FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT addr FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<IPAddress>(0));
 
             _output.WriteLine($"Image {image}: ::ffff:1.2.3.4 → {got[0]}");
@@ -224,7 +224,7 @@ public class ComplexTypeMatrixProbeTests
                 "(2, toDateTime64('2023-01-01 00:00:00.987654300', 9, 'UTC'))");
 
             var got = new List<DateTime>();
-            await foreach (var r in conn.StreamAsync($"SELECT ts FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<DateTime>(0));
 
             _output.WriteLine($"Image {image}: 100ns row = {got[0]:O}");
@@ -259,7 +259,7 @@ public class ComplexTypeMatrixProbeTests
             // Int8 — the wire type for an Enum8 column is the integer code; the
             // human-readable label is server-resolved.
             var got = new List<string>();
-            await foreach (var r in conn.StreamAsync(
+            await foreach (var r in conn.QueryStreamAsync(
                 $"SELECT cast(e, 'String') FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<string>(0));
 
@@ -290,7 +290,7 @@ public class ComplexTypeMatrixProbeTests
             // String gives a directly-usable string; this also exercises the
             // LowCardinality dictionary roundtrip end-to-end.
             var got = new List<string>();
-            await foreach (var r in conn.StreamAsync(
+            await foreach (var r in conn.QueryStreamAsync(
                 $"SELECT cast(s, 'String') FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<string>(0));
 
@@ -323,7 +323,7 @@ public class ComplexTypeMatrixProbeTests
                 "(3, [])");
 
             int rows = 0;
-            await foreach (var r in conn.StreamAsync(
+            await foreach (var r in conn.QueryStreamAsync(
                 $"SELECT length(v), arraySum(arrayMap(x -> length(x), v)) FROM {table} ORDER BY id"))
             {
                 _output.WriteLine($"Image {image}: row outer-len={r.GetFieldValue<ulong>(0)}, total-elements={r.GetFieldValue<ulong>(1)}");
@@ -404,7 +404,7 @@ public class ComplexTypeMatrixProbeTests
             await conn.ExecuteNonQueryAsync(
                 $"INSERT INTO {table} VALUES (1, 'a'), (2, NULL)");
             var got = new List<string?>();
-            await foreach (var r in conn.StreamAsync($"SELECT s FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT s FROM {table} ORDER BY id"))
                 got.Add(r.IsDBNull(0) ? null : r.GetFieldValue<string>(0));
             _output.WriteLine($"Image {image}: Nullable(LowCardinality) accepted, got {got.Count} rows");
         }

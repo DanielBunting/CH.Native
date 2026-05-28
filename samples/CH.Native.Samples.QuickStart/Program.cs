@@ -51,7 +51,7 @@ try
 
     // 4. Typed query
     Console.WriteLine("Users:");
-    await foreach (var user in connection.StreamAsync<User>(
+    await foreach (var user in connection.QueryStreamAsync<User>(
         "SELECT id, name, created FROM quickstart_users ORDER BY id"))
     {
         Console.WriteLine($"  {user.Id}: {user.Name} (created {user.Created:O})");

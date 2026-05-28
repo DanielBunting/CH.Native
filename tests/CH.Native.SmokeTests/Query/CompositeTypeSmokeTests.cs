@@ -27,11 +27,11 @@ public class CompositeTypeSmokeTests
                 _fixture.NativeConnectionString,
                 $"INSERT INTO {table} VALUES {insertValues}");
 
-            var native = await NativeQueryHelper.StreamAsync(
+            var native = await NativeQueryHelper.QueryStreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT {selectExpr} FROM {table}");
 
-            var driver = await DriverQueryHelper.StreamAsync(
+            var driver = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT {selectExpr} FROM {table}");
 
@@ -109,11 +109,11 @@ public class CompositeTypeSmokeTests
                 _fixture.NativeConnectionString,
                 $"INSERT INTO {table} VALUES {values}");
 
-            var native = await NativeQueryHelper.StreamAsync(
+            var native = await NativeQueryHelper.QueryStreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT val FROM {table} ORDER BY val");
 
-            var driver = await DriverQueryHelper.StreamAsync(
+            var driver = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT val FROM {table} ORDER BY val");
 
@@ -160,11 +160,11 @@ public class CompositeTypeSmokeTests
             Assert.Equal(70000UL, Convert.ToUInt64(driverCount));
 
             // Spot-check some values
-            var native = await NativeQueryHelper.StreamAsync(
+            var native = await NativeQueryHelper.QueryStreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT val FROM {table} WHERE val IN ('val_0', 'val_35000', 'val_69999') ORDER BY val");
 
-            var driver = await DriverQueryHelper.StreamAsync(
+            var driver = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT val FROM {table} WHERE val IN ('val_0', 'val_35000', 'val_69999') ORDER BY val");
 
@@ -199,11 +199,11 @@ public class CompositeTypeSmokeTests
                 $"INSERT INTO {table} VALUES (1, ['a', 'b'], [10, 20]), (2, [], [])");
 
             // Nested columns are accessed as arrays
-            var native = await NativeQueryHelper.StreamAsync(
+            var native = await NativeQueryHelper.QueryStreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT id, nested.key, nested.value FROM {table} ORDER BY id");
 
-            var driver = await DriverQueryHelper.StreamAsync(
+            var driver = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT id, nested.key, nested.value FROM {table} ORDER BY id");
 

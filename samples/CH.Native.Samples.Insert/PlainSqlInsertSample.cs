@@ -92,7 +92,7 @@ internal static class PlainSqlInsertSample
             Console.WriteLine($"\nSource has {srcCount:N0} rows; dest has {dstCount:N0}.");
 
             Console.WriteLine("\n--- Source rows by role ---");
-            await foreach (var row in connection.StreamAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT role, count() AS n FROM {sourceTable} GROUP BY role ORDER BY role"))
             {
                 Console.WriteLine($"  {row["role"]}: {row["n"]}");

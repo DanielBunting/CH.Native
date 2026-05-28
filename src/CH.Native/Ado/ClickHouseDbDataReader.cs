@@ -118,13 +118,18 @@ public sealed class ClickHouseDbDataReader : DbDataReader
 
     /// <inheritdoc />
     /// <remarks>
-    /// Dispatched via <see cref="Task.Run{TResult}(Func{Task{TResult}})"/> so a
-    /// captured single-threaded <see cref="SynchronizationContext"/> (UI / classic
-    /// ASP.NET) cannot deadlock against the async continuation. Async callers
-    /// should prefer <see cref="ReadAsync(CancellationToken)"/>.
+    /// Hot path — called once per row by sync consumers such as Dapper's
+    /// unbuffered <c>Query&lt;T&gt;</c>. When there is no captured
+    /// <see cref="SynchronizationContext"/> or non-default <see cref="TaskScheduler"/>
+    /// we block on the async result directly; otherwise we hop to the thread pool
+    /// via <see cref="Task.Run{TResult}(Func{Task{TResult}})"/> so a UI / classic
+    /// ASP.NET caller cannot deadlock against the async continuation. Async
+    /// callers should prefer <see cref="ReadAsync(CancellationToken)"/>.
     /// </remarks>
     public override bool Read()
     {
+        if (SynchronizationContext.Current is null && TaskScheduler.Current == TaskScheduler.Default)
+            return ReadAsync(CancellationToken.None).GetAwaiter().GetResult();
         return Task.Run(() => ReadAsync(CancellationToken.None)).GetAwaiter().GetResult();
     }
 

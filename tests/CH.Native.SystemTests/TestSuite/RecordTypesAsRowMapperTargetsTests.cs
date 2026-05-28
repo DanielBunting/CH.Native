@@ -77,7 +77,7 @@ public class RecordTypesAsRowMapperTargetsTests
             await conn.OpenAsync();
 
             var rows = new List<ClassRow>();
-            await foreach (var r in conn.StreamAsync<ClassRow>($"SELECT id, name FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync<ClassRow>($"SELECT id, name FROM {table} ORDER BY id"))
                 rows.Add(r);
 
             Assert.Equal(3, rows.Count);
@@ -107,7 +107,7 @@ public class RecordTypesAsRowMapperTargetsTests
             await conn.OpenAsync();
 
             var rows = new List<PositionalRecord>();
-            await foreach (var r in conn.StreamAsync<PositionalRecord>(
+            await foreach (var r in conn.QueryStreamAsync<PositionalRecord>(
                 $"SELECT id, name FROM {table} ORDER BY id"))
                 rows.Add(r);
 
@@ -126,9 +126,9 @@ public class RecordTypesAsRowMapperTargetsTests
     }
 
     [Fact]
-    public void StreamAsyncT_HasNoConstraint()
+    public void QueryStreamAsyncT_HasNoConstraint()
     {
-        // Lock-in: the StreamAsync<T> generic parameter has no constraint —
+        // Lock-in: the QueryStreamAsync<T> generic parameter has no constraint —
         // it accepts records, anon types, value types (int for scalar
         // pseudo-projections), and standard POCOs. TypeMapper internally
         // selects between the parameterless-ctor path and the args-ctor
@@ -136,17 +136,17 @@ public class RecordTypesAsRowMapperTargetsTests
         // so the call-site name is freed for Dapper's IDbConnection extensions.)
         var streamAsyncMethod = typeof(CH.Native.Connection.ClickHouseConnection)
             .GetMethods()
-            .First(m => m.Name == "StreamAsync"
+            .First(m => m.Name == "QueryStreamAsync"
                 && m.IsGenericMethod
                 && m.GetGenericArguments().Length == 1);
 
         var typeParam = streamAsyncMethod.GetGenericArguments()[0];
         var attrs = typeParam.GenericParameterAttributes;
 
-        _output.WriteLine($"StreamAsync<T> generic-parameter attributes: {attrs}");
+        _output.WriteLine($"QueryStreamAsync<T> generic-parameter attributes: {attrs}");
         Assert.False(
             (attrs & System.Reflection.GenericParameterAttributes.DefaultConstructorConstraint) != 0,
-            "StreamAsync<T> should not require parameterless ctor.");
+            "QueryStreamAsync<T> should not require parameterless ctor.");
     }
 
     [Fact]
@@ -160,7 +160,7 @@ public class RecordTypesAsRowMapperTargetsTests
             await conn.OpenAsync();
 
             var rows = new List<InitOnlyClass>();
-            await foreach (var r in conn.StreamAsync<InitOnlyClass>(
+            await foreach (var r in conn.QueryStreamAsync<InitOnlyClass>(
                 $"SELECT id, name FROM {table} ORDER BY id"))
                 rows.Add(r);
 

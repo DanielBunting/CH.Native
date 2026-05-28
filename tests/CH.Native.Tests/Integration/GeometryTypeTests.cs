@@ -21,7 +21,7 @@ public class GeometryTypeTests
     {
         await using var connection = await OpenWithVariantSettingsAsync();
 
-        await foreach (var row in connection.StreamAsync(
+        await foreach (var row in connection.QueryStreamAsync(
             "SELECT toTypeName(CAST((1.0, 2.0) AS Point)::Geometry) AS t"))
         {
             Assert.Equal("Geometry", row.GetFieldValue<string>("t"));
@@ -65,7 +65,7 @@ public class GeometryTypeTests
             await inserter.CompleteAsync();
 
             var byId = new Dictionary<int, Geometry>();
-            await foreach (var row in connection.StreamAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT id, geom FROM {tableName} ORDER BY id"))
             {
                 byId[row.GetFieldValue<int>("id")] = row.GetFieldValue<Geometry>("geom");
@@ -128,7 +128,7 @@ public class GeometryTypeTests
             await inserter.CompleteAsync();
 
             var results = new List<Geometry>();
-            await foreach (var row in connection.StreamAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT geom FROM {tableName} ORDER BY id"))
             {
                 results.Add(row.GetFieldValue<Geometry>("geom"));
@@ -175,7 +175,7 @@ public class GeometryTypeTests
             // (CH 26.x behaviour — named-arm lookup is reserved for explicit Variant(...) types).
             // We assert the arm indices match the GeometryKind enum.
             var armIndices = new Dictionary<int, string>();
-            await foreach (var row in connection.StreamAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT id, variantType(geom) AS t FROM {tableName} ORDER BY id"))
             {
                 armIndices[row.GetFieldValue<int>("id")] = row.GetFieldValue<string>("t");

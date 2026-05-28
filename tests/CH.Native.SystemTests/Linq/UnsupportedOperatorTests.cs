@@ -63,7 +63,7 @@ public class UnsupportedOperatorTests : IAsyncLifetime
             .ToListAsync();
 
         var oracle = new List<MultiKeyGroup>();
-        await foreach (var row in _conn.StreamAsync(
+        await foreach (var row in _conn.QueryStreamAsync(
             $"SELECT country, active, count() FROM {_facts.TableName} GROUP BY country, active"))
         {
             oracle.Add(new MultiKeyGroup

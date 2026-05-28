@@ -63,7 +63,7 @@ public class BulkInsertSchemaCacheOrderTests
             // Verify both rows landed with values in the right columns. If cache order
             // were scrambled, A and B would be swapped on the second row.
             var all = new List<AbResult>();
-            await foreach (var row in connection.StreamAsync<AbResult>(
+            await foreach (var row in connection.QueryStreamAsync<AbResult>(
                 $"SELECT A, B FROM {tableName} ORDER BY A"))
             {
                 all.Add(row);
@@ -124,7 +124,7 @@ public class BulkInsertSchemaCacheOrderTests
                 // Server silently accepted Int32 bytes as Int64. Check data integrity:
                 // If the read comes back with the wrong A, that's the corruption bug.
                 var list = new List<AbResult>();
-                await foreach (var row in connection.StreamAsync<AbResult>(
+                await foreach (var row in connection.QueryStreamAsync<AbResult>(
                     $"SELECT A, B FROM {tableName} WHERE B = 'two'"))
                 {
                     list.Add(row);
@@ -178,7 +178,7 @@ public class BulkInsertSchemaCacheOrderTests
             // No matter what, a row with A=1 should be readable (from before the drop
             // and re-add, it was null-propagated or wiped; this depends on engine).
             var rows = new List<AbResult>();
-            await foreach (var row in connection.StreamAsync<AbResult>(
+            await foreach (var row in connection.QueryStreamAsync<AbResult>(
                 $"SELECT A, B FROM {tableName}"))
             {
                 rows.Add(row);

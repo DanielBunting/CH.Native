@@ -87,11 +87,11 @@ public sealed class ClickHouseCommand : IAsyncDisposable
     /// <summary>
     /// Streams the command's result as an async enumerable of rows.
     /// Renamed from <c>QueryAsync</c> in Phase 2 for naming parity with
-    /// <see cref="Connection.ClickHouseConnection.StreamAsync(string, CancellationToken, string?)"/>.
+    /// <see cref="Connection.ClickHouseConnection.QueryStreamAsync(string, CancellationToken, string?)"/>.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An async enumerable of rows.</returns>
-    public async IAsyncEnumerable<ClickHouseRow> StreamAsync(
+    public async IAsyncEnumerable<ClickHouseRow> QueryStreamAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         await using var reader = await ExecuteReaderAsync(cancellationToken);
@@ -109,7 +109,7 @@ public sealed class ClickHouseCommand : IAsyncDisposable
     /// <typeparam name="T">The type to map rows to. Must have a parameterless constructor.</typeparam>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>An async enumerable of mapped objects.</returns>
-    public async IAsyncEnumerable<T> StreamAsync<T>(
+    public async IAsyncEnumerable<T> QueryStreamAsync<T>(
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         await using var reader = await ExecuteReaderAsync(cancellationToken);

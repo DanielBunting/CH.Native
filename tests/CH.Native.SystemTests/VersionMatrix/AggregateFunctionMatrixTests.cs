@@ -111,7 +111,7 @@ public class AggregateFunctionMatrixTests
                 $"INSERT INTO {src} VALUES (1, 10), (1, 20), (1, 30), (2, 5)");
 
             var states = new Dictionary<int, ClickHouseAggregateState>();
-            await foreach (var r in conn.StreamAsync($"SELECT id, c FROM {mv} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT id, c FROM {mv} ORDER BY id"))
             {
                 states[r.GetFieldValue<int>("id")] = r.GetFieldValue<ClickHouseAggregateState>("c");
             }
@@ -121,7 +121,7 @@ public class AggregateFunctionMatrixTests
             Assert.All(states.Values, s => Assert.NotEmpty(s.State));
 
             var totals = new Dictionary<int, long>();
-            await foreach (var r in conn.StreamAsync(
+            await foreach (var r in conn.QueryStreamAsync(
                 $"SELECT id, toInt64(finalizeAggregation(c)) AS t FROM {mv} ORDER BY id"))
             {
                 totals[r.GetFieldValue<int>("id")] = r.GetFieldValue<long>("t");
@@ -172,7 +172,7 @@ public class AggregateFunctionMatrixTests
             await conn.ExecuteNonQueryAsync($"INSERT INTO {src} VALUES {values}");
 
             var states = new Dictionary<int, ClickHouseAggregateState>();
-            await foreach (var r in conn.StreamAsync($"SELECT id, s FROM {mv} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT id, s FROM {mv} ORDER BY id"))
             {
                 states[r.GetFieldValue<int>("id")] = r.GetFieldValue<ClickHouseAggregateState>("s");
             }
@@ -184,7 +184,7 @@ public class AggregateFunctionMatrixTests
             if (expectedTotals is not null)
             {
                 var totals = new Dictionary<int, long>();
-                await foreach (var r in conn.StreamAsync(
+                await foreach (var r in conn.QueryStreamAsync(
                     $"SELECT id, toInt64(finalizeAggregation(s)) AS t FROM {mv} ORDER BY id"))
                 {
                     totals[r.GetFieldValue<int>("id")] = r.GetFieldValue<long>("t");

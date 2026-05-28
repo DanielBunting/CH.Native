@@ -4,14 +4,14 @@ namespace CH.Native.SmokeTests.Helpers;
 
 public static class NativeQueryHelper
 {
-    public static async Task<List<object?[]>> StreamAsync(string connectionString, string sql)
+    public static async Task<List<object?[]>> QueryStreamAsync(string connectionString, string sql)
     {
         var results = new List<object?[]>();
 
         await using var connection = new ClickHouseConnection(connectionString);
         await connection.OpenAsync();
 
-        await foreach (var row in connection.StreamAsync(sql))
+        await foreach (var row in connection.QueryStreamAsync(sql))
         {
             var values = new object?[row.FieldCount];
             for (int i = 0; i < row.FieldCount; i++)

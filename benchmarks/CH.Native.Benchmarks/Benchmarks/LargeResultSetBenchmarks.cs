@@ -57,7 +57,7 @@ public class LargeResultSetBenchmarks
     public async Task<long> Native_StreamingRead()
     {
         long sum = 0;
-        await foreach (var row in _nativeConnection.StreamAsync(
+        await foreach (var row in _nativeConnection.QueryStreamAsync(
             $"SELECT * FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}"))
         {
             sum += row.GetFieldValue<long>("id");
@@ -69,7 +69,7 @@ public class LargeResultSetBenchmarks
     public async Task<long> NativeLazy_StreamingRead()
     {
         long sum = 0;
-        await foreach (var row in _nativeLazyConnection.StreamAsync(
+        await foreach (var row in _nativeLazyConnection.QueryStreamAsync(
             $"SELECT * FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}"))
         {
             sum += row.GetFieldValue<long>("id");
@@ -113,7 +113,7 @@ public class LargeResultSetBenchmarks
     public async Task<List<LargeTableRow>> Native_MaterializedRead()
     {
         var results = new List<LargeTableRow>(RowCount);
-        await foreach (var row in _nativeConnection.StreamAsync<LargeTableRow>(
+        await foreach (var row in _nativeConnection.QueryStreamAsync<LargeTableRow>(
             $"SELECT id, category, name, value, quantity, created FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}"))
         {
             results.Add(row);
@@ -125,7 +125,7 @@ public class LargeResultSetBenchmarks
     public async Task<List<LargeTableRow>> NativeLazy_MaterializedRead()
     {
         var results = new List<LargeTableRow>(RowCount);
-        await foreach (var row in _nativeLazyConnection.StreamAsync<LargeTableRow>(
+        await foreach (var row in _nativeLazyConnection.QueryStreamAsync<LargeTableRow>(
             $"SELECT id, category, name, value, quantity, created FROM {TestDataGenerator.LargeTable} LIMIT {RowCount}"))
         {
             results.Add(row);

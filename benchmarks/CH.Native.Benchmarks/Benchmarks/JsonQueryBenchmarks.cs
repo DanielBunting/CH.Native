@@ -118,7 +118,7 @@ public class JsonQueryBenchmarks
         if (!_jsonSupported) return 0;
 
         int count = 0;
-        await foreach (var row in _nativeConnection.StreamAsync(
+        await foreach (var row in _nativeConnection.QueryStreamAsync(
             $"SELECT id, profile FROM {JsonTestDataGenerator.SimpleJsonTable} SETTINGS output_format_native_write_json_as_string=1"))
         {
             var profile = row.GetFieldValue<JsonDocument>("profile");
@@ -179,7 +179,7 @@ public class JsonQueryBenchmarks
         if (!_jsonSupported) return 0;
 
         int count = 0;
-        await foreach (var row in _nativeConnection.StreamAsync(
+        await foreach (var row in _nativeConnection.QueryStreamAsync(
             $"SELECT id, event_data FROM {JsonTestDataGenerator.ComplexJsonTable} SETTINGS output_format_native_write_json_as_string=1"))
         {
             var eventData = row.GetFieldValue<JsonDocument>("event_data");
@@ -246,7 +246,7 @@ public class JsonQueryBenchmarks
         if (!_jsonSupported) return 0;
 
         long sum = 0;
-        await foreach (var row in _nativeConnection.StreamAsync(
+        await foreach (var row in _nativeConnection.QueryStreamAsync(
             $"SELECT id, data FROM {JsonTestDataGenerator.LargeJsonTable} SETTINGS output_format_native_write_json_as_string=1"))
         {
             var data = row.GetFieldValue<JsonDocument>("data");
@@ -323,7 +323,7 @@ public class JsonQueryBenchmarks
         if (!_jsonSupported) return 0;
 
         int count = 0;
-        await foreach (var row in _nativeConnection.StreamAsync(
+        await foreach (var row in _nativeConnection.QueryStreamAsync(
             $"SELECT id, event_data.event_type::String as event_type, event_data.user_name::String as user_name FROM {JsonTestDataGenerator.ComplexJsonTable} SETTINGS output_format_native_write_json_as_string=1"))
         {
             count++;
@@ -375,7 +375,7 @@ public class JsonQueryBenchmarks
         if (!_jsonSupported) return 0;
 
         int count = 0;
-        await foreach (var row in _nativeConnection.StreamAsync(
+        await foreach (var row in _nativeConnection.QueryStreamAsync(
             $"SELECT event_data.event_type::String as event_type, count() as cnt FROM {JsonTestDataGenerator.ComplexJsonTable} GROUP BY event_type SETTINGS output_format_native_write_json_as_string=1"))
         {
             count++;
@@ -427,7 +427,7 @@ public class JsonQueryBenchmarks
         if (!_jsonSupported) return 0;
 
         int count = 0;
-        await foreach (var row in _nativeConnection.StreamAsync(
+        await foreach (var row in _nativeConnection.QueryStreamAsync(
             $"SELECT id, data.user.profile.address.city::String as city FROM {JsonTestDataGenerator.NestedJsonTable} SETTINGS output_format_native_write_json_as_string=1"))
         {
             count++;
@@ -479,7 +479,7 @@ public class JsonQueryBenchmarks
         if (!_jsonSupported) return 0;
 
         int count = 0;
-        await foreach (var row in _nativeConnection.StreamAsync(
+        await foreach (var row in _nativeConnection.QueryStreamAsync(
             $"SELECT id, data FROM {JsonTestDataGenerator.NestedJsonTable} SETTINGS output_format_native_write_json_as_string=1"))
         {
             var data = row.GetFieldValue<JsonDocument>("data");
@@ -556,7 +556,7 @@ public class JsonQueryBenchmarks
         if (!_jsonSupported) return 0;
 
         int count = 0;
-        await foreach (var row in _nativeConnection.StreamAsync(
+        await foreach (var row in _nativeConnection.QueryStreamAsync(
             $"SELECT id FROM {JsonTestDataGenerator.NestedJsonTable} WHERE data.user.profile.address.city::String = 'NYC' SETTINGS output_format_native_write_json_as_string=1"))
         {
             count++;
@@ -608,7 +608,7 @@ public class JsonQueryBenchmarks
         if (!_jsonSupported) return 0;
 
         int count = 0;
-        await foreach (var row in _nativeConnection.StreamAsync(
+        await foreach (var row in _nativeConnection.QueryStreamAsync(
             $"SELECT data.user.profile.address.city::String as city, count() as cnt FROM {JsonTestDataGenerator.NestedJsonTable} GROUP BY city SETTINGS output_format_native_write_json_as_string=1"))
         {
             count++;

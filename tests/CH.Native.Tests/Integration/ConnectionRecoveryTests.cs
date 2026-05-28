@@ -68,13 +68,13 @@ public class ConnectionRecoveryTests
 
         var first = await Assert.ThrowsAsync<NotSupportedException>(async () =>
         {
-            await foreach (var _ in conn.StreamAsync($"SELECT {projection} FROM numbers(10)")) { }
+            await foreach (var _ in conn.QueryStreamAsync($"SELECT {projection} FROM numbers(10)")) { }
         });
         Assert.Contains(fnHint, first.Message);
 
         var second = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
-            await foreach (var _ in conn.StreamAsync("SELECT 1")) { }
+            await foreach (var _ in conn.QueryStreamAsync("SELECT 1")) { }
         });
         Assert.Contains("Connection is broken", second.Message);
     }
@@ -207,7 +207,7 @@ public class ConnectionRecoveryTests
 
             await Assert.ThrowsAsync<NotSupportedException>(async () =>
             {
-                await foreach (var _ in conn.StreamAsync($"SELECT id, u FROM {mv}")) { }
+                await foreach (var _ in conn.QueryStreamAsync($"SELECT id, u FROM {mv}")) { }
             });
 
             // Connection is now poisoned — even a follow-up DROP on the SAME
@@ -255,7 +255,7 @@ public class ConnectionRecoveryTests
         await using var conn = await PoisonConnectionAsync();
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
-            await foreach (var _ in conn.StreamAsync("SELECT 1")) { }
+            await foreach (var _ in conn.QueryStreamAsync("SELECT 1")) { }
         });
         Assert.Contains("Connection is broken", ex.Message);
     }
@@ -367,11 +367,11 @@ public class ConnectionRecoveryTests
 
         await Assert.ThrowsAsync<ClickHouseServerException>(async () =>
         {
-            await foreach (var _ in conn.StreamAsync("SELECT * FROM no_such_table")) { }
+            await foreach (var _ in conn.QueryStreamAsync("SELECT * FROM no_such_table")) { }
         });
 
         var rows = new List<int>();
-        await foreach (var r in conn.StreamAsync("SELECT number FROM numbers(3)"))
+        await foreach (var r in conn.QueryStreamAsync("SELECT number FROM numbers(3)"))
             rows.Add((int)r.GetFieldValue<ulong>(0));
         Assert.Equal(new[] { 0, 1, 2 }, rows);
     }
@@ -437,7 +437,7 @@ public class ConnectionRecoveryTests
 
         var fromQueryAsync = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
-            await foreach (var _ in conn.StreamAsync("SELECT 1")) { }
+            await foreach (var _ in conn.QueryStreamAsync("SELECT 1")) { }
         });
         Assert.Contains("Connection is broken", fromQueryAsync.Message);
 

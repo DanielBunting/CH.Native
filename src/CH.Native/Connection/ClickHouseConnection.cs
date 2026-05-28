@@ -29,7 +29,7 @@ namespace CH.Native.Connection;
 /// ADO.NET-facing consumers (Dapper, EF Core's <see cref="IDbConnection"/>
 /// extension points, OpenTelemetry SqlClient instrumentation) without an
 /// intermediate wrapper. The native API (<see cref="ExecuteScalarAsync{T}(string,CancellationToken)"/>,
-/// <see cref="StreamAsync{T}(string,CancellationToken,string?)"/>, etc.) is unchanged.
+/// <see cref="QueryStreamAsync{T}(string,CancellationToken,string?)"/>, etc.) is unchanged.
 /// </summary>
 public sealed class ClickHouseConnection : DbConnection
 {
@@ -2002,7 +2002,7 @@ public sealed class ClickHouseConnection : DbConnection
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>An async enumerable of rows.</returns>
-    public async IAsyncEnumerable<ClickHouseRow> StreamAsync(
+    public async IAsyncEnumerable<ClickHouseRow> QueryStreamAsync(
         string sql,
         [EnumeratorCancellation] CancellationToken cancellationToken = default,
         string? queryId = null)
@@ -2025,7 +2025,7 @@ public sealed class ClickHouseConnection : DbConnection
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
     /// <returns>An async enumerable of mapped objects.</returns>
-    public async IAsyncEnumerable<T> StreamAsync<T>(
+    public async IAsyncEnumerable<T> QueryStreamAsync<T>(
         string sql,
         [EnumeratorCancellation] CancellationToken cancellationToken = default,
         string? queryId = null)

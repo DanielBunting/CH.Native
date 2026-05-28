@@ -103,7 +103,7 @@ public class VariantComparisonBenchmarks
         await using var connection = new NativeConnection(_nativeConnectionString);
         await connection.OpenAsync();
         int count = 0;
-        await foreach (var row in connection.StreamAsync($"SELECT v FROM {VariantTable}"))
+        await foreach (var row in connection.QueryStreamAsync($"SELECT v FROM {VariantTable}"))
         {
             _ = row.GetFieldValue<ClickHouseVariant>("v");
             count++;
@@ -117,7 +117,7 @@ public class VariantComparisonBenchmarks
         await using var connection = new NativeConnection(_nativeConnectionString);
         await connection.OpenAsync();
         int count = 0;
-        await foreach (var row in connection.StreamAsync($"SELECT v FROM {VariantTable}"))
+        await foreach (var row in connection.QueryStreamAsync($"SELECT v FROM {VariantTable}"))
         {
             _ = row.GetFieldValue<VariantValue<long, string>>("v");
             count++;

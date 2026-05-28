@@ -131,7 +131,7 @@ public class NetworkChaosTests : IAsyncLifetime
 
             var sw = Stopwatch.StartNew();
             var rows = 0;
-            await foreach (var row in conn.StreamAsync("SELECT number FROM numbers(1000)"))
+            await foreach (var row in conn.QueryStreamAsync("SELECT number FROM numbers(1000)"))
             {
                 _ = row.GetFieldValue<ulong>(0);
                 rows++;

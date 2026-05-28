@@ -25,7 +25,7 @@ public class ProtocolEdgeCaseTests
         // when number > 5. The server should send an exception mid-stream.
         var ex = await Assert.ThrowsAsync<ClickHouseServerException>(async () =>
         {
-            await foreach (var row in connection.StreamAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 "SELECT throwIf(number > 5, 'test mid-stream error') FROM system.numbers LIMIT 10"))
             {
                 // Consume rows until the exception occurs
@@ -45,7 +45,7 @@ public class ProtocolEdgeCaseTests
 
         // Execute a large query that is likely to generate progress packets
         long count = 0;
-        await foreach (var row in connection.StreamAsync(
+        await foreach (var row in connection.QueryStreamAsync(
             "SELECT number FROM system.numbers LIMIT 100000"))
         {
             count++;
@@ -64,7 +64,7 @@ public class ProtocolEdgeCaseTests
         // Query returning >65536 rows forces multiple blocks in the native protocol
         long count = 0;
         ulong lastNumber = 0;
-        await foreach (var row in connection.StreamAsync(
+        await foreach (var row in connection.QueryStreamAsync(
             "SELECT number FROM system.numbers LIMIT 100000"))
         {
             lastNumber = row.GetFieldValue<ulong>("number");
@@ -109,7 +109,7 @@ public class ProtocolEdgeCaseTests
         {
             // Query the empty table - the server sends an empty data block
             var count = 0;
-            await foreach (var row in connection.StreamAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT Id, Name FROM {tableName}"))
             {
                 count++;

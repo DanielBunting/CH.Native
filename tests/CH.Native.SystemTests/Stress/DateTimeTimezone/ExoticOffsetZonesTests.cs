@@ -110,7 +110,7 @@ public class ExoticOffsetZonesTests
 
                 try
                 {
-                    await foreach (var _ in conn.StreamAsync($"SELECT ts FROM {table}"))
+                    await foreach (var _ in conn.QueryStreamAsync($"SELECT ts FROM {table}"))
                     {
                         // Materialising any row triggers the column reader's TZ lookup.
                     }
@@ -152,7 +152,7 @@ public class ExoticOffsetZonesTests
             }
 
             DateTime read = default;
-            await foreach (var r in conn.StreamAsync($"SELECT ts FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table}"))
                 read = r.GetFieldValue<DateTime>(0);
             Assert.Equal(utcInstant, read);
 

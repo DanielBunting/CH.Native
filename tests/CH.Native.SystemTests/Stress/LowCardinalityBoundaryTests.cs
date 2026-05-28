@@ -78,7 +78,7 @@ public class LowCardinalityBoundaryTests
             // Per-row equality — i.e., reader resolves the index correctly across
             // the dictionary-width transition.
             int verified = 0;
-            await foreach (var row in conn.StreamAsync<LowCardRow>($"SELECT id, val FROM {table} ORDER BY id"))
+            await foreach (var row in conn.QueryStreamAsync<LowCardRow>($"SELECT id, val FROM {table} ORDER BY id"))
             {
                 Assert.Equal($"v_{row.Id % distinct}", row.Val);
                 verified++;

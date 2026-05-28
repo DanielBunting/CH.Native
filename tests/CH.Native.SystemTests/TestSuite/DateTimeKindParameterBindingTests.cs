@@ -59,7 +59,7 @@ public class DateTimeKindParameterBindingTests
                 new Dictionary<string, object?> { ["p1"] = input });
 
             TimestampRow? row = null;
-            await foreach (var r in conn.StreamAsync<TimestampRow>($"SELECT id, ts FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync<TimestampRow>($"SELECT id, ts FROM {table}"))
                 row = r;
 
             Assert.NotNull(row);
@@ -94,7 +94,7 @@ public class DateTimeKindParameterBindingTests
                 new Dictionary<string, object?> { ["p1"] = input });
 
             TimestampRow? row = null;
-            await foreach (var r in conn.StreamAsync<TimestampRow>($"SELECT id, ts FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync<TimestampRow>($"SELECT id, ts FROM {table}"))
                 row = r;
 
             Assert.NotNull(row);
@@ -136,7 +136,7 @@ public class DateTimeKindParameterBindingTests
                 new Dictionary<string, object?> { ["p1"] = localInput });
 
             TimestampRow? row = null;
-            await foreach (var r in conn.StreamAsync<TimestampRow>($"SELECT id, ts FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync<TimestampRow>($"SELECT id, ts FROM {table}"))
                 row = r;
 
             Assert.NotNull(row);
