@@ -276,7 +276,7 @@ await inserter.AddAsync(new Sample { Id = 1, Grid = new int[2, 3] { { 1, 2, 3 },
 await inserter.CompleteAsync();
 
 // Read back as rectangular.
-await foreach (var row in connection.QueryAsync<Sample>("SELECT id, grid FROM samples"))
+await foreach (var row in connection.QueryStreamAsync<Sample>("SELECT id, grid FROM samples"))
 {
     Console.WriteLine(row.Grid[0, 2]);  // 3
 }
@@ -361,7 +361,7 @@ CREATE TABLE events (
 ```
 
 ```csharp
-var rows = await connection.QueryAsync(
+var rows = await connection.QueryStreamAsync(
     "SELECT items.name, items.quantity FROM events"
 ).ToListAsync();
 ```
@@ -408,7 +408,7 @@ var city = doc.RootElement
     .GetString();
 
 // Server-side path extraction (more efficient)
-await foreach (var row in connection.QueryAsync(
+await foreach (var row in connection.QueryStreamAsync(
     "SELECT data.user.address.city::String as city FROM table"))
 {
     var city = row.GetFieldValue<string>("city");
@@ -455,7 +455,7 @@ if (data != null)
 The `Dynamic` type stores a value plus a per-row type discriminator — different rows in the same column can hold different concrete types. Maps to `CH.Native.Data.Dynamic.ClickHouseDynamic`:
 
 ```csharp
-await foreach (var row in connection.QueryAsync(
+await foreach (var row in connection.QueryStreamAsync(
     "SELECT value FROM dynamic_events"))
 {
     var dyn = row.GetFieldValue<ClickHouseDynamic>("value");
@@ -518,7 +518,7 @@ Equality is **byte-wise** on `State` and string-wise on `FunctionName`, so two i
 Example — reading a materialized-view state column:
 
 ```csharp
-await foreach (var row in connection.QueryAsync(
+await foreach (var row in connection.QueryStreamAsync(
     "SELECT id, sum_state FROM mv_user_totals ORDER BY id"))
 {
     var state = row.GetFieldValue<ClickHouseAggregateState>("sum_state");

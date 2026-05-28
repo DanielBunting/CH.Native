@@ -14,10 +14,86 @@ and this project follows [Semantic Versioning](https://semver.org/).
   materialized via a jagged→rectangular conversion at the read boundary,
   validating uniform shape and reporting the offending row index in a
   `ClickHouseTypeConversionException` on mismatch. Surfaces through the
-  reflection-based typed row mapper (`QueryAsync<T>`, LINQ `Table<T>` result
-  projection) and the ADO.NET reader's `GetFieldValue<T>()` when `T` is a
-  rectangular array type. Jagged `T[][]` / `T[][][]` continues to work
+  reflection-based typed row mapper (`QueryStreamAsync<T>`, LINQ `Table<T>`
+  result projection) and the ADO.NET reader's `GetFieldValue<T>()` when `T`
+  is a rectangular array type. Jagged `T[][]` / `T[][][]` continues to work
   unchanged for ragged data.
+- `CH.Native.Dapper.ClickHouseDbConnectionDapperExtensions` — Dapper-shaped
+  fast-path methods on `ClickHouseDbConnection`: `QueryAsync<T>`,
+  `QueryStreamAsync<T>`, `QueryFirstAsync<T>`, `QueryFirstOrDefaultAsync<T>`,
+  `QuerySingleAsync<T>`, `QuerySingleOrDefaultAsync<T>`. Bypasses Dapper's
+  compiled row mapper and routes through CH.Native's typed-accessor
+  `TypeMapper<T>` instead. Variables typed as `ClickHouseDbConnection`
+  automatically pick this path via C# extension-method resolution.
+- `CH.Native.Dapper.IDbConnectionDapperExtensions` — namespace-swap drop-in
+  for the standard Dapper surface. Replace `using Dapper;` with
+  `using CH.Native.Dapper;` and the fast path resolves automatically for
+  ClickHouse connections when typed as `IDbConnection` (e.g. in DI). Row-
+  mapping methods dispatch to the fast path for `ClickHouseDbConnection`
+  receivers and delegate to `Dapper.SqlMapper` for everything else.
+  Non-mapping methods (`ExecuteAsync`, `ExecuteScalarAsync`,
+  `QueryMultipleAsync`, dynamic `QueryAsync`, all sync variants) are thin
+  delegates to Dapper. Import only one of `using Dapper;` /
+  `using CH.Native.Dapper;` to avoid compile-time ambiguity on
+  `IDbConnection`-typed calls.
+- `ITypedColumn.IsNull(int index)` — new default-interface method for
+  null-checking without materialising the value. `TypedColumn<T>` overrides
+  with a JIT-folded short-circuit (`return false` for non-nullable value
+  types), eliminating the boxing previously paid by
+  `IsDBNull → GetValue is null`.
+
+### Changed
+
+- **Renamed** `ClickHouseConnection.QueryAsync<T>` and the matching
+  parameterised extensions on `ClickHouseConnectionExtensions` to
+  `QueryStreamAsync<T>` (and the untyped `QueryAsync` → `QueryStreamAsync`).
+  Frees the `QueryAsync<T>` name for the new Dapper-shaped extension on
+  `ClickHouseDbConnection`. **Breaking change for direct native-API users**
+  — migrate via a one-token rename. The ADO.NET surface
+  (`ClickHouseDbCommand.ExecuteReaderAsync` etc.) is unaffected.
+- `TypeMapper<T>` rewritten to compile per-property
+  `Expression<Action<T, ClickHouseDataReader>>` delegates that call
+  `reader.GetFieldValue<TProp>(ordinal)` directly. For well-known primitive
+  property types, this skips the legacy `GetValue → box → cast` round trip
+  entirely. Properties whose CLR type doesn't match column storage (enums,
+  multi-dim arrays, `ClickHouseMap`/`Dictionary` reshaping) still flow
+  through the existing `GetValue + ConvertValue` slow path.
+- `ClickHouseDataReader.GetFieldValue<T>(int)` adds a typed fast path —
+  when column storage is `TypedColumn<T>` for the exact requested `T`, reads
+  via the typed indexer with no boxing.
+- `ClickHouseDataReader.IsDBNull(int)` now routes through
+  `ITypedColumn.IsNull` instead of `GetValue is null`.
+- `ClickHouseDbDataReader.Read()` (sync) adds a fast path that bypasses
+  `Task.Run` when no `SynchronizationContext` / non-default `TaskScheduler`
+  is captured — covers ASP.NET Core, console apps, hosted services, and
+  unbuffered Dapper. UI-thread / classic-ASP.NET callers still pay the hop.
+- `ClickHouseDbDataReader.ReadAsync()` adds a cached `Task<bool>` fast path
+  for synchronously-completing reads — avoids the async-state-machine
+  allocation per row when the inner reader returns from a buffered block.
+
+### Fixed
+
+- `DateTime` columns with an explicit timezone (e.g. `DateTime('UTC')`) no
+  longer silently materialise as `default(DateTime)` when mapped to a
+  non-nullable `DateTime` property via `QueryStreamAsync<T>`. The typed
+  accessor path now correctly converts `DateTimeOffset → DateTime.UtcDateTime`,
+  matching the documented behaviour of `GetFieldValue<DateTime>`.
+
+### Performance
+
+- Materialized 1M-row read via `QueryStreamAsync<T>`: **265 MB → 171 MB
+  (-35%)**, **247 ms → 192 ms (-22%)**, measured against
+  `LargeResultSetBenchmarks`.
+- Streaming 1M-row read in lazy-string mode reading a single value-type
+  column: **23 MB → 128 KB (-99%)** — typed-accessor fast path removes the
+  remaining per-row boxing on the column the consumer touches.
+- Dapper users (via new `CH.Native.Dapper` extensions) on 1M-row reads:
+  **117 MB / 143 ms** (buffered `QueryAsync<T>`), **101 MB / 104 ms**
+  (`QueryStreamAsync<T>`). Beats `ClickHouse.Driver`'s comparable Dapper
+  path (172 MB / 209 ms) by 30-42% memory and 1.6-2.0× time.
+- Bulk-insert path untouched — pre-existing dominance preserved
+  (`BulkInserter<T>` 1M rows: 99 ms / 405 KB, vs `ClickHouse.Driver`
+  929 ms / 97 MB).
 
 ## [1.1.1] - 2026-05-09
 

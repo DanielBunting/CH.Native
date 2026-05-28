@@ -59,14 +59,14 @@ public class User
 await using var connection = new ClickHouseConnection("Host=localhost;Port=9000");
 await connection.OpenAsync();
 
-// Query with automatic mapping
-await foreach (var user in connection.QueryAsync<User>("SELECT id, name, created FROM users"))
+// Query with automatic mapping (streams row-by-row, low allocation)
+await foreach (var user in connection.QueryStreamAsync<User>("SELECT id, name, created FROM users"))
 {
     Console.WriteLine($"{user.Id}: {user.Name} (created {user.Created})");
 }
 
 // Query with parameters
-var activeUsers = await connection.QueryAsync<User>(
+var activeUsers = await connection.QueryStreamAsync<User>(
     "SELECT * FROM users WHERE created > @since",
     new { since = DateTime.UtcNow.AddDays(-7) }
 ).ToListAsync();

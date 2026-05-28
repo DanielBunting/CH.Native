@@ -96,17 +96,44 @@ In a long-running service, share a single `ClickHouseDataSource` across both pat
 
 ## Dapper Integration
 
-CH.Native works with [Dapper](https://github.com/DapperLib/Dapper) for simple object mapping.
+CH.Native ships a dedicated package — **`CH.Native.Dapper`** — that exposes the
+familiar Dapper API (`QueryAsync<T>`, `QueryFirstAsync<T>`, `ExecuteAsync`, …)
+on top of CH.Native's typed-accessor read path. Compared to vanilla Dapper over
+our ADO.NET surface it skips the per-value boxing tax that Dapper's compiled
+mapper pays for value-type columns — typically **30-40% lower allocations** on
+1M-row reads while keeping the exact same call shape.
 
 ### Setup
 
 ```csharp
 using CH.Native.Ado;
-using Dapper;
+// Prefer CH.Native.Dapper over `using Dapper;` — it provides drop-in
+// replacements for the methods you'd otherwise import from Dapper, plus
+// the fast-path Query<T> family for ClickHouse connections.
+using CH.Native.Dapper;
 
 await using var connection = new ClickHouseDbConnection("Host=localhost;Port=9000");
 await connection.OpenAsync();
 ```
+
+### Resolution rules — which `QueryAsync<T>` runs?
+
+The fast path lives in `CH.Native.Dapper`. C# extension-method resolution picks
+the more-derived receiver first, so the rules are:
+
+| Variable typed as | Imports | Result |
+|---|---|---|
+| `ClickHouseDbConnection` | either / both | **Always fast path** — `CH.Native.Dapper.ClickHouseDbConnectionDapperExtensions` wins via "more derived type" rule |
+| `IDbConnection` or `DbConnection` | `using CH.Native.Dapper;` only | **Fast path via runtime dispatch** — `IDbConnectionDapperExtensions` checks the receiver type and routes ClickHouse connections to the fast path; everything else delegates to `Dapper.SqlMapper` |
+| `IDbConnection` or `DbConnection` | `using Dapper;` only | **Dapper's classic path** (with per-value boxing) |
+| `IDbConnection` or `DbConnection` | both `using Dapper;` AND `using CH.Native.Dapper;` | **Compile-time ambiguity error** — import one or the other, not both |
+
+For DI scenarios where the connection is registered as `IDbConnection`, the
+recommendation is: **replace `using Dapper;` with `using CH.Native.Dapper;`**
+in the consuming files. `CH.Native.Dapper` re-exports the rest of Dapper's
+surface (`ExecuteAsync`, `ExecuteScalarAsync`, `QueryMultipleAsync`, dynamic
+`QueryAsync`, all sync variants) as thin delegates, so no other call sites
+need to change.
 
 ### Query
 
@@ -208,13 +235,13 @@ var users = await connection.QueryAsync<User>(
 );
 ```
 
-**Workaround:** open a `ClickHouseConnection` for the array-parameter call — the native API expands arrays correctly:
+**Workaround:** open a native `ClickHouseConnection` for the array-parameter call — the native API expands arrays correctly:
 
 ```csharp
 await using var native = new ClickHouseConnection(ConnectionString);
 await native.OpenAsync();
 
-var users = await native.QueryAsync<User>(
+var users = await native.QueryStreamAsync<User>(
     "SELECT * FROM users WHERE id IN @ids",
     new { ids = new[] { 1, 2, 3 } }
 ).ToListAsync();
@@ -296,7 +323,7 @@ await using (var native = await dataSource.OpenConnectionAsync())
 
 await using (var native = await dataSource.OpenConnectionAsync())
 {
-    await foreach (var row in native.QueryAsync<LogEntry>(
+    await foreach (var row in native.QueryStreamAsync<LogEntry>(
         "SELECT * FROM logs WHERE date = today()"))
     {
         ProcessLog(row);

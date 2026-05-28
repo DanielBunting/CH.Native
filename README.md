@@ -56,7 +56,7 @@ CH.Native supports the full ClickHouse type system across read, write, and bulk-
 | **Geospatial** | `Point`, `Ring`, `LineString`, `Polygon`, `MultiLineString`, `MultiPolygon` | `Point`, `Point[]`, `Point[][]`, `Point[][][]` |
 | **Semi-structured** | `JSON`, `Dynamic`, `Variant(T0, T1, ...)` | `string` / `JsonDocument`, `ClickHouseDynamic`, `VariantValue<T0, T1>` (boxing-free 2-arm) or `ClickHouseVariant` (boxed N-arm) |
 
-All types round-trip through both the read path (`ExecuteReaderAsync`, `QueryAsync<T>`) and the bulk-insert path (`CreateBulkInserter<T>`). `Nullable(...)` wraps any non-composite type. Composites compose freely (e.g. `Array(Nullable(LowCardinality(String)))`).
+All types round-trip through both the read path (`ExecuteReaderAsync`, `QueryStreamAsync<T>`) and the bulk-insert path (`CreateBulkInserter<T>`). `Nullable(...)` wraps any non-composite type. Composites compose freely (e.g. `Array(Nullable(LowCardinality(String)))`).
 
 ## Installation
 
@@ -82,7 +82,7 @@ await connection.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS users (id UInt
 ### Query with Parameters
 
 ```csharp
-var users = await connection.QueryAsync<User>(
+var users = await connection.QueryStreamAsync<User>(
     "SELECT * FROM users WHERE age > @minAge",
     new { minAge = 18 }
 ).ToListAsync();
@@ -98,7 +98,7 @@ public class User
     public int Age { get; set; }
 }
 
-await foreach (var user in connection.QueryAsync<User>("SELECT * FROM users"))
+await foreach (var user in connection.QueryStreamAsync<User>("SELECT * FROM users"))
 {
     Console.WriteLine($"{user.Id}: {user.Name}");
 }
@@ -118,12 +118,21 @@ await inserter.CompleteAsync();
 ### ADO.NET / Dapper
 
 ```csharp
+// Use CH.Native.Dapper for the fast-path Dapper-shaped API on top of CH.Native.
+using CH.Native.Dapper;
+
 await using var connection = new ClickHouseDbConnection("Host=localhost;Port=9000");
 await connection.OpenAsync();
 
-// Dapper
+// QueryAsync<T> here is CH.Native.Dapper's fast-path extension — routes
+// through CH.Native's typed-accessor mapper, no boxing tax.
 var users = await connection.QueryAsync<User>("SELECT * FROM users");
 ```
+
+For DI scenarios where the connection is typed as `IDbConnection`, replace
+`using Dapper;` with `using CH.Native.Dapper;` to opt into the fast path
+automatically. See [ADO.NET & Dapper](docs/ado-net-dapper.md) for the full
+story.
 
 ## Documentation
 
@@ -140,6 +149,7 @@ var users = await connection.QueryAsync<User>("SELECT * FROM users");
 | [ADO.NET & Dapper](docs/ado-net-dapper.md) | Standard provider and ORM integration |
 | [LINQ Provider](docs/linq-provider.md) | `connection.Table<T>()`, operators, modifiers |
 | [Telemetry](docs/telemetry.md) | Tracing, metrics, and logging |
+| [Performance Comparison](docs/performance-comparison.md) | Full benchmark matrix vs `ClickHouse.Driver` and `Octonica` |
 
 ## Samples
 
@@ -154,39 +164,49 @@ End-to-end runnable console projects under [`samples/`](samples/). Each picks a 
 
 ## Performance
 
-Three-way comparison against [ClickHouse.Driver](https://github.com/ClickHouse/clickhouse-cs) (HTTP) and [Octonica](https://github.com/Octonica/ClickHouseClient) (native TCP).
+Three-way comparison against [ClickHouse.Driver](https://github.com/ClickHouse/clickhouse-cs) (HTTP) and [Octonica](https://github.com/Octonica/ClickHouseClient) (native TCP). Each row shows **time / memory**; the **best** value in each row is bold.
 
-### Query Latency
+The tables below cover the headline workloads. **For the full benchmark matrix** — every row-count scaling for reads/inserts, complex queries (GROUP BY / JOIN / WHERE / ORDER BY), compression algorithms (LZ4 / Zstd), connection-establishment latency, and specialised type comparisons (Geo, Variant, JSON) — see **[docs/performance-comparison.md](docs/performance-comparison.md)**.
 
-| Benchmark | CH.Native | ClickHouse.Driver | Octonica |
-|-----------|-----------|-------------------|----------|
-| SELECT 1 | **586 μs** | 978 μs | 878 μs |
-| COUNT(*) 1M rows | **992 μs** | 1,408 μs | 1,041 μs |
-| SELECT 100 rows | **660 μs** | 1,183 μs | 710 μs |
+### Small queries (latency)
 
-### Large Result Sets
+| Workload | CH.Native | ClickHouse.Driver | Octonica |
+|---|---|---|---|
+| `SELECT 1` | **586 μs** | 978 μs | 878 μs |
+| `SELECT count(*) FROM <1M>` | **992 μs** | 1,408 μs | 1,041 μs |
+| `SELECT 100 rows` | **660 μs** | 1,183 μs | 710 μs |
 
-| Benchmark | CH.Native | CH.Native (Lazy) | ClickHouse.Driver | Octonica |
-|-----------|-----------|------------------|-------------------|----------|
-| Stream 1M rows | 100 ms | **58 ms** | 263 ms | 77 ms |
-| Materialize 1M rows | 234 ms | 319 ms | 442 ms | **202 ms** |
+### Streaming reads — 1M rows
 
-### Bulk Insert
+CH.Native ships an opt-in `StringMaterialization=Lazy` mode that defers UTF-8 string decode until each field is accessed. The "lazy / default" cells below show both modes; the default mode also benefits from the typed-accessor read path.
 
-| Benchmark | CH.Native | ClickHouse.Driver | Octonica |
-|-----------|-----------|-------------------|----------|
-| 1M rows | **97 ms** | 205 ms | 1,489 ms |
+| Workload | CH.Native (lazy / default) | ClickHouse.Driver | Octonica |
+|---|---|---|---|
+| Stream `id` only | **79 ms / 0.13 MB** · 115 ms / 101 MB | 262 ms / 195 MB | 79 ms / 80 MB |
+| Stream `id + name (string)` | **58 ms / 54 MB** · 76 ms / 54 MB | 86 ms / 78 MB | 73 ms / 91 MB |
+| Materialize to POCO (typed mapper) | 181 ms / 171 MB · **192 ms / 171 MB** | 475 ms / 265 MB | 210 ms / 251 MB |
 
-### Memory Efficiency (1M rows)
+### Dapper-style API — 1M rows
 
-| Benchmark | CH.Native | CH.Native (Lazy) | ClickHouse.Driver | Octonica |
-|-----------|-----------|------------------|-------------------|----------|
-| Streaming | 121 MB | **25 MB** | 191 MB | 78 MB |
-| Bulk insert | **0.4 MB** | — | 95 MB | 27 MB |
+`CH.Native.Dapper` provides Dapper-shaped extensions that route through CH.Native's typed-accessor mapper, sidestepping the per-value boxing Dapper's compiled mapper pays. Compared row-for-row against Dapper on top of `ClickHouse.Driver`:
 
-Enable lazy string materialization via connection string (`StringMaterialization=Lazy`) or builder (`.WithStringMaterialization(StringMaterialization.Lazy)`). Lazy mode defers UTF-8 string decoding until values are accessed, reducing memory by ~68% for streaming reads. Best for `ExecuteReaderAsync` / `QueryAsync` workloads; typed queries (`QueryAsync<T>`) always use eager decoding.
+| Workload | CH.Native.Dapper | Driver + Dapper | CH.Native is |
+|---|---|---|---|
+| `QueryStreamAsync<T>` (unbuffered) | **104 ms / 101 MB** | 209 ms / 172 MB | **2.0× faster, 41% less mem** |
+| `QueryAsync<T>` (buffered) | **143 ms / 117 MB** | 302 ms / 188 MB | **2.1× faster, 38% less mem** |
+| `QueryAsync<T>` via `IDbConnection` (DI) | 151 ms / 117 MB | 302 ms / 188 MB | 2.0× faster, 38% less mem |
 
-*Apple M5, .NET 10.0, ClickHouse 25.3 — run benchmarks with `dotnet run --project benchmarks/CH.Native.Benchmarks -c Release`*
+### Bulk insert — 1M rows
+
+| Workload | CH.Native | ClickHouse.Driver | Octonica |
+|---|---|---|---|
+| Bulk insert 1M rows | **99 ms / 0.4 MB** | 929 ms / 97 MB | n/a (errored) |
+
+### Test conditions
+
+- Apple M5, .NET 10.0, ClickHouse `26.5.1` (Docker image `clickhouse/clickhouse-server:latest` resolved at run time).
+- Driver: `ClickHouse.Driver 1.2.0` (HTTP); Octonica: `Octonica.ClickHouseClient 3.1.8` (native TCP).
+- Reproduce with: `dotnet run --project benchmarks/CH.Native.Benchmarks -c Release -- large` (or `dapper`, `insert`, `simple`).
 
 ## Requirements
 

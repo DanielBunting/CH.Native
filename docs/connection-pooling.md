@@ -40,7 +40,7 @@ builder.Services.AddClickHouse(builder.Configuration.GetSection("ClickHouse"));
 app.MapGet("/users/{id}", async (int id, ClickHouseDataSource ds, CancellationToken ct) =>
 {
     await using var conn = await ds.OpenConnectionAsync(ct);
-    var row = await conn.QueryAsync<User>(
+    var row = await conn.QueryStreamAsync<User>(
         "SELECT * FROM users WHERE id = {id:UInt32}",
         new { id },
         cancellationToken: ct).FirstAsync(ct);
@@ -174,7 +174,7 @@ app.MapGet("/events", async (
     CancellationToken ct) =>
 {
     await using var conn = await ds.OpenConnectionAsync(ct);
-    return Results.Ok(await conn.QueryAsync<Event>("SELECT * FROM events LIMIT 100", cancellationToken: ct));
+    return Results.Ok(await conn.QueryStreamAsync<Event>("SELECT * FROM events LIMIT 100", cancellationToken: ct));
 });
 ```
 
