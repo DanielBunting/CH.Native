@@ -90,9 +90,20 @@ if (args.Length > 0)
             BenchmarkRunner.Run<DataSourcePoolBenchmarks>();
             break;
 
-        // Dapper vs native streaming comparison (requires Docker)
+        // Dapper vs native streaming comparison (requires Docker).
+        // Extra args after "dapper" are forwarded to BenchmarkSwitcher so callers
+        // can pass `--filter "*pattern*"` to narrow the run.
         case "dapper":
-            BenchmarkRunner.Run<DapperVsQueryStreamBenchmarks>();
+            if (args.Length > 1)
+            {
+                BenchmarkSwitcher
+                    .FromTypes(new[] { typeof(DapperVsQueryStreamBenchmarks) })
+                    .Run(args[1..]);
+            }
+            else
+            {
+                BenchmarkRunner.Run<DapperVsQueryStreamBenchmarks>();
+            }
             break;
 
         // JSON benchmarks (requires Docker with ClickHouse 25.6+)

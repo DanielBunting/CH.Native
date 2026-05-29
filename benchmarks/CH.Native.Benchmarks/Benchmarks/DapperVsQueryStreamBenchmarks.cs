@@ -4,12 +4,13 @@ using Dapper;
 using NativeConnection = CH.Native.Connection.ClickHouseConnection;
 using NativeAdoConnection = CH.Native.Ado.ClickHouseDbConnection;
 using DriverConnection = ClickHouse.Driver.ADO.ClickHouseConnection;
-// CH.Native.Dapper is NOT imported because its IDbConnectionDapperExtensions
-// conflicts with Dapper.SqlMapper at the IDbConnection-typed call sites used
-// by the existing Driver benchmarks. The new CH.Native.Dapper-backed
-// benchmarks call its static classes explicitly to disambiguate.
-using ChNativeDapper = CH.Native.Dapper.ClickHouseDbConnectionDapperExtensions;
-using ChNativeDapperIDb = CH.Native.Dapper.IDbConnectionDapperExtensions;
+// CH.Native.Dapper is NOT imported wholesale because the existing Driver
+// benchmarks call SqlMapper extensions on IDbConnection — even after dropping
+// the row-shaped IDbConnection extensions from CH.Native.Dapper, qualifying
+// the concrete-type extension classes keeps the call sites unambiguous and
+// easy to read.
+using ChNativeDapperAdo = CH.Native.Dapper.ClickHouseDbConnectionDapperExtensions;
+using ChNativeDapperNative = CH.Native.Dapper.ClickHouseConnectionDapperExtensions;
 
 namespace CH.Native.Benchmarks.Benchmarks;
 
@@ -254,7 +255,7 @@ public class DapperVsQueryStreamBenchmarks
     [Benchmark(Description = "100 rows - CH.Native.Dapper QueryAsync<T> (typed conn)")]
     public async Task<int> ChDapper_QueryAsync_Typed_Small()
     {
-        var rows = await ChNativeDapper.QueryAsync<SimpleRow>(_nativeAdoConnection, SmallSql);
+        var rows = await ChNativeDapperAdo.QueryAsync<SimpleRow>(_nativeAdoConnection, SmallSql);
         return rows.Count;
     }
 
@@ -262,21 +263,32 @@ public class DapperVsQueryStreamBenchmarks
     public async Task<int> ChDapper_QueryStream_Typed_Small()
     {
         int count = 0;
-        await foreach (var _ in ChNativeDapper.QueryStreamAsync<SimpleRow>(_nativeAdoConnection, SmallSql))
+        await foreach (var _ in ChNativeDapperAdo.QueryStreamAsync<SimpleRow>(_nativeAdoConnection, SmallSql))
         {
             count++;
         }
         return count;
     }
 
-    [Benchmark(Description = "100 rows - CH.Native.Dapper QueryAsync<T> (via IDbConnection)")]
-    public async Task<int> ChDapper_QueryAsync_ViaIDbConnection_Small()
+    [Benchmark(Description = "100 rows - CH.Native.Dapper QueryAsync<T> (native conn, DI shape)")]
+    public async Task<int> ChDapper_QueryAsync_NativeConn_Small()
     {
-        System.Data.IDbConnection conn = _nativeAdoConnection;
-        // Mirrors the user pattern of replacing `using Dapper;` with
-        // `using CH.Native.Dapper;`. We qualify explicitly because both
-        // namespaces are imported in this benchmark file.
-        var rows = await ChNativeDapperIDb.QueryAsync<SimpleRow>(conn, SmallSql);
+        // The sibling fast path on ClickHouseConnection — the type returned by
+        // ClickHouseDataSource.OpenConnectionAsync. Equivalent to writing
+        // `connection.QueryAsync<SimpleRow>(sql)` with `using CH.Native.Dapper;`.
+        var rows = await ChNativeDapperNative.QueryAsync<SimpleRow>(_nativeConnection, SmallSql);
+        return rows.Count;
+    }
+
+    [Benchmark(Description = "100 rows - Dapper QueryAsync<T> on native conn (IDbConnection fallback)")]
+    public async Task<int> Dapper_QueryAsync_OnNativeConn_Small()
+    {
+        // Baseline: what users get today when the variable is typed as
+        // ClickHouseConnection (DI shape) and only `using Dapper;` is in scope —
+        // Dapper's IDbConnection extension wins, mapping goes through Dapper's
+        // codegen with the boxing tax.
+        System.Data.IDbConnection conn = _nativeConnection;
+        var rows = await conn.QueryAsync<SimpleRow>(SmallSql);
         return rows.Count();
     }
 
@@ -285,7 +297,7 @@ public class DapperVsQueryStreamBenchmarks
     [Benchmark(Description = "1M rows - CH.Native.Dapper QueryAsync<T> (typed conn)")]
     public async Task<int> ChDapper_QueryAsync_Typed_Large()
     {
-        var rows = await ChNativeDapper.QueryAsync<SimpleRow>(_nativeAdoConnection, LargeSql);
+        var rows = await ChNativeDapperAdo.QueryAsync<SimpleRow>(_nativeAdoConnection, LargeSql);
         return rows.Count;
     }
 
@@ -293,18 +305,25 @@ public class DapperVsQueryStreamBenchmarks
     public async Task<int> ChDapper_QueryStream_Typed_Large()
     {
         int count = 0;
-        await foreach (var _ in ChNativeDapper.QueryStreamAsync<SimpleRow>(_nativeAdoConnection, LargeSql))
+        await foreach (var _ in ChNativeDapperAdo.QueryStreamAsync<SimpleRow>(_nativeAdoConnection, LargeSql))
         {
             count++;
         }
         return count;
     }
 
-    [Benchmark(Description = "1M rows - CH.Native.Dapper QueryAsync<T> (via IDbConnection)")]
-    public async Task<int> ChDapper_QueryAsync_ViaIDbConnection_Large()
+    [Benchmark(Description = "1M rows - CH.Native.Dapper QueryAsync<T> (native conn, DI shape)")]
+    public async Task<int> ChDapper_QueryAsync_NativeConn_Large()
     {
-        System.Data.IDbConnection conn = _nativeAdoConnection;
-        var rows = await ChNativeDapperIDb.QueryAsync<SimpleRow>(conn, LargeSql);
+        var rows = await ChNativeDapperNative.QueryAsync<SimpleRow>(_nativeConnection, LargeSql);
+        return rows.Count;
+    }
+
+    [Benchmark(Description = "1M rows - Dapper QueryAsync<T> on native conn (IDbConnection fallback)")]
+    public async Task<int> Dapper_QueryAsync_OnNativeConn_Large()
+    {
+        System.Data.IDbConnection conn = _nativeConnection;
+        var rows = await conn.QueryAsync<SimpleRow>(LargeSql);
         return rows.Count();
     }
 

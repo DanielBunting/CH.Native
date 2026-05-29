@@ -107,10 +107,10 @@ mapper pays for value-type columns — typically **30-40% lower allocations** on
 
 ```csharp
 using CH.Native.Ado;
-// Prefer CH.Native.Dapper over `using Dapper;` — it provides drop-in
-// replacements for the methods you'd otherwise import from Dapper, plus
-// the fast-path Query<T> family for ClickHouse connections.
 using CH.Native.Dapper;
+// `using Dapper;` is fine alongside CH.Native.Dapper — they no longer collide
+// on row-shaped methods.
+using Dapper;
 
 await using var connection = new ClickHouseDbConnection("Host=localhost;Port=9000");
 await connection.OpenAsync();
@@ -118,22 +118,28 @@ await connection.OpenAsync();
 
 ### Resolution rules — which `QueryAsync<T>` runs?
 
-The fast path lives in `CH.Native.Dapper`. C# extension-method resolution picks
-the more-derived receiver first, so the rules are:
+The fast path is exposed only on the concrete CH connection types. C# extension
+resolution picks the more-derived receiver first, so the rules are simple:
 
-| Variable typed as | Imports | Result |
-|---|---|---|
-| `ClickHouseDbConnection` | either / both | **Always fast path** — `CH.Native.Dapper.ClickHouseDbConnectionDapperExtensions` wins via "more derived type" rule |
-| `IDbConnection` or `DbConnection` | `using CH.Native.Dapper;` only | **Fast path via runtime dispatch** — `IDbConnectionDapperExtensions` checks the receiver type and routes ClickHouse connections to the fast path; everything else delegates to `Dapper.SqlMapper` |
-| `IDbConnection` or `DbConnection` | `using Dapper;` only | **Dapper's classic path** (with per-value boxing) |
-| `IDbConnection` or `DbConnection` | both `using Dapper;` AND `using CH.Native.Dapper;` | **Compile-time ambiguity error** — import one or the other, not both |
+| Variable typed as | Result |
+|---|---|
+| `ClickHouseDbConnection` (e.g. `new ClickHouseDbConnection(...)`) | **Fast path** — `ClickHouseDbConnectionDapperExtensions.QueryAsync<T>` wins |
+| `ClickHouseConnection` (e.g. `await ds.OpenConnectionAsync()`) | **Fast path** — `ClickHouseConnectionDapperExtensions.QueryAsync<T>` wins |
+| `IDbConnection` or `DbConnection` | **Dapper's classic path** — `Dapper.SqlMapper.QueryAsync<T>` (per-value boxing) |
 
-For DI scenarios where the connection is registered as `IDbConnection`, the
-recommendation is: **replace `using Dapper;` with `using CH.Native.Dapper;`**
-in the consuming files. `CH.Native.Dapper` re-exports the rest of Dapper's
-surface (`ExecuteAsync`, `ExecuteScalarAsync`, `QueryMultipleAsync`, dynamic
-`QueryAsync`, all sync variants) as thin delegates, so no other call sites
-need to change.
+`using Dapper;` and `using CH.Native.Dapper;` can coexist freely. CH.Native.Dapper
+no longer extends `IDbConnection` with row-shaped methods (`QueryAsync<T>` etc.),
+so there is no ambiguity to resolve. Execute-style methods (`ExecuteAsync`,
+`ExecuteScalarAsync`, `QueryMultipleAsync`) remain as thin pass-throughs to
+Dapper for namespace-import convenience.
+
+If a DI registration only hands out `IDbConnection`, fast-path resolution
+requires assigning to a concrete-type local first:
+
+```csharp
+ClickHouseConnection ch = await ds.OpenConnectionAsync(); // fast-path-eligible
+var rows = await ch.QueryAsync<User>(sql);                // CH.Native.Dapper fast path
+```
 
 ### Query
 

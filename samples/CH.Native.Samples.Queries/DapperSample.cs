@@ -132,14 +132,16 @@ internal static class DapperSample
     /// </summary>
     /// <remarks>
     /// The crucial line is <c>await ds.OpenConnectionAsync()</c>: it returns a
-    /// <see cref="ClickHouseConnection"/>, which (post-Phase-2) IS-A
-    /// <see cref="System.Data.Common.DbConnection"/>, so Dapper's
-    /// <see cref="System.Data.IDbConnection"/>-bound extension methods bind
-    /// directly. No wrapper, no manual conversion, no <c>OpenDbConnectionAsync</c>
+    /// <see cref="ClickHouseConnection"/>, which IS-A <see cref="System.Data.Common.DbConnection"/>.
+    /// Because the variable is statically typed as <see cref="ClickHouseConnection"/>,
+    /// the Dapper-style row methods bind to
+    /// <see cref="CH.Native.Dapper.ClickHouseConnectionDapperExtensions"/> — the
+    /// typed-mapper fast path — rather than to Dapper's IDbConnection extension.
+    /// No wrapper, no manual conversion, no <c>OpenDbConnectionAsync</c>
     /// indirection — the same physical connection serves both the native API
     /// (<see cref="ClickHouseConnection.ExecuteScalarAsync{T}(string, System.Threading.CancellationToken)"/>,
     /// <see cref="ClickHouseConnection.CreateBulkInserter{T}(string, CH.Native.BulkInsert.BulkInsertOptions?)"/>)
-    /// and Dapper.
+    /// and the Dapper-style query surface.
     /// </remarks>
     public static async Task RunWithDependencyInjectionAsync(string connectionString)
     {
@@ -183,14 +185,18 @@ internal static class DapperSample
                 """);
             Console.WriteLine($"Seeded {tableName} via DI-resolved DataSource");
 
-            // The DataSource gave us a pooled connection; CH.Native.Dapper's
-            // IDbConnection extensions bind because ClickHouseConnection : DbConnection.
+            // The DataSource gave us a pooled ClickHouseConnection. The variable
+            // is statically typed as ClickHouseConnection, so QueryAsync<T> binds
+            // to ClickHouseConnectionDapperExtensions — CH.Native.Dapper's
+            // typed-mapper fast path — rather than falling through to Dapper's
+            // IDbConnection extension. No source change needed to opt in; the
+            // receiver type does the work.
             var electronics = await connection.QueryAsync<Product>(
                 $"SELECT id, name, category, price, in_stock FROM {tableName} WHERE category = @c ORDER BY price",
                 new { c = "Electronics" });
 
             Console.WriteLine();
-            Console.WriteLine("--- Dapper QueryAsync<T> on DI-rented connection ---");
+            Console.WriteLine("--- CH.Native.Dapper QueryAsync<T> on DI-rented connection ---");
             foreach (var p in electronics)
             {
                 Console.WriteLine($"  [{p.Id}] {p.Name,-12} ${p.Price,8:F2}  in_stock={p.InStock}");
@@ -207,6 +213,7 @@ internal static class DapperSample
             Console.WriteLine("--- Plumbing check ---");
             Console.WriteLine($"  Resolved type         : {ds.GetType().Name}");
             Console.WriteLine($"  Rent type             : {connection.GetType().Name}");
+            Console.WriteLine($"  Row mapper            : CH.Native.Dapper fast path (typed mapper, no boxing tax)");
             Console.WriteLine($"  Is DbConnection       : {connection is System.Data.Common.DbConnection}");
             Console.WriteLine($"  Pool stats after rent : {ds.GetStatistics()}");
         }
