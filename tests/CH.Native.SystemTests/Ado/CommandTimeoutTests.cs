@@ -1,6 +1,9 @@
 using System.Data;
 using CH.Native.Ado;
 using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
+using CH.Native.Connection;
 using CH.Native.SystemTests.Fixtures;
 using Xunit;
 using Xunit.Abstractions;
@@ -43,7 +46,7 @@ public class CommandTimeoutTests
     [Fact]
     public async Task ExecuteScalar_ExceedsCommandTimeout_ThrowsOperationCanceled()
     {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         var cmd = conn.CreateCommand();
@@ -69,7 +72,7 @@ public class CommandTimeoutTests
     [Fact]
     public async Task ExecuteNonQuery_ExceedsCommandTimeout_ThrowsOperationCanceled()
     {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         var cmd = conn.CreateCommand();
@@ -87,7 +90,7 @@ public class CommandTimeoutTests
     [Fact]
     public async Task ExecuteReader_ExceedsCommandTimeout_ThrowsOperationCanceled()
     {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         var cmd = conn.CreateCommand();
@@ -108,7 +111,7 @@ public class CommandTimeoutTests
         // succeeds. Without this, the connection is poisoned and every
         // subsequent ADO call on this connection would surface a confusing
         // "wire out of sync" error.
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         var slow = conn.CreateCommand();
@@ -131,7 +134,7 @@ public class CommandTimeoutTests
         // ADO convention: CommandTimeout = 0 (or negative) means "no timeout".
         // CreateTimeoutCts returns null in that case, so the call relies
         // solely on the caller's CancellationToken.
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         var cmd = conn.CreateCommand();
@@ -152,7 +155,7 @@ public class CommandTimeoutTests
         // a long-running streaming SELECT (numbers(N) is interruptible mid-
         // stream, unlike sleep() which the server doesn't poll for cancel
         // until the sleep completes) so the cancel actually interrupts.
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         var cmd = conn.CreateCommand();

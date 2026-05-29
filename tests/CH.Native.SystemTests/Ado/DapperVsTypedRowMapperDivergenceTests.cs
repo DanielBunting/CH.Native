@@ -1,5 +1,8 @@
 using CH.Native.Ado;
 using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
+using CH.Native.Connection;
 // CH.Native.Dapper not imported to avoid IDbConnection extension ambiguity with Dapper namespace; qualify Register() calls below.
 using CH.Native.Mapping;
 using CH.Native.SystemTests.Fixtures;
@@ -110,7 +113,7 @@ public class DapperVsTypedRowMapperDivergenceTests : IAsyncLifetime
         // box, matching the typed mapper's snake_case fallback.
         CH.Native.Dapper.ClickHouseDapperIntegration.Register();
 
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         var rows = (await conn.QueryAsync<UserRowDapperConvention>(
@@ -145,7 +148,7 @@ public class DapperVsTypedRowMapperDivergenceTests : IAsyncLifetime
         DefaultTypeMap.MatchNamesWithUnderscores = false;
         try
         {
-            await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+            await using var conn = new ClickHouseConnection(_fx.ConnectionString);
             await conn.OpenAsync();
 
             var rows = (await conn.QueryAsync<UserRowOptOutPoco>(
@@ -176,7 +179,7 @@ public class DapperVsTypedRowMapperDivergenceTests : IAsyncLifetime
 
         await using var nativeConn = new ClickHouseConnection(_fx.BuildSettings());
         await nativeConn.OpenAsync();
-        await using var dbConn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var dbConn = new ClickHouseConnection(_fx.ConnectionString);
         await dbConn.OpenAsync();
 
         var typedCount = 0;

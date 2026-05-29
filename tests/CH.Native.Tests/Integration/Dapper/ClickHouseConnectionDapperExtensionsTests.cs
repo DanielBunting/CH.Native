@@ -7,7 +7,7 @@ namespace CH.Native.Tests.Integration.Dapper;
 
 /// <summary>
 /// Tests for <see cref="ClickHouseConnectionDapperExtensions"/>: the sibling
-/// of <see cref="ClickHouseDbConnectionDapperExtensions"/> that binds when a
+/// of <see cref="ClickHouseConnectionDapperExtensions"/> that binds when a
 /// variable is typed as <see cref="ClickHouseConnection"/> — the shape returned
 /// by <c>ClickHouseDataSource.OpenConnectionAsync</c>. Verifies result shape,
 /// parameter binding, empty-result-set conventions, and cancellation.

@@ -1,5 +1,8 @@
 using CH.Native.Ado;
 using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
+using CH.Native.Connection;
 using CH.Native.DependencyInjection;
 using CH.Native.Dapper;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,7 +32,7 @@ internal static class DapperSample
 
         var tableName = $"sample_dapper_products_{Guid.NewGuid():N}";
 
-        await using var connection = new ClickHouseDbConnection(connectionString);
+        await using var connection = new ClickHouseConnection(connectionString);
         await connection.OpenAsync();
 
         try

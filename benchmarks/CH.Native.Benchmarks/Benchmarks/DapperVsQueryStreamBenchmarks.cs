@@ -2,14 +2,11 @@ using BenchmarkDotNet.Attributes;
 using CH.Native.Benchmarks.Infrastructure;
 using Dapper;
 using NativeConnection = CH.Native.Connection.ClickHouseConnection;
-using NativeAdoConnection = CH.Native.Ado.ClickHouseDbConnection;
 using DriverConnection = ClickHouse.Driver.ADO.ClickHouseConnection;
-// CH.Native.Dapper is NOT imported wholesale because the existing Driver
-// benchmarks call SqlMapper extensions on IDbConnection — even after dropping
-// the row-shaped IDbConnection extensions from CH.Native.Dapper, qualifying
-// the concrete-type extension classes keeps the call sites unambiguous and
-// easy to read.
-using ChNativeDapperAdo = CH.Native.Dapper.ClickHouseDbConnectionDapperExtensions;
+// Post-collapse: ClickHouseConnection is the only CH.Native connection type, so
+// "ADO" and "native" benchmarks share the same connection. Qualifying the Dapper
+// extension class explicitly keeps call sites readable next to the Dapper.SqlMapper
+// extensions used for the Driver benchmarks.
 using ChNativeDapperNative = CH.Native.Dapper.ClickHouseConnectionDapperExtensions;
 
 namespace CH.Native.Benchmarks.Benchmarks;
@@ -29,7 +26,6 @@ namespace CH.Native.Benchmarks.Benchmarks;
 public class DapperVsQueryStreamBenchmarks
 {
     private NativeConnection _nativeConnection = null!;
-    private NativeAdoConnection _nativeAdoConnection = null!;
     private DriverConnection _driverConnection = null!;
 
     private const string SmallSql =
@@ -51,9 +47,6 @@ public class DapperVsQueryStreamBenchmarks
         _nativeConnection = new NativeConnection(manager.NativeConnectionString);
         await _nativeConnection.OpenAsync();
 
-        _nativeAdoConnection = new NativeAdoConnection(manager.NativeConnectionString);
-        await _nativeAdoConnection.OpenAsync();
-
         _driverConnection = new DriverConnection(manager.DriverConnectionString);
         await _driverConnection.OpenAsync();
     }
@@ -62,7 +55,6 @@ public class DapperVsQueryStreamBenchmarks
     public async Task GlobalCleanup()
     {
         await _nativeConnection.DisposeAsync();
-        await _nativeAdoConnection.DisposeAsync();
         await _driverConnection.DisposeAsync();
     }
 
@@ -82,7 +74,7 @@ public class DapperVsQueryStreamBenchmarks
     [Benchmark(Description = "100 rows - Native Dapper QueryAsync (buffered)")]
     public async Task<int> NativeDapper_QueryAsync_Buffered_Small()
     {
-        var rows = await _nativeAdoConnection.QueryAsync<SimpleRow>(SmallSql);
+        var rows = await _nativeConnection.QueryAsync<SimpleRow>(SmallSql);
         return rows.Count();
     }
 
@@ -90,7 +82,7 @@ public class DapperVsQueryStreamBenchmarks
     public async Task<int> NativeDapper_QueryAsync_Unbuffered_Small()
     {
         int count = 0;
-        var rows = await _nativeAdoConnection.QueryAsync<SimpleRow>(
+        var rows = await _nativeConnection.QueryAsync<SimpleRow>(
             new CommandDefinition(SmallSql, flags: CommandFlags.None));
         foreach (var _ in rows)
         {
@@ -135,7 +127,7 @@ public class DapperVsQueryStreamBenchmarks
     [Benchmark(Description = "1M rows - Native Dapper QueryAsync (buffered)")]
     public async Task<int> NativeDapper_QueryAsync_Buffered_Large()
     {
-        var rows = await _nativeAdoConnection.QueryAsync<SimpleRow>(LargeSql);
+        var rows = await _nativeConnection.QueryAsync<SimpleRow>(LargeSql);
         return rows.Count();
     }
 
@@ -143,7 +135,7 @@ public class DapperVsQueryStreamBenchmarks
     public async Task<int> NativeDapper_QueryAsync_Unbuffered_Large()
     {
         int count = 0;
-        var rows = await _nativeAdoConnection.QueryAsync<SimpleRow>(
+        var rows = await _nativeConnection.QueryAsync<SimpleRow>(
             new CommandDefinition(LargeSql, flags: CommandFlags.None));
         foreach (var _ in rows)
         {
@@ -173,13 +165,13 @@ public class DapperVsQueryStreamBenchmarks
     }
 
     // Diagnostic: bypass Dapper entirely and exercise IsDBNull + GetXxx on
-    // ClickHouseDbDataReader directly. Confirms whether per-row boxing is on
+    // ClickHouseDataReader directly. Confirms whether per-row boxing is on
     // our side or somewhere in Dapper's codegen.
 
     [Benchmark(Description = "1M rows - Direct IsDBNull+GetXxx (no Dapper)")]
     public async Task<long> Direct_IsDBNull_GetXxx_Large()
     {
-        using var cmd = _nativeAdoConnection.CreateCommand();
+        using var cmd = _nativeConnection.CreateCommand();
         cmd.CommandText = LargeSql;
         await using var reader = await cmd.ExecuteReaderAsync();
 
@@ -199,7 +191,7 @@ public class DapperVsQueryStreamBenchmarks
     [Benchmark(Description = "1M rows - Direct GetValue (indexer) (no Dapper)")]
     public async Task<long> Direct_GetValue_Large()
     {
-        using var cmd = _nativeAdoConnection.CreateCommand();
+        using var cmd = _nativeConnection.CreateCommand();
         cmd.CommandText = LargeSql;
         await using var reader = await cmd.ExecuteReaderAsync();
 
@@ -225,7 +217,7 @@ public class DapperVsQueryStreamBenchmarks
     [Benchmark(Description = "1M rows - Hand-rolled mapper (typed accessors)")]
     public async Task<int> Direct_HandRolledMapper_Large()
     {
-        using var cmd = _nativeAdoConnection.CreateCommand();
+        using var cmd = _nativeConnection.CreateCommand();
         cmd.CommandText = LargeSql;
         await using var reader = await cmd.ExecuteReaderAsync();
 
@@ -255,19 +247,8 @@ public class DapperVsQueryStreamBenchmarks
     [Benchmark(Description = "100 rows - CH.Native.Dapper QueryAsync<T> (typed conn)")]
     public async Task<int> ChDapper_QueryAsync_Typed_Small()
     {
-        var rows = await ChNativeDapperAdo.QueryAsync<SimpleRow>(_nativeAdoConnection, SmallSql);
+        var rows = await ChNativeDapperNative.QueryAsync<SimpleRow>(_nativeConnection, SmallSql);
         return rows.Count;
-    }
-
-    [Benchmark(Description = "100 rows - CH.Native.Dapper QueryStreamAsync<T> (typed conn)")]
-    public async Task<int> ChDapper_QueryStream_Typed_Small()
-    {
-        int count = 0;
-        await foreach (var _ in ChNativeDapperAdo.QueryStreamAsync<SimpleRow>(_nativeAdoConnection, SmallSql))
-        {
-            count++;
-        }
-        return count;
     }
 
     [Benchmark(Description = "100 rows - CH.Native.Dapper QueryAsync<T> (native conn, DI shape)")]
@@ -297,19 +278,8 @@ public class DapperVsQueryStreamBenchmarks
     [Benchmark(Description = "1M rows - CH.Native.Dapper QueryAsync<T> (typed conn)")]
     public async Task<int> ChDapper_QueryAsync_Typed_Large()
     {
-        var rows = await ChNativeDapperAdo.QueryAsync<SimpleRow>(_nativeAdoConnection, LargeSql);
+        var rows = await ChNativeDapperNative.QueryAsync<SimpleRow>(_nativeConnection, LargeSql);
         return rows.Count;
-    }
-
-    [Benchmark(Description = "1M rows - CH.Native.Dapper QueryStreamAsync<T> (typed conn)")]
-    public async Task<int> ChDapper_QueryStream_Typed_Large()
-    {
-        int count = 0;
-        await foreach (var _ in ChNativeDapperAdo.QueryStreamAsync<SimpleRow>(_nativeAdoConnection, LargeSql))
-        {
-            count++;
-        }
-        return count;
     }
 
     [Benchmark(Description = "1M rows - CH.Native.Dapper QueryAsync<T> (native conn, DI shape)")]
@@ -334,7 +304,7 @@ public class DapperVsQueryStreamBenchmarks
     [Benchmark(Description = "1M rows - Hand-rolled mapper (GetValue + cast)")]
     public async Task<int> Direct_HandRolledMapper_GetValue_Large()
     {
-        using var cmd = _nativeAdoConnection.CreateCommand();
+        using var cmd = _nativeConnection.CreateCommand();
         cmd.CommandText = LargeSql;
         await using var reader = await cmd.ExecuteReaderAsync();
 

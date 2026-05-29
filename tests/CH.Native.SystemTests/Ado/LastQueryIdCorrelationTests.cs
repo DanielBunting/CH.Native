@@ -1,4 +1,7 @@
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.BulkInsert;
 using CH.Native.Connection;
 using CH.Native.Linq;
@@ -19,7 +22,7 @@ namespace CH.Native.SystemTests.Ado;
 ///
 /// <para>
 /// Covers all four ways an id can enter the wire (auto-generated, ADO
-/// <see cref="ClickHouseDbCommand.QueryId"/>, <see cref="BulkInsertOptions.QueryId"/>,
+/// <see cref="ClickHouseCommand.QueryId"/>, <see cref="BulkInsertOptions.QueryId"/>,
 /// LINQ <see cref="ClickHouseQueryableExtensions.WithQueryId{T}(System.Linq.IQueryable{T}, string)"/>),
 /// the cancelled-query case, and pool-isolation across concurrent rents.
 /// </para>
@@ -60,17 +63,17 @@ public class LastQueryIdCorrelationTests
     {
         var explicitId = $"correlation_test_cmd_{Guid.NewGuid():N}";
 
-        await using var dbConn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var dbConn = new ClickHouseConnection(_fx.ConnectionString);
         await dbConn.OpenAsync();
-        using var cmd = (ClickHouseDbCommand)dbConn.CreateCommand();
+        using var cmd = (ClickHouseCommand)dbConn.CreateCommand();
         cmd.CommandText = "SELECT 1";
         cmd.QueryId = explicitId;
         _ = await cmd.ExecuteScalarAsync();
 
-        Assert.Equal(explicitId, dbConn.Inner.LastQueryId);
+        Assert.Equal(explicitId, dbConn.LastQueryId);
 
-        await dbConn.Inner.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
-        var matched = await dbConn.Inner.ExecuteScalarAsync<ulong>(
+        await dbConn.ExecuteNonQueryAsync("SYSTEM FLUSH LOGS");
+        var matched = await dbConn.ExecuteScalarAsync<ulong>(
             $"SELECT count() FROM system.query_log WHERE query_id = '{explicitId}'");
         Assert.True(matched >= 1);
     }

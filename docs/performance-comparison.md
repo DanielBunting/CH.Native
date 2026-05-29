@@ -75,8 +75,8 @@ Reference — legacy Dapper-on-CH.Native (without `CH.Native.Dapper` fast path):
 
 | Path | Time | Allocated |
 |---|---|---|
-| Dapper unbuffered over `ClickHouseDbConnection` | 156 ms | 304 MB |
-| Dapper buffered over `ClickHouseDbConnection` | 282 ms | 320 MB |
+| Dapper unbuffered over `ClickHouseConnection` | 156 ms | 304 MB |
+| Dapper buffered over `ClickHouseConnection` | 282 ms | 320 MB |
 
 ## Bulk insert (`insert`)
 

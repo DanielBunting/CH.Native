@@ -67,7 +67,7 @@ static void PrintUsage()
             linq-aggregates  CountAsync / SumAsync / AverageAsync / MinAsync / MaxAsync / Any / First / Single
             linq-final       connection.Table<T>(name).Final() — ReplacingMergeTree current state
             linq-sample      connection.Table<T>(name).Sample(0.1).WithQueryId(...) — approximate analytics
-            adonet           ClickHouseDbConnection / ClickHouseDbCommand / DbDataReader
+            adonet           ClickHouseConnection / ClickHouseCommand / DbDataReader
             dapper           Dapper QueryAsync / QueryFirstAsync / ExecuteScalarAsync after Register()
             dapper-di        Dapper on a pooled connection rented from a DI-resolved ClickHouseDataSource
             pooled           dataSource.Table<T>(name) + concurrent rented-connection queries

@@ -1,7 +1,10 @@
 using System.Data;
+using System.Data.Common;
 using System.Reflection;
 using CH.Native.Ado;
+using CH.Native.Connection;
 using CH.Native.Commands;
+using CH.Native.Results;
 using Xunit;
 
 namespace CH.Native.Tests.Unit.Ado;
@@ -20,17 +23,17 @@ namespace CH.Native.Tests.Unit.Ado;
 /// right one (relying on the library to handle it).
 /// </para>
 /// </summary>
-public class ClickHouseDbCommandDBNullTests
+public class ClickHouseCommandDBNullTests
 {
     [Fact]
     public void BuildNativeParameters_DBNullValue_IsConvertedToNull_NoTypeInferenceThrow()
     {
-        var cmd = new ClickHouseDbCommand();
+        var cmd = new ClickHouseCommand();
         var p = (ClickHouseDbParameter)cmd.CreateParameter();
         p.ParameterName = "p1";
         p.Value = DBNull.Value;
         p.ClickHouseType = "Nullable(String)"; // explicit type — bypasses inference
-        cmd.Parameters.Add(p);
+        ((DbCommand)cmd).Parameters.Add(p);
 
         var native = InvokeBuildNativeParameters(cmd);
         Assert.Equal(1, native.Count);
@@ -44,11 +47,11 @@ public class ClickHouseDbCommandDBNullTests
         // on demand. The DBNull → null translation must happen at the ADO
         // boundary BEFORE any type inference, so even without an explicit type
         // the build step itself succeeds.
-        var cmd = new ClickHouseDbCommand();
+        var cmd = new ClickHouseCommand();
         var p = (ClickHouseDbParameter)cmd.CreateParameter();
         p.ParameterName = "p1";
         p.Value = DBNull.Value;
-        cmd.Parameters.Add(p);
+        ((DbCommand)cmd).Parameters.Add(p);
 
         var native = InvokeBuildNativeParameters(cmd);
         Assert.Null(native[0].Value);
@@ -57,12 +60,12 @@ public class ClickHouseDbCommandDBNullTests
     [Fact]
     public void BuildNativeParameters_PlainNull_PassesThroughUnchanged()
     {
-        var cmd = new ClickHouseDbCommand();
+        var cmd = new ClickHouseCommand();
         var p = (ClickHouseDbParameter)cmd.CreateParameter();
         p.ParameterName = "p1";
         p.Value = null;
         p.ClickHouseType = "Nullable(String)";
-        cmd.Parameters.Add(p);
+        ((DbCommand)cmd).Parameters.Add(p);
 
         var native = InvokeBuildNativeParameters(cmd);
         Assert.Null(native[0].Value);
@@ -71,19 +74,19 @@ public class ClickHouseDbCommandDBNullTests
     [Fact]
     public void BuildNativeParameters_RegularValue_PassesThroughUnchanged()
     {
-        var cmd = new ClickHouseDbCommand();
+        var cmd = new ClickHouseCommand();
         var p = (ClickHouseDbParameter)cmd.CreateParameter();
         p.ParameterName = "p1";
         p.Value = 42;
-        cmd.Parameters.Add(p);
+        ((DbCommand)cmd).Parameters.Add(p);
 
         var native = InvokeBuildNativeParameters(cmd);
         Assert.Equal(42, native[0].Value);
     }
 
-    private static ClickHouseParameterCollection InvokeBuildNativeParameters(ClickHouseDbCommand cmd)
+    private static ClickHouseParameterCollection InvokeBuildNativeParameters(ClickHouseCommand cmd)
     {
-        var method = typeof(ClickHouseDbCommand).GetMethod(
+        var method = typeof(ClickHouseCommand).GetMethod(
             "BuildNativeParameters",
             BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("BuildNativeParameters not found");

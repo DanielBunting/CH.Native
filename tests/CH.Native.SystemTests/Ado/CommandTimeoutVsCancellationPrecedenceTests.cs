@@ -1,4 +1,7 @@
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.SystemTests.Fixtures;
 using Xunit;
 using Xunit.Abstractions;
@@ -27,10 +30,10 @@ public class CommandTimeoutVsCancellationPrecedenceTests
     [Fact]
     public async Task ExternalToken_FiresFirst_OperationCanceledExceptionWins()
     {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
-        using var cmd = (ClickHouseDbCommand)conn.CreateCommand();
+        using var cmd = (ClickHouseCommand)conn.CreateCommand();
         cmd.CommandText = "SELECT count() FROM numbers(10000000000)";
         cmd.CommandTimeout = 30;
 
@@ -43,10 +46,10 @@ public class CommandTimeoutVsCancellationPrecedenceTests
     [Fact]
     public async Task DisabledCommandTimeout_ZeroValue_ExternalTokenStillCancels()
     {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
-        using var cmd = (ClickHouseDbCommand)conn.CreateCommand();
+        using var cmd = (ClickHouseCommand)conn.CreateCommand();
         cmd.CommandText = "SELECT count() FROM numbers(10000000000)";
         cmd.CommandTimeout = 0; // disabled
 
@@ -58,11 +61,11 @@ public class CommandTimeoutVsCancellationPrecedenceTests
     [Fact]
     public async Task AfterTimeout_SubsequentCommands_OnSameConnection_Succeed()
     {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         // First command times out (CommandTimeout in seconds).
-        using (var slow = (ClickHouseDbCommand)conn.CreateCommand())
+        using (var slow = (ClickHouseCommand)conn.CreateCommand())
         {
             slow.CommandText = "SELECT count() FROM numbers(10000000000)";
             slow.CommandTimeout = 1;
@@ -71,7 +74,7 @@ public class CommandTimeoutVsCancellationPrecedenceTests
 
         // Subsequent command on the same connection must succeed — the
         // timeout did not poison the wire.
-        using (var ok = (ClickHouseDbCommand)conn.CreateCommand())
+        using (var ok = (ClickHouseCommand)conn.CreateCommand())
         {
             ok.CommandText = "SELECT 42";
             var result = await ok.ExecuteScalarAsync();

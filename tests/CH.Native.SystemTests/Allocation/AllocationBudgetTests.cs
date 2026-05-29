@@ -7,6 +7,9 @@ using CH.Native.Mapping;
 using CH.Native.Results;
 using CH.Native.SystemTests.Fixtures;
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using Dapper;
 using Xunit;
 
@@ -478,7 +481,7 @@ public class AllocationBudgetTests
     [Fact]
     public async Task DbDataReader_ReadAsync_IntString_StaysWithinBudget()
     {
-        await using var conn = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fixture.ConnectionString);
         await conn.OpenAsync();
 
         const string sql = "SELECT number, toString(number) FROM numbers(10000)";
@@ -515,7 +518,7 @@ public class AllocationBudgetTests
     {
         // GetFieldValue<T> avoids the boxing GetValue() incurs — should sit
         // visibly below the GetValue baseline.
-        await using var conn = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fixture.ConnectionString);
         await conn.OpenAsync();
 
         const string sql = "SELECT number, toString(number) FROM numbers(10000)";
@@ -552,7 +555,7 @@ public class AllocationBudgetTests
         // Dapper's reflection mapper is the most common consumer-facing path —
         // changes that improve our ADO surface are pointless if Dapper still
         // boxes everything on top.
-        await using var conn = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fixture.ConnectionString);
         await conn.OpenAsync();
 
         const string sql = "SELECT toUInt64(number) AS Value, toString(number) AS Name FROM numbers(10000)";

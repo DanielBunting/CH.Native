@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.SystemTests.Fixtures;
 using Xunit;
 using Xunit.Abstractions;
@@ -7,7 +10,7 @@ using Xunit.Abstractions;
 namespace CH.Native.SystemTests.Ado;
 
 /// <summary>
-/// Cancellation contract on the ADO.NET surface. <c>ClickHouseDbDataReader</c> sits
+/// Cancellation contract on the ADO.NET surface. <c>ClickHouseDataReader</c> sits
 /// in front of the native reader; existing tests pin the native cancellation path,
 /// not the ADO wrapper. The wrapper must surface <c>OperationCanceledException</c>
 /// promptly, mark itself closed, and refuse subsequent field access with
@@ -29,7 +32,7 @@ public class DbDataReaderCancellationTests
     [Fact]
     public async Task CancelDuringReadAsync_ThrowsPromptly_ReaderRejectsFieldAccess()
     {
-        await using var conn = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fixture.ConnectionString);
         await conn.OpenAsync();
 
         using var cmd = conn.CreateCommand();

@@ -1,5 +1,8 @@
 using System.Data.Common;
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using Xunit;
 
 namespace CH.Native.Tests.Unit.Ado;
@@ -13,17 +16,17 @@ public class ClickHouseProviderFactoryTests
     }
 
     [Fact]
-    public void CreateConnection_ReturnsClickHouseDbConnection()
+    public void CreateConnection_ReturnsClickHouseConnection()
     {
         var conn = ClickHouseProviderFactory.Instance.CreateConnection();
-        Assert.IsType<ClickHouseDbConnection>(conn);
+        Assert.IsType<ClickHouseConnection>(conn);
     }
 
     [Fact]
-    public void CreateCommand_ReturnsClickHouseDbCommand()
+    public void CreateCommand_ReturnsClickHouseCommand()
     {
         var cmd = ClickHouseProviderFactory.Instance.CreateCommand();
-        Assert.IsType<ClickHouseDbCommand>(cmd);
+        Assert.IsType<ClickHouseCommand>(cmd);
     }
 
     [Fact]

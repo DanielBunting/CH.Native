@@ -3,6 +3,9 @@ using System.Data.Common;
 using System.Reflection;
 using CH.Native.Ado;
 using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
+using CH.Native.Connection;
 // CH.Native.Dapper intentionally NOT imported — `using Dapper;` below brings
 // Dapper's IDbConnection extensions into scope, and importing CH.Native.Dapper
 // here would create ambiguity with our IDbConnectionDapperExtensions. The only
@@ -26,7 +29,7 @@ namespace CH.Native.SystemTests.DependencyInjection;
 /// derive from <see cref="DbConnection"/>, so Dapper's
 /// <see cref="IDbConnection"/>-bound extension methods do not bind. Dapper
 /// users today must drop out of DI entirely and instantiate
-/// <see cref="ClickHouseDbConnection"/> directly from a connection string,
+/// <see cref="ClickHouseConnection"/> directly from a connection string,
 /// losing pooling, credential providers, keyed services, and resilience
 /// configuration.
 ///
@@ -139,7 +142,7 @@ public sealed class DapperDataSourceIntegrationGapsTests
 
         // Awaits a Task<X> / ValueTask<X> where X derives from DbConnection
         // (handles the case where the method's declared return type is the
-        // concrete ClickHouseDbConnection, not the DbConnection base).
+        // concrete ClickHouseConnection, not the DbConnection base).
         static async Task<DbConnection?> CastAsync(object task)
         {
             if (task is Task tsk)
@@ -166,11 +169,11 @@ public sealed class DapperDataSourceIntegrationGapsTests
     // =========================================================================
 
     [Fact]
-    public async Task Baseline_DirectClickHouseDbConnection_Dapper_Works()
+    public async Task Baseline_DirectClickHouseConnection_Dapper_Works()
     {
         // The only Dapper path that exists today: instantiate the ADO wrapper
         // directly from a connection string. No pool, no DI, no providers.
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
         var n = (await conn.QueryAsync<long>("SELECT toInt64(1)")).Single();
         Assert.Equal(1L, n);
@@ -261,10 +264,10 @@ public sealed class DapperDataSourceIntegrationGapsTests
     }
 
     [Fact]
-    public void Breaking_DI_Resolves_ClickHouseDbConnection()
+    public void Breaking_DI_Resolves_ClickHouseConnection()
     {
         using var sp = BuildServices();
-        var conn = sp.GetService<ClickHouseDbConnection>();
+        var conn = sp.GetService<ClickHouseConnection>();
         Assert.NotNull(conn);
     }
 
@@ -536,7 +539,7 @@ public sealed class DapperDataSourceIntegrationGapsTests
             ?? throw GapException(
                 "DataSource has no API returning a DbConnection — credentials registered via " +
                 ".WithPasswordProvider() cannot reach the Dapper/ADO path. " +
-                "Today the only way to get an IDbConnection is to call `new ClickHouseDbConnection(connStr)` " +
+                "Today the only way to get an IDbConnection is to call `new ClickHouseConnection(connStr)` " +
                 "directly, which knows nothing about the DI graph.");
 
         await using (conn)
@@ -581,7 +584,7 @@ public sealed class DapperDataSourceIntegrationGapsTests
     }
 
     [Fact]
-    public async Task Breaking_DirectClickHouseDbConnection_PassesProviderRegisteredViaDI()
+    public async Task Breaking_DirectClickHouseConnection_PassesProviderRegisteredViaDI()
     {
         // Negative documentation test: today the direct ctor knows nothing
         // about ambient DI providers. The fix needs to either route this
@@ -598,12 +601,12 @@ public sealed class DapperDataSourceIntegrationGapsTests
         // Force the DI graph to materialise so the provider factory is wired up.
         _ = sp.GetRequiredService<ClickHouseDataSource>();
 
-        await using var direct = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var direct = new ClickHouseConnection(_fx.ConnectionString);
         await direct.OpenAsync();
         _ = (await direct.QueryAsync<long>("SELECT toInt64(1)")).Single();
 
         Assert.True(invocations >= 1,
-            "Constructing ClickHouseDbConnection from a connection string did not consult any " +
+            "Constructing ClickHouseConnection from a connection string did not consult any " +
             "credential provider registered via the DI builder. This is the workaround the " +
             "current docs recommend for Dapper — and it cannot rotate credentials.");
     }
@@ -648,14 +651,14 @@ public sealed class DapperDataSourceIntegrationGapsTests
     // =========================================================================
 
     [Fact]
-    public void Breaking_ClickHouseDbConnection_HasResilienceIntegration()
+    public void Breaking_ClickHouseConnection_HasResilienceIntegration()
     {
-        // Today ClickHouseDbConnection is a thin ADO wrapper around an inner
+        // Today ClickHouseConnection is a thin ADO wrapper around an inner
         // ClickHouseConnection that it opens fresh on OpenAsync — it does not
         // participate in any retry / circuit-breaker policy that was attached
         // to the DataSource. Reflect on the type for any obvious resilience
         // hook (a Resilience-named member, a RetryPolicy field, etc.).
-        var hits = typeof(ClickHouseDbConnection)
+        var hits = typeof(ClickHouseConnection)
             .GetMembers(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             .Where(m => m.Name.Contains("Retry", StringComparison.OrdinalIgnoreCase)
                      || m.Name.Contains("CircuitBreaker", StringComparison.OrdinalIgnoreCase)
@@ -663,7 +666,7 @@ public sealed class DapperDataSourceIntegrationGapsTests
             .ToList();
 
         Assert.True(hits.Count > 0,
-            "ClickHouseDbConnection has no member referencing Retry / CircuitBreaker / Resilience. " +
+            "ClickHouseConnection has no member referencing Retry / CircuitBreaker / Resilience. " +
             "Resilience policies configured on the DI builder cannot reach the Dapper path because " +
             "OpenAsync builds a fresh inner ClickHouseConnection from the connection string and " +
             "bypasses the DataSource pool entirely.");
@@ -689,36 +692,28 @@ public sealed class DapperDataSourceIntegrationGapsTests
     }
 
     // =========================================================================
-    // GROUP J — Bridging gaps in ClickHouseDbConnection
+    // GROUP J — Bridging gaps in ClickHouseConnection
+    //
+    // The previous "Breaking_ClickHouseConnection_HasPublicConstructor_FromClickHouseConnection"
+    // and "Breaking_ClickHouseConnection_Inner_IsPublic" gap tests were resolved
+    // by collapsing the ClickHouseDbConnection / ClickHouseConnection pair into
+    // a single ClickHouseConnection. There is no wrapper to construct around a
+    // rent and no Inner to escape to — the rent IS the native connection IS the
+    // ADO connection. The pin below documents that resolution.
     // =========================================================================
 
     [Fact]
-    public void Breaking_ClickHouseDbConnection_HasPublicConstructor_FromClickHouseConnection()
+    public void GapClosed_ConnectionTypesAreUnified()
     {
-        // Without this constructor, there is no public way to wrap a pooled
-        // native connection (rented from ClickHouseDataSource) in the ADO
-        // wrapper so it can be handed to Dapper. The wrapper's only public
-        // constructors take a string or nothing.
-        var ctor = typeof(ClickHouseDbConnection)
-            .GetConstructor(BindingFlags.Public | BindingFlags.Instance, binder: null,
-                types: new[] { typeof(ClickHouseConnection) }, modifiers: null);
-        Assert.True(ctor is not null,
-            "ClickHouseDbConnection has no public constructor accepting a ClickHouseConnection. " +
-            "There is no public way to wrap a pooled native rent in the ADO surface — the only " +
-            "ctors today are () and (string connectionString).");
-    }
-
-    [Fact]
-    public void Breaking_ClickHouseDbConnection_Inner_IsPublic()
-    {
-        // Inner is `internal` today. Mixing native + ADO calls on the same
-        // physical connection requires reaching the inner — e.g. running a
-        // BulkInserter on a connection that Dapper just queried.
-        var inner = typeof(ClickHouseDbConnection)
-            .GetProperty("Inner", BindingFlags.Public | BindingFlags.Instance);
-        Assert.True(inner is not null,
-            "ClickHouseDbConnection.Inner is not public. Users mixing native API + Dapper on the " +
-            "same physical connection have no public escape hatch.");
+        // After Phase-2 + the ADO collapse, there is a single sealed
+        // ClickHouseConnection that satisfies both the native API and DbConnection
+        // contracts. No wrapper, no Inner, no second connection type.
+        Assert.True(typeof(System.Data.Common.DbConnection).IsAssignableFrom(typeof(ClickHouseConnection)),
+            "ClickHouseConnection no longer inherits DbConnection. ADO consumers cannot bind.");
+        Assert.True(typeof(ClickHouseConnection).IsSealed,
+            "ClickHouseConnection is no longer sealed — the unification contract is at risk.");
+        Assert.Null(typeof(ClickHouseConnection)
+            .GetProperty("Inner", BindingFlags.Public | BindingFlags.Instance));
     }
 
     // =========================================================================

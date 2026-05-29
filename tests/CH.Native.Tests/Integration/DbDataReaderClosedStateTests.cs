@@ -1,12 +1,15 @@
 using System.Data;
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.Tests.Fixtures;
 using Xunit;
 
 namespace CH.Native.Tests.Integration;
 
 /// <summary>
-/// Tests that <see cref="ClickHouseDbDataReader"/> honors the ADO.NET contract for the
+/// Tests that <see cref="ClickHouseDataReader"/> honors the ADO.NET contract for the
 /// closed/disposed state: field getters must throw <see cref="InvalidOperationException"/>
 /// after the reader has been closed. Today the wrapper does not gate getters on the
 /// closed flag, so the delegated call through the inner reader throws
@@ -22,13 +25,13 @@ public class DbDataReaderClosedStateTests
         _fixture = fixture;
     }
 
-    private async Task<ClickHouseDbDataReader> OpenOneRowReaderAsync()
+    private async Task<ClickHouseDataReader> OpenOneRowReaderAsync()
     {
-        var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
         var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT 42 AS n, 'hello' AS s";
-        var reader = (ClickHouseDbDataReader)await cmd.ExecuteReaderAsync();
+        var reader = (ClickHouseDataReader)await cmd.ExecuteReaderAsync();
 
         // Advance to the single row so getters have something to hand out.
         Assert.True(await reader.ReadAsync());

@@ -1,4 +1,6 @@
 using System.Data.Common;
+using CH.Native.Commands;
+using CH.Native.Connection;
 
 namespace CH.Native.Ado;
 
@@ -17,10 +19,10 @@ public sealed class ClickHouseProviderFactory : DbProviderFactory
     }
 
     /// <inheritdoc />
-    public override DbConnection CreateConnection() => new ClickHouseDbConnection();
+    public override DbConnection CreateConnection() => new ClickHouseConnection();
 
     /// <inheritdoc />
-    public override DbCommand CreateCommand() => new ClickHouseDbCommand();
+    public override DbCommand CreateCommand() => new ClickHouseCommand();
 
     /// <inheritdoc />
     public override DbParameter CreateParameter() => new ClickHouseDbParameter();

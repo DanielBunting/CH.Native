@@ -1,4 +1,7 @@
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.SystemTests.Fixtures;
 using Xunit;
 using Xunit.Abstractions;
@@ -39,7 +42,7 @@ public class DbCommandCancelTests
     {
         // OBSERVE: probe whether DbCommand.Cancel() actually reaches the
         // wire and terminates a server-side query.
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         var cmd = conn.CreateCommand();
@@ -82,7 +85,7 @@ public class DbCommandCancelTests
     {
         // Cancel on a command that's not running anything must be a safe
         // no-op (the ADO contract is "no-op if no command is in flight").
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
         var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT 1";
@@ -102,7 +105,7 @@ public class DbCommandCancelTests
         // Pre-fix the call propagated CancelCurrentQueryAsync exceptions; on a
         // closed connection it short-circuited via _connection?.State, but on
         // a connection broken mid-flight the cancel-write itself would throw.
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
         var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT 1";

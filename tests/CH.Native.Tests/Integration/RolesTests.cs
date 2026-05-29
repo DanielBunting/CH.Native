@@ -1,5 +1,8 @@
 using CH.Native.Ado;
 using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
+using CH.Native.Connection;
 using CH.Native.Exceptions;
 using CH.Native.Tests.Fixtures;
 using Xunit;
@@ -70,10 +73,10 @@ public class RolesTests
         // override with granted role should succeed.
         var connStr = _fixture.RolesUserConnectionString + $";Roles={ClickHouseRolesFixture.UngrantedRole}";
 
-        await using var conn = new Ado.ClickHouseDbConnection(connStr);
+        await using var conn = new ClickHouseConnection(connStr);
         await conn.OpenAsync();
 
-        using var cmd = new ClickHouseDbCommand(
+        using var cmd = new ClickHouseCommand(
             $"SELECT count(*) FROM {ClickHouseRolesFixture.TableName}", conn)
         {
             Roles = { ClickHouseRolesFixture.GrantedRole }

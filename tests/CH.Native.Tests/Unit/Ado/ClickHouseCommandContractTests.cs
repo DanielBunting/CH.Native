@@ -1,22 +1,25 @@
 using System.Data;
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using Xunit;
 
 namespace CH.Native.Tests.Unit.Ado;
 
-public class ClickHouseDbCommandContractTests
+public class ClickHouseCommandContractTests
 {
     [Fact]
     public void CommandText_NullAssignment_StoresEmpty()
     {
-        var cmd = new ClickHouseDbCommand { CommandText = null! };
+        var cmd = new ClickHouseCommand { CommandText = null! };
         Assert.Equal(string.Empty, cmd.CommandText);
     }
 
     [Fact]
     public void CommandType_StoredProcedure_Throws_NotSupported()
     {
-        var cmd = new ClickHouseDbCommand();
+        var cmd = new ClickHouseCommand();
         var ex = Assert.Throws<NotSupportedException>(() => cmd.CommandType = CommandType.StoredProcedure);
         Assert.Contains("Text", ex.Message);
     }
@@ -24,21 +27,21 @@ public class ClickHouseDbCommandContractTests
     [Fact]
     public void CommandType_TableDirect_Throws_NotSupported()
     {
-        var cmd = new ClickHouseDbCommand();
+        var cmd = new ClickHouseCommand();
         Assert.Throws<NotSupportedException>(() => cmd.CommandType = CommandType.TableDirect);
     }
 
     [Fact]
     public void CommandType_Text_IsAccepted()
     {
-        var cmd = new ClickHouseDbCommand { CommandType = CommandType.Text };
+        var cmd = new ClickHouseCommand { CommandType = CommandType.Text };
         Assert.Equal(CommandType.Text, cmd.CommandType);
     }
 
     [Fact]
     public void CommandTimeout_DefaultsTo30()
     {
-        var cmd = new ClickHouseDbCommand();
+        var cmd = new ClickHouseCommand();
         Assert.Equal(30, cmd.CommandTimeout);
     }
 
@@ -49,7 +52,7 @@ public class ClickHouseDbCommandContractTests
         // caller could try to set the Transaction property via
         // DbCommand.Transaction. That setter must reject non-null values
         // because we have no transaction primitive to bind to.
-        var cmd = new ClickHouseDbCommand();
+        var cmd = new ClickHouseCommand();
         // Confirm getter returns null for the disposable lifetime.
         Assert.Null(cmd.Transaction);
     }
@@ -57,7 +60,7 @@ public class ClickHouseDbCommandContractTests
     [Fact]
     public void Roles_DefaultsToEmptyMutableList()
     {
-        var cmd = new ClickHouseDbCommand();
+        var cmd = new ClickHouseCommand();
         Assert.Empty(cmd.Roles);
         cmd.Roles.Add("admin");
         Assert.Single(cmd.Roles);
@@ -67,22 +70,28 @@ public class ClickHouseDbCommandContractTests
     [Fact]
     public void QueryId_DefaultsToNull_AndCanBeSet()
     {
-        var cmd = new ClickHouseDbCommand { QueryId = "my-query-id" };
+        var cmd = new ClickHouseCommand { QueryId = "my-query-id" };
         Assert.Equal("my-query-id", cmd.QueryId);
     }
 
     [Fact]
-    public void Parameters_AreClickHouseDbParameterCollection()
+    public void Parameters_TypedSurface_IsNativeCollection_AndDbCommandSurface_IsAdoCollection()
     {
-        var cmd = new ClickHouseDbCommand();
-        Assert.IsType<ClickHouseDbParameterCollection>(cmd.Parameters);
+        // Post-collapse: the typed `cmd.Parameters` returns the native
+        // ClickHouseParameterCollection. The protected DbCommand.Parameters
+        // override (visible after casting to DbCommand) returns the ADO-shaped
+        // ClickHouseDbParameterCollection. Both surfaces coexist on the same
+        // ClickHouseCommand instance.
+        var cmd = new ClickHouseCommand();
+        Assert.IsType<CH.Native.Commands.ClickHouseParameterCollection>(cmd.Parameters);
+        Assert.IsType<ClickHouseDbParameterCollection>(((System.Data.Common.DbCommand)cmd).Parameters);
     }
 
     [Fact]
     public void Connection_RoundTrips()
     {
-        using var conn = new ClickHouseDbConnection();
-        var cmd = new ClickHouseDbCommand();
+        using var conn = new ClickHouseConnection();
+        var cmd = new ClickHouseCommand();
         cmd.Connection = conn;
         Assert.Same(conn, cmd.Connection);
     }
@@ -90,8 +99,8 @@ public class ClickHouseDbCommandContractTests
     [Fact]
     public void ConstructorWithCommandText_StoresIt()
     {
-        using var conn = new ClickHouseDbConnection();
-        var cmd = new ClickHouseDbCommand("SELECT 1", conn);
+        using var conn = new ClickHouseConnection();
+        var cmd = new ClickHouseCommand("SELECT 1", conn);
         Assert.Equal("SELECT 1", cmd.CommandText);
         Assert.Same(conn, cmd.Connection);
     }
@@ -99,7 +108,7 @@ public class ClickHouseDbCommandContractTests
     [Fact]
     public void Prepare_IsNoOp()
     {
-        var cmd = new ClickHouseDbCommand();
+        var cmd = new ClickHouseCommand();
         // Should not throw — Prepare is a no-op for ClickHouse (no prepared
         // statement protocol). Pin that contract.
         cmd.Prepare();

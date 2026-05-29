@@ -1,5 +1,8 @@
 using System.Data;
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.SystemTests.Fixtures;
 using Xunit;
 
@@ -18,9 +21,9 @@ public class CommandBehaviorMatrixTests
 
     public CommandBehaviorMatrixTests(SingleNodeFixture fx) => _fx = fx;
 
-    private static async Task<ClickHouseDbConnection> OpenAsync(SingleNodeFixture fx)
+    private static async Task<ClickHouseConnection> OpenAsync(SingleNodeFixture fx)
     {
-        var conn = new ClickHouseDbConnection(fx.ConnectionString);
+        var conn = new ClickHouseConnection(fx.ConnectionString);
         await conn.OpenAsync();
         return conn;
     }

@@ -1,4 +1,7 @@
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.Tests.Fixtures;
 using Dapper;
 using Xunit;
@@ -18,7 +21,7 @@ public class DapperTests
     [Fact]
     public async Task Query_ReturnsTypedResults()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var results = await connection.QueryAsync<NumberResult>(
@@ -32,7 +35,7 @@ public class DapperTests
     [Fact]
     public async Task Query_WithParameters_WorksCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var results = await connection.QueryAsync<NumberResult>(
@@ -47,7 +50,7 @@ public class DapperTests
     [Fact]
     public async Task QueryFirst_ReturnsSingleResult()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var result = await connection.QueryFirstAsync<ScalarResult>(
@@ -59,7 +62,7 @@ public class DapperTests
     [Fact]
     public async Task QueryFirstOrDefault_ReturnsNullForEmptyResult()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var result = await connection.QueryFirstOrDefaultAsync<ScalarResult>(
@@ -71,7 +74,7 @@ public class DapperTests
     [Fact]
     public async Task QuerySingle_ReturnsSingleResult()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var result = await connection.QuerySingleAsync<StringResult>(
@@ -83,7 +86,7 @@ public class DapperTests
     [Fact]
     public async Task Execute_RunsCommand()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         // Create table
@@ -106,7 +109,7 @@ public class DapperTests
     [Fact]
     public async Task Execute_WithParameters_WorksCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         // Create table
@@ -136,7 +139,7 @@ public class DapperTests
     [Fact]
     public async Task Query_WithMultipleColumns_MapsCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var results = await connection.QueryAsync<UserResult>(@"
@@ -156,7 +159,7 @@ public class DapperTests
     [Fact]
     public async Task Query_WithNullableColumn_HandlesNull()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var results = await connection.QueryAsync<NullableResult>(@"
@@ -176,7 +179,7 @@ public class DapperTests
     [Fact]
     public async Task ExecuteScalar_ReturnsValue()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var result = await connection.ExecuteScalarAsync<int>(
@@ -188,7 +191,7 @@ public class DapperTests
     [Fact]
     public async Task Query_WithStringParameters_EscapesCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         // Test SQL injection prevention
@@ -202,7 +205,7 @@ public class DapperTests
     [Fact]
     public async Task Query_WithDateTimeParameter_WorksCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var testDate = new DateTime(2024, 1, 15, 10, 30, 0, DateTimeKind.Utc);
@@ -216,7 +219,7 @@ public class DapperTests
     [Fact]
     public async Task Query_WithGuidParameter_WorksCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var testGuid = Guid.Parse("12345678-1234-1234-1234-123456789012");
@@ -241,18 +244,18 @@ public class DapperTests
     // 1. Use direct ADO.NET (recommended for arrays):
     //    using var cmd = connection.CreateCommand();
     //    cmd.CommandText = "SELECT count() FROM t WHERE hasAny([id], @ids)";
-    //    cmd.Parameters.Add(new ClickHouseDbParameter { ParameterName = "ids", Value = new[] { 1, 2, 3 } });
+    //    cmd.Parameters.Add(new ClickHouseParameter { ParameterName = "ids", Value = new[] { 1, 2, 3 } });
     //    var result = await cmd.ExecuteScalarAsync();
     //
     // 2. Use the native CH.Native API directly:
-    //    await connection.Inner.ExecuteScalarAsync<long>(
+    //    await connection.ExecuteScalarAsync<long>(
     //        "SELECT count() FROM t WHERE hasAny([id], @ids)",
     //        new ClickHouseParameterCollection { { "ids", new[] { 1, 2, 3 } } });
 
     [Fact]
     public async Task Query_WithArrayParameter_FiltersCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         // Use hasAny to check if value is in array parameter. `number` from
@@ -272,7 +275,7 @@ public class DapperTests
     [Fact]
     public async Task Query_WithStringArrayParameter_WorksCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var names = new string[] { "Alice", "Bob", "Charlie" };
@@ -304,7 +307,7 @@ public class DapperTests
     [Fact]
     public async Task ArrayParam_ByteArray_Works()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
         var r = await connection.QueryFirstAsync<ScalarResult>(
             "SELECT toInt32(length(@arr)) as Value", new { arr = new byte[] { 1, 2, 3, 4 } });
@@ -314,7 +317,7 @@ public class DapperTests
     [Fact]
     public async Task ArrayParam_ShortArray_Works()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
         var r = await connection.QueryFirstAsync<ScalarResult>(
             "SELECT toInt32(length(@arr)) as Value", new { arr = new short[] { 10, 20, 30 } });
@@ -324,7 +327,7 @@ public class DapperTests
     [Fact]
     public async Task ArrayParam_UShortArray_Works()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
         var r = await connection.QueryFirstAsync<ScalarResult>(
             "SELECT toInt32(length(@arr)) as Value", new { arr = new ushort[] { 1, 2 } });
@@ -334,7 +337,7 @@ public class DapperTests
     [Fact]
     public async Task ArrayParam_UIntArray_Works()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
         var r = await connection.QueryFirstAsync<ScalarResult>(
             "SELECT toInt32(length(@arr)) as Value", new { arr = new uint[] { 100U, 200U } });
@@ -344,7 +347,7 @@ public class DapperTests
     [Fact]
     public async Task ArrayParam_LongArray_Works()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
         var r = await connection.QueryFirstAsync<ScalarResult>(
             "SELECT toInt32(length(@arr)) as Value", new { arr = new long[] { 1L, 2L, 3L, 4L, 5L } });
@@ -354,7 +357,7 @@ public class DapperTests
     [Fact]
     public async Task ArrayParam_ULongArray_Works()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
         var r = await connection.QueryFirstAsync<ScalarResult>(
             "SELECT toInt32(length(@arr)) as Value", new { arr = new ulong[] { 1UL, 2UL } });
@@ -364,7 +367,7 @@ public class DapperTests
     [Fact]
     public async Task ArrayParam_FloatArray_Works()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
         var r = await connection.QueryFirstAsync<ScalarResult>(
             "SELECT toInt32(length(@arr)) as Value", new { arr = new[] { 1.1f, 2.2f, 3.3f } });
@@ -374,7 +377,7 @@ public class DapperTests
     [Fact]
     public async Task ArrayParam_DoubleArray_Works()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
         var r = await connection.QueryFirstAsync<ScalarResult>(
             "SELECT toInt32(length(@arr)) as Value", new { arr = new[] { 1.1, 2.2, 3.3, 4.4 } });
@@ -384,7 +387,7 @@ public class DapperTests
     [Fact]
     public async Task ArrayParam_DecimalArray_Works()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
         var r = await connection.QueryFirstAsync<ScalarResult>(
             "SELECT toInt32(length(@arr)) as Value", new { arr = new[] { 1.5m, 2.5m } });
@@ -394,7 +397,7 @@ public class DapperTests
     [Fact]
     public async Task ArrayParam_GuidArray_Works()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
         var r = await connection.QueryFirstAsync<ScalarResult>(
             "SELECT toInt32(length(@arr)) as Value",
@@ -405,7 +408,7 @@ public class DapperTests
     [Fact]
     public async Task ArrayParam_DateTimeArray_Works()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
         var r = await connection.QueryFirstAsync<ScalarResult>(
             "SELECT toInt32(length(@arr)) as Value",
@@ -416,7 +419,7 @@ public class DapperTests
     [Fact]
     public async Task ArrayParam_DateOnlyArray_Works()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
         var r = await connection.QueryFirstAsync<ScalarResult>(
             "SELECT toInt32(length(@arr)) as Value",
@@ -431,7 +434,7 @@ public class DapperTests
     [Fact]
     public async Task QueryFirstOrDefault_EmptyResult_ReturnsDefault()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var result = await connection.QueryFirstOrDefaultAsync<ScalarResult>(
@@ -443,7 +446,7 @@ public class DapperTests
     [Fact]
     public async Task QuerySingleOrDefault_EmptyResult_ReturnsDefault()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var result = await connection.QuerySingleOrDefaultAsync<ScalarResult>(
@@ -455,7 +458,7 @@ public class DapperTests
     [Fact]
     public async Task QuerySingleOrDefault_SingleResult_ReturnsValue()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var result = await connection.QuerySingleOrDefaultAsync<ScalarResult>(
@@ -468,7 +471,7 @@ public class DapperTests
     [Fact]
     public async Task Query_EmptyResult_ReturnsEmptyEnumerable()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var results = await connection.QueryAsync<ScalarResult>(
@@ -484,7 +487,7 @@ public class DapperTests
     [Fact]
     public async Task ExecuteReader_ReturnsWorkingDataReader()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         await using var reader = await connection.ExecuteReaderAsync(
@@ -502,7 +505,7 @@ public class DapperTests
     [Fact]
     public async Task ExecuteReader_WithParameters_WorksCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         await using var reader = await connection.ExecuteReaderAsync(
@@ -517,7 +520,7 @@ public class DapperTests
     [Fact]
     public async Task ExecuteReader_EmptyResult_ReadsNothing()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         await using var reader = await connection.ExecuteReaderAsync(
@@ -533,7 +536,7 @@ public class DapperTests
     [Fact]
     public async Task Dapper_MultipleQueries_SameConnection()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         // Multiple Dapper queries on same connection
@@ -549,7 +552,7 @@ public class DapperTests
     [Fact]
     public async Task Dapper_QueryAndExecute_Interleaved()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         // Create table
@@ -583,7 +586,7 @@ public class DapperTests
     [Fact]
     public async Task Query_Dynamic_ReturnsExpandoObjects()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var results = await connection.QueryAsync(
@@ -604,7 +607,7 @@ public class DapperTests
     [Fact]
     public async Task Query_LargeResult_Streams()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         // Dapper with buffered: false would be ideal but default buffered works too

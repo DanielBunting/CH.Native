@@ -153,11 +153,6 @@ public static class ClickHouseServiceCollectionExtensions
                 sp.GetRequiredService<ClickHouseDataSource>().CreateConnection());
             services.TryAddTransient<IDbConnection>(sp =>
                 sp.GetRequiredService<ClickHouseDataSource>().CreateConnection());
-            // Wrapper transient for callers still on the back-compat path. The
-            // wrapper opens its own socket from a connection string, so this
-            // is unpooled — same caveat as CreateConnection() above.
-            services.TryAddTransient<ClickHouseDbConnection>(sp =>
-                new ClickHouseDbConnection(sp.GetRequiredService<ClickHouseDataSource>().Settings.ToString()));
             // Func<DbConnection> factory delegate — many DI patterns (and some
             // ADO-bridging frameworks) inject this rather than the connection
             // itself so each unit of work owns disposal.
@@ -174,8 +169,6 @@ public static class ClickHouseServiceCollectionExtensions
                 (sp, key) => sp.GetRequiredKeyedService<ClickHouseDataSource>(key).CreateConnection());
             services.TryAddKeyedTransient<IDbConnection>(serviceKey,
                 (sp, key) => sp.GetRequiredKeyedService<ClickHouseDataSource>(key).CreateConnection());
-            services.TryAddKeyedTransient<ClickHouseDbConnection>(serviceKey,
-                (sp, key) => new ClickHouseDbConnection(sp.GetRequiredKeyedService<ClickHouseDataSource>(key).Settings.ToString()));
         }
 
         return dsBuilder;

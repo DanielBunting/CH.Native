@@ -1,5 +1,8 @@
 using System.Data;
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.SystemTests.Fixtures;
 using Xunit;
 using Xunit.Abstractions;
@@ -28,7 +31,7 @@ public class AdoContractCoverageTests
     [Fact]
     public async Task GetSchemaTable_ReturnsColumnMetadata_ForRunningQuery()
     {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         var cmd = conn.CreateCommand();
@@ -49,7 +52,7 @@ public class AdoContractCoverageTests
         // for subsequent commands. This is what frameworks use to switch
         // contexts mid-session.
         var sideDb = $"chdb_{Guid.NewGuid():N}";
-        await using (var setup = new ClickHouseDbConnection(_fx.ConnectionString))
+        await using (var setup = new ClickHouseConnection(_fx.ConnectionString))
         {
             await setup.OpenAsync();
             using var c = setup.CreateCommand();
@@ -59,7 +62,7 @@ public class AdoContractCoverageTests
 
         try
         {
-            await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+            await using var conn = new ClickHouseConnection(_fx.ConnectionString);
             await conn.OpenAsync();
 
             // Try ChangeDatabase. May throw NotSupported if not implemented.
@@ -83,7 +86,7 @@ public class AdoContractCoverageTests
         }
         finally
         {
-            await using var cleanup = new ClickHouseDbConnection(_fx.ConnectionString);
+            await using var cleanup = new ClickHouseConnection(_fx.ConnectionString);
             await cleanup.OpenAsync();
             using var c = cleanup.CreateCommand();
             c.CommandText = $"DROP DATABASE IF EXISTS {sideDb}";
@@ -97,7 +100,7 @@ public class AdoContractCoverageTests
         // DbDataReader.GetValues(object[]) is a frequently-used hot-path
         // method for bulk row reads. Probe whether it's implemented and
         // returns the right column count.
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         var cmd = conn.CreateCommand();
@@ -125,7 +128,7 @@ public class AdoContractCoverageTests
         //   Open → Closed (on Close)
         // Frameworks (EF Core, Dapper) hook these events for connection-pool
         // tracking and lifecycle scoping.
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
 
         var changes = new List<(ConnectionState before, ConnectionState after)>();
         conn.StateChange += (sender, args) => changes.Add((args.OriginalState, args.CurrentState));
@@ -148,7 +151,7 @@ public class AdoContractCoverageTests
         // ClickHouse doesn't support prepared statements. Per ADO contract,
         // Prepare should be a no-op rather than throwing — frameworks
         // sometimes call it speculatively.
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
         var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT 1";

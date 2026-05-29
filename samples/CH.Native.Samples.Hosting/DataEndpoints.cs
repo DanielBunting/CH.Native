@@ -46,12 +46,17 @@ internal static class DataEndpoints
         // mapping and parameter binding on a pooled, DI-resolved connection.
         // The same call shape works for the keyed DataSources above; see
         // /replica/server for the keyed-injection pattern.
+        //
+        // Parameter names avoid `limit` / `offset` — ClickHouse 26.x's parser
+        // misinterprets `{limit:Type}` / `{offset:Type}` as the start of a
+        // LIMIT/OFFSET clause and rejects the query with CANNOT_PARSE_QUOTED_STRING.
+        // CH.Native fails fast with a clear error if you try to use either name.
         app.MapGet("/events/dapper-typed", async (ClickHouseDataSource ds, CancellationToken ct) =>
         {
             await using var conn = await ds.OpenConnectionAsync(ct);
             var rows = await conn.QueryAsync<NumberRow>(new CommandDefinition(
-                "SELECT toUInt64(number) AS value FROM numbers(@limit) WHERE number >= @min",
-                new { limit = 10, min = 3 },
+                "SELECT toUInt64(number) AS value FROM numbers(@max_rows) WHERE number >= @min_number",
+                new { max_rows = 10, min_number = 3 },
                 cancellationToken: ct));
             return Http.Ok(new { values = rows });
         });

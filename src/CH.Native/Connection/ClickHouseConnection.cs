@@ -33,14 +33,26 @@ namespace CH.Native.Connection;
 /// </summary>
 public sealed class ClickHouseConnection : DbConnection
 {
-    private readonly ClickHouseConnectionSettings _settings;
-    private readonly ColumnReaderRegistry _columnReaderRegistry;
+    // Nullable to allow the parameterless ctor + property-set ConnectionString
+    // pattern that DbProviderFactory / EF Core's IDbConnectionFactory expect.
+    // Reads outside the explicit pre-open accessors (Settings/Database/DataSource/
+    // ConnectionString.get) happen after OpenAsync has thrown if settings is
+    // still null — see OpenAsync's RequireSettings() guard.
+    private ClickHouseConnectionSettings? _settings;
+    // Re-initialized whenever ConnectionString is set so the registry tracks
+    // the new settings' StringMaterialization mode. Defaults to the standard
+    // registry so the field is never null even before ConnectionString is set.
+    private ColumnReaderRegistry _columnReaderRegistry = ColumnReaderRegistry.Default;
     private readonly AsyncLocal<MapShapeHint?> _currentMapShapeHint = new();
     // Fast-path flag: set when at least one push is live anywhere on this connection.
     // Avoids paying the AsyncLocal.Value (ExecutionContext) lookup on every block read
     // when no typed call site has installed a hint — the common case.
     private int _mapShapeHintPushCount;
-    private readonly ClickHouseLogger _logger;
+    // Re-initialized whenever ConnectionString is set so the logger's target
+    // ILoggerFactory tracks the new settings' Telemetry config. Defaults to a
+    // no-op logger so handshake logging never NRE's if a caller managed to
+    // reach Open without a connection string (RequireSettings catches it first).
+    private ClickHouseLogger _logger = new(null);
 
     internal ClickHouseLogger Logger => _logger;
     private readonly SchemaCache _schemaCache = new();
@@ -101,7 +113,7 @@ public sealed class ClickHouseConnection : DbConnection
     private bool _inRoleSync;
 
     // Sticky override from ChangeRolesAsync. When set, takes precedence over
-    // _settings.DefaultRoles for any call without a per-invocation rolesOverride.
+    // Settings.DefaultRoles for any call without a per-invocation rolesOverride.
     // Analogous to how ChangeDatabase changes the default database for
     // subsequent queries. Cleared on disconnect along with the rest of the state.
     private IReadOnlyList<string>? _pinnedRoles;
@@ -291,7 +303,7 @@ public sealed class ClickHouseConnection : DbConnection
     /// length-prefix and a multi-gigabyte allocation.
     /// </summary>
     private ProtocolReader CreateProtocolReader(System.Buffers.ReadOnlySequence<byte> buffer)
-        => new(buffer) { MaxStringLengthBytes = _settings.MaxStringLengthBytes };
+        => new(buffer) { MaxStringLengthBytes = Settings.MaxStringLengthBytes };
 
     /// <summary>
     /// True between the moment <see cref="SendCancelAsync"/> writes a Cancel packet
@@ -325,7 +337,30 @@ public sealed class ClickHouseConnection : DbConnection
     /// <summary>
     /// Gets the connection settings.
     /// </summary>
-    public ClickHouseConnectionSettings Settings => _settings;
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the connection was constructed via the parameterless ctor and
+    /// <see cref="ConnectionString"/> has not yet been assigned.
+    /// </exception>
+    public ClickHouseConnectionSettings Settings =>
+        _settings ?? throw new InvalidOperationException(
+            "ConnectionString has not been set. Either pass a connection string to " +
+            "the ClickHouseConnection(string) ctor or assign ConnectionString before " +
+            "calling OpenAsync().");
+
+    /// <summary>
+    /// Creates a new connection with no settings configured. Used by
+    /// <see cref="System.Data.Common.DbProviderFactory.CreateConnection"/> and other
+    /// ADO.NET factory patterns that build a connection then set <see cref="ConnectionString"/>
+    /// before opening.
+    /// </summary>
+    /// <remarks>
+    /// You must assign <see cref="ConnectionString"/> before calling <see cref="OpenAsync(CancellationToken)"/>
+    /// or any other operation that requires settings — those will throw
+    /// <see cref="InvalidOperationException"/> if settings are missing.
+    /// </remarks>
+    public ClickHouseConnection()
+    {
+    }
 
     /// <summary>
     /// Creates a new connection using a connection string.
@@ -342,11 +377,24 @@ public sealed class ClickHouseConnection : DbConnection
     /// <param name="settings">The connection settings.</param>
     public ClickHouseConnection(ClickHouseConnectionSettings settings)
     {
-        _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        ArgumentNullException.ThrowIfNull(settings);
+        ApplySettings(settings);
+    }
+
+    /// <summary>
+    /// Centralised "install these settings on this connection" path used by the
+    /// <see cref="ClickHouseConnection(ClickHouseConnectionSettings)"/> ctor and the
+    /// <see cref="ConnectionString"/> setter. Rebuilds the
+    /// settings-dependent fields (column-reader registry, logger) so both the
+    /// ctor and the property-set ADO pattern produce identical state.
+    /// </summary>
+    private void ApplySettings(ClickHouseConnectionSettings settings)
+    {
+        _settings = settings;
         _columnReaderRegistry = settings.StringMaterialization == StringMaterialization.Lazy
             ? ColumnReaderRegistry.LazyStrings
             : ColumnReaderRegistry.Default;
-        _logger = new ClickHouseLogger(_settings.Telemetry?.LoggerFactory);
+        _logger = new ClickHouseLogger(settings.Telemetry?.LoggerFactory);
     }
 
     // ===================== DbConnection / IDbConnection surface =====================
@@ -356,23 +404,40 @@ public sealed class ClickHouseConnection : DbConnection
     // EF Core / OpenTelemetry instrumentation without an intermediate wrapper. The native
     // surface above is unaffected — these are additive.
     //
-    // Settings are immutable after construction (the field is `readonly`). The
-    // ConnectionString setter therefore throws rather than silently ignoring or
-    // rebuilding state — callers using the "ctor + assign + open" ADO pattern get a
-    // clear error pointing at the strongly-typed constructor.
+    // ConnectionString is settable until the first OpenAsync. After that the
+    // setter throws, so the post-open invariant — settings are stable for the
+    // lifetime of the open socket — still holds for every cached read of
+    // _settings.* downstream.
 
     /// <inheritdoc />
 #pragma warning disable CS8765 // Nullability of parameter doesn't match overridden member — DbConnection's contract is [AllowNull].
     public override string ConnectionString
     {
         // Settings.ToString() is the canonical password-less connection-string
-        // representation in this codebase. Matches what the wrapper's getter
-        // exposes (no credential leak through DbConnection-shape callers).
-        get => _settings.ToString();
-        set => throw new NotSupportedException(
-            "ClickHouseConnection.ConnectionString is read-only after construction. " +
-            "Pass the connection string to the ClickHouseConnection(string) constructor, " +
-            "or rent a pre-configured connection from ClickHouseDataSource.OpenConnectionAsync().");
+        // representation in this codebase. Empty string when no settings have
+        // been assigned yet (matches DbConnection.ConnectionString documented
+        // default for a fresh, unconfigured instance).
+        get => _settings?.ToString() ?? string.Empty;
+        set
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_isOpen)
+                throw new InvalidOperationException(
+                    "ClickHouseConnection.ConnectionString cannot be changed while the connection is open. " +
+                    "Call CloseAsync() first, or create a new connection.");
+
+            if (string.IsNullOrEmpty(value))
+            {
+                // Allow clearing to the default state so callers can reset
+                // before reusing the instance.
+                _settings = null;
+                _columnReaderRegistry = ColumnReaderRegistry.Default;
+                _logger = new ClickHouseLogger(null);
+                return;
+            }
+
+            ApplySettings(ClickHouseConnectionSettings.Parse(value));
+        }
     }
 #pragma warning restore CS8765
 
@@ -391,13 +456,14 @@ public sealed class ClickHouseConnection : DbConnection
         {
             lock (_sessionStateLock)
             {
-                return _userSetDatabase ?? _settings.Database ?? "";
+                return _userSetDatabase ?? _settings?.Database ?? "";
             }
         }
     }
 
     /// <inheritdoc />
-    public override string DataSource => $"{_settings.Host}:{_settings.EffectivePort}";
+    public override string DataSource =>
+        _settings is null ? string.Empty : $"{Settings.Host}:{Settings.EffectivePort}";
 
     /// <inheritdoc />
     public override string ServerVersion => ServerInfo is null
@@ -459,6 +525,14 @@ public sealed class ClickHouseConnection : DbConnection
         Task.Run(() => ExecuteNonQueryAsync(
             $"USE `{databaseName.Replace("`", "``")}`",
             cancellationToken: CancellationToken.None)).GetAwaiter().GetResult();
+
+        // Track the un-quoted name so Database getters return it without the
+        // wire-quoting backticks. The session-state inspector that watches USE
+        // would otherwise pick up the quoted identifier.
+        lock (_sessionStateLock)
+        {
+            _userSetDatabase = databaseName;
+        }
     }
 
     /// <inheritdoc />
@@ -472,16 +546,10 @@ public sealed class ClickHouseConnection : DbConnection
             "INSERTs are atomic per batch. For mutations, use ALTER TABLE...DELETE/UPDATE.");
 
     /// <inheritdoc />
-    /// <remarks>
-    /// Returns a <see cref="ClickHouseDbCommand"/> bound to a non-owning
-    /// <see cref="ClickHouseDbConnection"/> facade over this native connection.
-    /// Disposing the returned command does not close the native connection.
-    /// </remarks>
     protected override DbCommand CreateDbCommand()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var facade = new ClickHouseDbConnection(this);
-        return new ClickHouseDbCommand(facade);
+        return new ClickHouseCommand(this);
     }
 
     /// <inheritdoc />
@@ -577,6 +645,12 @@ public sealed class ClickHouseConnection : DbConnection
         if (_isOpen)
             throw new InvalidOperationException("Connection is already open.");
 
+        if (_settings is null)
+            throw new InvalidOperationException(
+                "ConnectionString has not been set. Either pass a connection string to " +
+                "the ClickHouseConnection(string) ctor or assign ConnectionString before " +
+                "calling OpenAsync().");
+
         // Claim the busy slot for the duration of the handshake. Today _isOpen
         // is set strictly after PerformHandshakeAsync completes, so a concurrent
         // Execute call during handshake would already throw "Connection is not
@@ -589,8 +663,14 @@ public sealed class ClickHouseConnection : DbConnection
             _currentQueryId = ClickHouseConnectionBusyException.HandshakeSentinel;
         }
 
+        // ADO contract: StateChange fires on every transition. EF Core, Dapper,
+        // OpenTelemetry SqlClient instrumentation, and connection-pool tracking
+        // all observe these.
+        OnStateChange(new System.Data.StateChangeEventArgs(
+            System.Data.ConnectionState.Closed, System.Data.ConnectionState.Connecting));
+
         using var activity = ClickHouseActivitySource.StartConnect(
-            _settings.Host, _settings.EffectivePort, _settings.Telemetry);
+            Settings.Host, Settings.EffectivePort, Settings.Telemetry);
         var stopwatch = Stopwatch.StartNew();
 
         try
@@ -598,22 +678,29 @@ public sealed class ClickHouseConnection : DbConnection
             await ConnectTcpAsync(cancellationToken);
             await PerformHandshakeAsync(cancellationToken);
             lock (_queryLock) { _isOpen = true; }
+            OnStateChange(new System.Data.StateChangeEventArgs(
+                System.Data.ConnectionState.Connecting, System.Data.ConnectionState.Open));
 
             // Record telemetry on success
             stopwatch.Stop();
             ClickHouseActivitySource.SetServerInfo(activity, ServerInfo!);
             ClickHouseMeter.ConnectDuration.Record(stopwatch.Elapsed.TotalSeconds);
             ClickHouseMeter.IncrementConnections();
-            _logger.ConnectionOpened(_settings.Host, _settings.EffectivePort,
+            _logger.ConnectionOpened(Settings.Host, Settings.EffectivePort,
                 stopwatch.Elapsed.TotalMilliseconds, NegotiatedProtocolVersion);
-            if (_settings.AllowInsecureTls)
-                _logger.AllowInsecureTlsEnabled(_settings.Host, _settings.EffectivePort);
+            if (Settings.AllowInsecureTls)
+                _logger.AllowInsecureTlsEnabled(Settings.Host, Settings.EffectivePort);
         }
         catch (Exception ex)
         {
             ClickHouseActivitySource.SetError(activity, ex);
-            _logger.ConnectionFailed(_settings.Host, _settings.EffectivePort, ex.Message);
+            _logger.ConnectionFailed(Settings.Host, Settings.EffectivePort, ex.Message);
             await CloseInternalAsync();
+            // CloseInternalAsync only fires Open→Closed; on a failed handshake
+            // we were in Connecting state, so emit the Connecting→Closed event
+            // explicitly to keep the ADO StateChange contract complete.
+            OnStateChange(new System.Data.StateChangeEventArgs(
+                System.Data.ConnectionState.Connecting, System.Data.ConnectionState.Closed));
             throw;
         }
         finally
@@ -631,34 +718,34 @@ public sealed class ClickHouseConnection : DbConnection
     {
         _tcpClient = new TcpClient
         {
-            ReceiveBufferSize = _settings.ReceiveBufferSize,
-            SendBufferSize = _settings.SendBufferSize,
+            ReceiveBufferSize = Settings.ReceiveBufferSize,
+            SendBufferSize = Settings.SendBufferSize,
             NoDelay = true
         };
 
         // Use the effective port (TlsPort if TLS enabled, otherwise Port)
-        var port = _settings.EffectivePort;
+        var port = Settings.EffectivePort;
 
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutCts.CancelAfter(_settings.ConnectTimeout);
+        timeoutCts.CancelAfter(Settings.ConnectTimeout);
 
         try
         {
-            await _tcpClient.ConnectAsync(_settings.Host, port, timeoutCts.Token);
+            await _tcpClient.ConnectAsync(Settings.Host, port, timeoutCts.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw ClickHouseConnectionException.Timeout(_settings.Host, port, _settings.ConnectTimeout);
+            throw ClickHouseConnectionException.Timeout(Settings.Host, port, Settings.ConnectTimeout);
         }
         catch (SocketException ex)
         {
-            throw ClickHouseConnectionException.Refused(_settings.Host, port, ex);
+            throw ClickHouseConnectionException.Refused(Settings.Host, port, ex);
         }
 
         _networkStream = _tcpClient.GetStream();
 
         // Wrap with TLS if enabled
-        if (_settings.UseTls)
+        if (Settings.UseTls)
         {
             _networkStream = await EstablishTlsAsync(_networkStream, timeoutCts.Token);
         }
@@ -670,8 +757,8 @@ public sealed class ClickHouseConnection : DbConnection
 
         // Use larger buffer sizes to reduce fragmentation and improve IsSingleSegment hit rate
         var pipeReaderOptions = new StreamPipeReaderOptions(
-            bufferSize: _settings.PipeBufferSize,
-            minimumReadSize: _settings.PipeBufferSize / 4);
+            bufferSize: Settings.PipeBufferSize,
+            minimumReadSize: Settings.PipeBufferSize / 4);
         _pipeReader = PipeReader.Create(_networkStream, pipeReaderOptions);
         _pipeWriter = PipeWriter.Create(_networkStream);
     }
@@ -679,12 +766,12 @@ public sealed class ClickHouseConnection : DbConnection
     private async Task<Stream> EstablishTlsAsync(Stream innerStream, CancellationToken cancellationToken)
     {
         // Load custom CA certificate if specified
-        if (!string.IsNullOrEmpty(_settings.TlsCaCertificatePath))
+        if (!string.IsNullOrEmpty(Settings.TlsCaCertificatePath))
         {
 #if NET9_0_OR_GREATER
-            _customCaCertificate = X509CertificateLoader.LoadCertificateFromFile(_settings.TlsCaCertificatePath);
+            _customCaCertificate = X509CertificateLoader.LoadCertificateFromFile(Settings.TlsCaCertificatePath);
 #else
-            _customCaCertificate = new X509Certificate2(_settings.TlsCaCertificatePath);
+            _customCaCertificate = new X509Certificate2(Settings.TlsCaCertificatePath);
 #endif
         }
 
@@ -695,14 +782,14 @@ public sealed class ClickHouseConnection : DbConnection
 
         var options = new SslClientAuthenticationOptions
         {
-            TargetHost = _settings.Host,
+            TargetHost = Settings.Host,
             EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
         };
 
         // Add client certificate for mTLS if specified
-        if (_settings.TlsClientCertificate != null)
+        if (Settings.TlsClientCertificate != null)
         {
-            options.ClientCertificates = new X509CertificateCollection { _settings.TlsClientCertificate };
+            options.ClientCertificates = new X509CertificateCollection { Settings.TlsClientCertificate };
         }
 
         try
@@ -724,7 +811,7 @@ public sealed class ClickHouseConnection : DbConnection
         SslPolicyErrors sslPolicyErrors)
     {
         // If insecure TLS is allowed, accept any certificate
-        if (_settings.AllowInsecureTls)
+        if (Settings.AllowInsecureTls)
             return true;
 
         // No errors - certificate is valid
@@ -772,10 +859,10 @@ public sealed class ClickHouseConnection : DbConnection
 
     private async Task PerformHandshakeAsync(CancellationToken cancellationToken)
     {
-        _logger.HandshakeStart(_settings.Host, _settings.EffectivePort);
+        _logger.HandshakeStart(Settings.Host, Settings.EffectivePort);
         await SendClientHelloAsync(cancellationToken);
 
-        if (_settings.AuthMethod == ClickHouseAuthMethod.SshKey)
+        if (Settings.AuthMethod == ClickHouseAuthMethod.SshKey)
             await PerformSshChallengeExchangeAsync(cancellationToken);
 
         ServerInfo = await ReceiveServerHelloAsync(cancellationToken);
@@ -855,8 +942,8 @@ public sealed class ClickHouseConnection : DbConnection
         using var signer = CreateSshSigner();
         var payload = Auth.SshKeySigner.BuildSignedPayload(
             ProtocolVersion.Current,
-            _settings.Database,
-            _settings.Username,
+            Settings.Database,
+            Settings.Username,
             challenge);
         var signature = signer.Sign(payload);
 
@@ -916,10 +1003,10 @@ public sealed class ClickHouseConnection : DbConnection
 
     private Auth.SshKeySigner CreateSshSigner()
     {
-        if (_settings.SshPrivateKey is not null)
-            return new Auth.SshKeySigner(_settings.SshPrivateKey, _settings.SshPrivateKeyPassphrase);
-        if (_settings.SshPrivateKeyPath is not null)
-            return new Auth.SshKeySigner(_settings.SshPrivateKeyPath, _settings.SshPrivateKeyPassphrase);
+        if (Settings.SshPrivateKey is not null)
+            return new Auth.SshKeySigner(Settings.SshPrivateKey, Settings.SshPrivateKeyPassphrase);
+        if (Settings.SshPrivateKeyPath is not null)
+            return new Auth.SshKeySigner(Settings.SshPrivateKeyPath, Settings.SshPrivateKeyPassphrase);
         throw new InvalidOperationException(
             "AuthMethod is SshKey but neither SshPrivateKey nor SshPrivateKeyPath is set.");
     }
@@ -928,8 +1015,8 @@ public sealed class ClickHouseConnection : DbConnection
     {
         var (wireUsername, wirePassword) = BuildHandshakeCredentials(_settings);
         var clientHello = ClientHello.Create(
-            _settings.ClientName,
-            _settings.Database,
+            Settings.ClientName,
+            Settings.Database,
             wireUsername,
             wirePassword);
 
@@ -1068,7 +1155,7 @@ public sealed class ClickHouseConnection : DbConnection
         cancellationToken.ThrowIfCancellationRequested();
 
         ClickHouseMeter.DecrementConnections();
-        _logger.ConnectionClosed(_settings.Host);
+        _logger.ConnectionClosed(Settings.Host);
         await CloseInternalAsync();
     }
 
@@ -1231,7 +1318,7 @@ public sealed class ClickHouseConnection : DbConnection
         // subsequent statements unambiguous.
         if (userSetDatabase is not null)
         {
-            var defaultDb = string.IsNullOrEmpty(_settings.Database) ? "default" : _settings.Database!;
+            var defaultDb = string.IsNullOrEmpty(Settings.Database) ? "default" : Settings.Database!;
             await ExecuteNonQueryAsync(
                 $"USE {Sql.ClickHouseIdentifier.Quote(defaultDb)}",
                 cancellationToken: cancellationToken).ConfigureAwait(false);
@@ -1515,7 +1602,7 @@ public sealed class ClickHouseConnection : DbConnection
             return;
         }
 
-        var (database, table) = ClickHouseIdentifier.SplitQualifiedName(tableName, _settings.Database);
+        var (database, table) = ClickHouseIdentifier.SplitQualifiedName(tableName, Settings.Database);
         _schemaCache.InvalidateTable(database, table);
     }
 
@@ -1758,7 +1845,7 @@ public sealed class ClickHouseConnection : DbConnection
         CancellationToken cancellationToken,
         string effectiveQueryId)
     {
-        using var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+        using var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, Settings.Database, Settings.Telemetry);
         var stopwatch = Stopwatch.StartNew();
         long rowsRead = 0;
         var success = false;
@@ -1820,7 +1907,7 @@ public sealed class ClickHouseConnection : DbConnection
         finally
         {
             stopwatch.Stop();
-            ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, rowsRead, success);
+            ClickHouseMeter.RecordQuery(Settings.Database, stopwatch.Elapsed, rowsRead, success);
             if (success)
                 _logger.QueryCompleted(effectiveQueryId, rowsRead, stopwatch.Elapsed.TotalMilliseconds);
         }
@@ -1872,7 +1959,7 @@ public sealed class ClickHouseConnection : DbConnection
         CancellationToken cancellationToken,
         string effectiveQueryId)
     {
-        using var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+        using var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, Settings.Database, Settings.Telemetry);
         var stopwatch = Stopwatch.StartNew();
         long totalRows = 0;
         var success = false;
@@ -1926,7 +2013,7 @@ public sealed class ClickHouseConnection : DbConnection
         finally
         {
             stopwatch.Stop();
-            ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, totalRows, success);
+            ClickHouseMeter.RecordQuery(Settings.Database, stopwatch.Elapsed, totalRows, success);
             if (success)
                 _logger.QueryCompleted(effectiveQueryId, totalRows, stopwatch.Elapsed.TotalMilliseconds);
         }
@@ -1955,7 +2042,7 @@ public sealed class ClickHouseConnection : DbConnection
         {
             // Activity, stopwatch, and rows-read counter all live for the reader's
             // lifetime — the reader records the query metric on disposal.
-            var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+            var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, Settings.Database, Settings.Telemetry);
             var stopwatch = Stopwatch.StartNew();
             _logger.LogQueryStarted(effectiveQueryId, sql);
 
@@ -1976,7 +2063,7 @@ public sealed class ClickHouseConnection : DbConnection
                 stopwatch.Stop();
                 ClickHouseActivitySource.SetError(activity, ex);
                 activity?.Dispose();
-                ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, 0, success: false);
+                ClickHouseMeter.RecordQuery(Settings.Database, stopwatch.Elapsed, 0, success: false);
                 ClickHouseMeter.ErrorsTotal.Add(1);
                 _logger.QueryFailed(effectiveQueryId, ex.Message);
                 if (ex is ClickHouseProtocolException) await CloseInternalAsync();
@@ -2108,7 +2195,7 @@ public sealed class ClickHouseConnection : DbConnection
         EnterBusy(effectiveQueryId);
         try
         {
-            using var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+            using var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, Settings.Database, Settings.Telemetry);
             var stopwatch = Stopwatch.StartNew();
             long totalRows = 0;
             var success = false;
@@ -2149,7 +2236,7 @@ public sealed class ClickHouseConnection : DbConnection
             finally
             {
                 stopwatch.Stop();
-                ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, totalRows, success);
+                ClickHouseMeter.RecordQuery(Settings.Database, stopwatch.Elapsed, totalRows, success);
                 if (success)
                     _logger.QueryCompleted(effectiveQueryId, totalRows, stopwatch.Elapsed.TotalMilliseconds);
                 else
@@ -2578,7 +2665,7 @@ public sealed class ClickHouseConnection : DbConnection
         try
         {
             var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-            using var activity = ClickHouseActivitySource.StartQuery(rewrittenSql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+            using var activity = ClickHouseActivitySource.StartQuery(rewrittenSql, effectiveQueryId, Settings.Database, Settings.Telemetry);
             var stopwatch = Stopwatch.StartNew();
             long rowsRead = 0;
             var success = false;
@@ -2639,7 +2726,7 @@ public sealed class ClickHouseConnection : DbConnection
             finally
             {
                 stopwatch.Stop();
-                ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, rowsRead, success);
+                ClickHouseMeter.RecordQuery(Settings.Database, stopwatch.Elapsed, rowsRead, success);
                 if (success)
                     _logger.QueryCompleted(effectiveQueryId, rowsRead, stopwatch.Elapsed.TotalMilliseconds);
             }
@@ -2671,7 +2758,7 @@ public sealed class ClickHouseConnection : DbConnection
         try
         {
             var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-            using var activity = ClickHouseActivitySource.StartQuery(rewrittenSql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+            using var activity = ClickHouseActivitySource.StartQuery(rewrittenSql, effectiveQueryId, Settings.Database, Settings.Telemetry);
             var stopwatch = Stopwatch.StartNew();
             long totalRows = 0;
             var success = false;
@@ -2724,7 +2811,7 @@ public sealed class ClickHouseConnection : DbConnection
             finally
             {
                 stopwatch.Stop();
-                ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, totalRows, success);
+                ClickHouseMeter.RecordQuery(Settings.Database, stopwatch.Elapsed, totalRows, success);
                 if (success)
                     _logger.QueryCompleted(effectiveQueryId, totalRows, stopwatch.Elapsed.TotalMilliseconds);
             }
@@ -2756,7 +2843,7 @@ public sealed class ClickHouseConnection : DbConnection
         try
         {
             var (rewrittenSql, settings) = SqlParameterRewriter.Process(sql, parameters);
-            var activity = ClickHouseActivitySource.StartQuery(rewrittenSql, effectiveQueryId, _settings.Database, _settings.Telemetry);
+            var activity = ClickHouseActivitySource.StartQuery(rewrittenSql, effectiveQueryId, Settings.Database, Settings.Telemetry);
             var stopwatch = Stopwatch.StartNew();
             _logger.LogQueryStarted(effectiveQueryId, rewrittenSql);
 
@@ -2776,7 +2863,7 @@ public sealed class ClickHouseConnection : DbConnection
                 stopwatch.Stop();
                 ClickHouseActivitySource.SetError(activity, ex);
                 activity?.Dispose();
-                ClickHouseMeter.RecordQuery(_settings.Database, stopwatch.Elapsed, 0, success: false);
+                ClickHouseMeter.RecordQuery(Settings.Database, stopwatch.Elapsed, 0, success: false);
                 ClickHouseMeter.ErrorsTotal.Add(1);
                 _logger.QueryFailed(effectiveQueryId, ex.Message);
                 if (ex is ClickHouseProtocolException) await CloseInternalAsync();
@@ -2815,7 +2902,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
 
         // Set compression state for response handling
-        _compressionEnabled = _settings.Compress;
+        _compressionEnabled = Settings.Compress;
         _cancellationRequested = false;
 
         // Build settings dictionary for JSON/Dynamic serialization on CH 25.6+.
@@ -2835,10 +2922,10 @@ public sealed class ClickHouseConnection : DbConnection
 
         var queryMessage = QueryMessage.Create(
             sql,
-            _settings.ClientName,
-            _settings.Username,
+            Settings.ClientName,
+            Settings.Username,
             NegotiatedProtocolVersion,
-            useCompression: _settings.Compress,
+            useCompression: Settings.Compress,
             parameters: parameters,
             settings: querySettings,
             queryId: queryId);
@@ -2858,9 +2945,9 @@ public sealed class ClickHouseConnection : DbConnection
 
         // Write empty data block (required after query)
         // When compression is enabled, the client must also send compressed data blocks
-        if (_settings.Compress)
+        if (Settings.Compress)
         {
-            var compressor = CompressedBlock.GetCompressor(_settings.CompressionMethod);
+            var compressor = CompressedBlock.GetCompressor(Settings.CompressionMethod);
             Block.WriteEmpty(ref writer, compressor);
         }
         else
@@ -2886,7 +2973,7 @@ public sealed class ClickHouseConnection : DbConnection
         // Precedence: per-call override > sticky override from ChangeRolesAsync > connection default.
         var effective = desired;
         if (effective is null)
-            effective = _pinnedRolesSet ? _pinnedRoles : _settings.Roles;
+            effective = _pinnedRolesSet ? _pinnedRoles : Settings.Roles;
 
         // Tag the surrounding Activity with the effective role set. Attaches to
         // the CH.Native query Activity or any outer OTEL span (ADO, user-wrapped),
@@ -3571,12 +3658,23 @@ public sealed class ClickHouseConnection : DbConnection
 
     private async Task CloseInternalAsync()
     {
+        // Capture the prior state before the flip so the StateChange event
+        // below reflects the real transition (Open→Closed, not Closed→Closed
+        // if a double-close races in).
+        var wasOpen = _isOpen;
         // Flip _isOpen under the lock so readers in CanBePooled / query
         // entrypoints see the transition atomically with _currentQueryId /
         // role-tracking clearing.
         lock (_queryLock)
         {
             _isOpen = false;
+        }
+        if (wasOpen)
+        {
+            // ADO contract: StateChange fires on every transition. Skip when
+            // we were already closed so subscribers don't see a no-op event.
+            OnStateChange(new System.Data.StateChangeEventArgs(
+                System.Data.ConnectionState.Open, System.Data.ConnectionState.Closed));
         }
         _compressionEnabled = false;
         _schemaCache.Clear();
@@ -3652,7 +3750,7 @@ public sealed class ClickHouseConnection : DbConnection
                     if (_isOpen)
                     {
                         ClickHouseMeter.DecrementConnections();
-                        _logger.ConnectionClosed(_settings.Host);
+                        _logger.ConnectionClosed(Settings.Host);
                     }
                     _disposed = true;
                     await CloseInternalAsync().ConfigureAwait(false);
@@ -3665,7 +3763,7 @@ public sealed class ClickHouseConnection : DbConnection
         if (_isOpen)
         {
             ClickHouseMeter.DecrementConnections();
-            _logger.ConnectionClosed(_settings.Host);
+            _logger.ConnectionClosed(Settings.Host);
         }
 
         _disposed = true;
@@ -3709,7 +3807,7 @@ public sealed class ClickHouseConnection : DbConnection
             await EnsureRolesResolvedAsync(rolesOverride, cancellationToken);
 
         // Set compression state for response handling
-        _compressionEnabled = _settings.Compress;
+        _compressionEnabled = Settings.Compress;
         // Mirror SendQueryAsync (line 1661) — clear stale cancel state from a
         // prior query so the bulk-path drain gate does not mis-trigger.
         _cancellationRequested = false;
@@ -3717,10 +3815,10 @@ public sealed class ClickHouseConnection : DbConnection
         var effectiveQueryId = ResolveQueryId(queryId);
         var queryMessage = QueryMessage.Create(
             sql,
-            _settings.ClientName,
-            _settings.Username,
+            Settings.ClientName,
+            Settings.Username,
             NegotiatedProtocolVersion,
-            useCompression: _settings.Compress,
+            useCompression: Settings.Compress,
             parameters: null,
             queryId: effectiveQueryId);
 
@@ -3737,9 +3835,9 @@ public sealed class ClickHouseConnection : DbConnection
         queryMessage.Write(ref writer, NegotiatedProtocolVersion);
 
         // Write initial empty data block (required to trigger schema response)
-        if (_settings.Compress)
+        if (Settings.Compress)
         {
-            var compressor = CompressedBlock.GetCompressor(_settings.CompressionMethod);
+            var compressor = CompressedBlock.GetCompressor(Settings.CompressionMethod);
             Block.WriteEmpty(ref writer, compressor);
         }
         else
@@ -3885,9 +3983,9 @@ public sealed class ClickHouseConnection : DbConnection
         // Write table name at Data message level (matching clickhouse-go's sendData structure)
         writer.WriteString(string.Empty);
 
-        if (_settings.Compress)
+        if (Settings.Compress)
         {
-            var compressor = CompressedBlock.GetCompressor(_settings.CompressionMethod)!;
+            var compressor = CompressedBlock.GetCompressor(Settings.CompressionMethod)!;
             Block.WriteDataCompressed(
                 ref writer,
                 columnNames,
@@ -3935,9 +4033,9 @@ public sealed class ClickHouseConnection : DbConnection
         var bufferWriter = new ArrayBufferWriter<byte>();
         var writer = new ProtocolWriter(bufferWriter);
 
-        if (_settings.Compress)
+        if (Settings.Compress)
         {
-            var compressor = CompressedBlock.GetCompressor(_settings.CompressionMethod);
+            var compressor = CompressedBlock.GetCompressor(Settings.CompressionMethod);
             Block.WriteEmpty(ref writer, compressor);
         }
         else
@@ -3991,9 +4089,9 @@ public sealed class ClickHouseConnection : DbConnection
             // Write table name at Data message level (matching clickhouse-go's sendData structure)
             writer.WriteString(string.Empty);
 
-            if (_settings.Compress)
+            if (Settings.Compress)
             {
-                var compressor = CompressedBlock.GetCompressor(_settings.CompressionMethod)!;
+                var compressor = CompressedBlock.GetCompressor(Settings.CompressionMethod)!;
                 WriteDataBlockDirectCompressed(ref writer, extractors, rows, rowCount, compressor);
             }
             else

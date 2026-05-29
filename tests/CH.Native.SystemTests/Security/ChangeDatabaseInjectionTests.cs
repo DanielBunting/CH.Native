@@ -1,4 +1,7 @@
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.SystemTests.Fixtures;
 using Xunit;
 
@@ -26,7 +29,7 @@ public class ChangeDatabaseInjectionTests
     [InlineData("db\tname")]
     public async Task ControlCharactersInName_ThrowImmediately(string name)
     {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
         Assert.Throws<ArgumentException>(() => conn.ChangeDatabase(name));
     }
@@ -34,7 +37,7 @@ public class ChangeDatabaseInjectionTests
     [Fact]
     public async Task OverLongName_ThrowsImmediately()
     {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
         var name = new string('a', 257);
         Assert.Throws<ArgumentException>(() => conn.ChangeDatabase(name));
@@ -43,7 +46,7 @@ public class ChangeDatabaseInjectionTests
     [Fact]
     public async Task EmptyName_ThrowsImmediately()
     {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
         Assert.Throws<ArgumentException>(() => conn.ChangeDatabase("   "));
     }
@@ -51,7 +54,7 @@ public class ChangeDatabaseInjectionTests
     [Fact]
     public async Task ValidName_DoesNotThrow_DefaultExists()
     {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
         // 'default' is the system default database — always present.
         conn.ChangeDatabase("default");

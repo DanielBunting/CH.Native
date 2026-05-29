@@ -1,5 +1,8 @@
 using CH.Native.Ado;
 using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
+using CH.Native.Connection;
 using CH.Native.SmokeTests.Fixtures;
 using CH.Native.SmokeTests.Helpers;
 using Xunit;
@@ -105,7 +108,7 @@ public class ProtocolSmokeTests
     public async Task ServerVersion_IsNonEmpty()
     {
         // Native driver: use ADO.NET ServerVersion property
-        await using var nativeConn = new ClickHouseDbConnection(_fixture.NativeConnectionString);
+        await using var nativeConn = new ClickHouseConnection(_fixture.NativeConnectionString);
         await nativeConn.OpenAsync();
         var nativeVersion = nativeConn.ServerVersion;
 

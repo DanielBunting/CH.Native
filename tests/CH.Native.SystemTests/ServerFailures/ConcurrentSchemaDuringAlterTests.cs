@@ -13,7 +13,7 @@ namespace CH.Native.SystemTests.ServerFailures;
 /// schema — only complete pre-ALTER or complete post-ALTER snapshots.
 ///
 /// <para>The native ADO.NET <c>GetSchema("Columns")</c> override is not yet
-/// implemented in <c>ClickHouseDbConnection</c>, so this test queries
+/// implemented in <c>ClickHouseConnection</c>, so this test queries
 /// <c>system.columns</c> directly. The concurrency story is unaffected by
 /// where the schema metadata is fetched from.</para>
 /// </summary>
