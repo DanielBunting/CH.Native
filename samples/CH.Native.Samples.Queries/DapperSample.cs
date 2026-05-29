@@ -1,8 +1,7 @@
 using CH.Native.Ado;
 using CH.Native.Connection;
-using CH.Native.Dapper;
 using CH.Native.DependencyInjection;
-using Dapper;
+using CH.Native.Dapper;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace CH.Native.Samples.Queries;
@@ -66,7 +65,7 @@ internal static class DapperSample
             var minPrice = 50.0;
             var category = "Electronics";
 
-            var query = new CommandDefinition(
+            var products = await connection.QueryAsync<Product>(
                 $"""
                 SELECT id, name, category, price, in_stock
                 FROM {tableName}
@@ -74,9 +73,7 @@ internal static class DapperSample
                 ORDER BY price DESC
                 """,
                 new { category, minPrice },
-                cancellationToken: cts.Token);
-
-            var products = await connection.QueryAsync<Product>(query);
+                cts.Token);
 
             Console.WriteLine();
             Console.WriteLine($"--- {category} >= ${minPrice} (Dapper, anon-obj params) ---");
@@ -88,11 +85,10 @@ internal static class DapperSample
             // Array IN parameter — Dapper expands @ids into a list of bind
             // placeholders server-side, no manual list flattening needed.
             var pickIds = new uint[] { 1, 3, 5, 7 };
-            var picksQuery = new CommandDefinition(
+            var picks = await connection.QueryAsync<Product>(
                 $"SELECT id, name, category, price, in_stock FROM {tableName} WHERE id IN @ids ORDER BY id",
                 new { ids = pickIds },
-                cancellationToken: cts.Token);
-            var picks = await connection.QueryAsync<Product>(picksQuery);
+                cts.Token);
 
             Console.WriteLine();
             Console.WriteLine($"--- Array IN @ids = [{string.Join(",", pickIds)}] ---");
@@ -102,15 +98,14 @@ internal static class DapperSample
             }
 
             // QueryFirstAsync — single row.
-            var cheapest = await connection.QueryFirstAsync<Product>(new CommandDefinition(
+            var cheapest = await connection.QueryFirstAsync<Product>(
                 $"SELECT id, name, category, price, in_stock FROM {tableName} ORDER BY price ASC LIMIT 1",
-                cancellationToken: cts.Token));
+                cancellationToken: cts.Token);
             Console.WriteLine($"\nCheapest product: {cheapest.Name} at ${cheapest.Price:F2}");
 
-            // ExecuteScalarAsync — aggregate.
-            var avgPrice = await connection.ExecuteScalarAsync<double>(new CommandDefinition(
-                $"SELECT round(avg(price), 2) FROM {tableName}",
-                cancellationToken: cts.Token));
+            // ExecuteScalarAsync — aggregate. IDbConnection extension; delegates to Dapper.
+            var avgPrice = await connection.ExecuteScalarAsync<double>(
+                $"SELECT round(avg(price), 2) FROM {tableName}");
             Console.WriteLine($"Average price  : ${avgPrice:F2}");
 
             Console.WriteLine();
@@ -118,7 +113,7 @@ internal static class DapperSample
             Console.WriteLine($"  Anon-obj params       : @category, @minPrice bound");
             Console.WriteLine($"  Array IN parameter    : @ids = [{string.Join(",", pickIds)}]");
             Console.WriteLine($"  Mapping               : in_stock -> InStock (MatchNamesWithUnderscores)");
-            Console.WriteLine($"  Cancellation token    : threaded via Dapper CommandDefinition");
+            Console.WriteLine($"  Cancellation token    : threaded via CH.Native.Dapper CancellationToken arg");
         }
         finally
         {
@@ -188,11 +183,11 @@ internal static class DapperSample
                 """);
             Console.WriteLine($"Seeded {tableName} via DI-resolved DataSource");
 
-            // The DataSource gave us a pooled connection; Dapper extension methods
-            // bind because ClickHouseConnection : DbConnection.
-            var electronics = await connection.QueryAsync<Product>(new CommandDefinition(
+            // The DataSource gave us a pooled connection; CH.Native.Dapper's
+            // IDbConnection extensions bind because ClickHouseConnection : DbConnection.
+            var electronics = await connection.QueryAsync<Product>(
                 $"SELECT id, name, category, price, in_stock FROM {tableName} WHERE category = @c ORDER BY price",
-                new { c = "Electronics" }));
+                new { c = "Electronics" });
 
             Console.WriteLine();
             Console.WriteLine("--- Dapper QueryAsync<T> on DI-rented connection ---");
