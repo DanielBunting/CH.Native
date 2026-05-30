@@ -1,5 +1,6 @@
 using System.Security.Cryptography.X509Certificates;
 using CH.Native.Connection;
+using CH.Native.Resilience;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace CH.Native.DependencyInjection;
@@ -22,6 +23,12 @@ internal sealed class ClickHouseDataSourceBuilder : IClickHouseDataSourceBuilder
     internal Func<IServiceProvider, Func<CancellationToken, ValueTask<SshKeyMaterial>>>? SshKeyProviderFactory { get; set; }
     internal Func<IServiceProvider, Func<CancellationToken, ValueTask<string>>>? PasswordProviderFactory { get; set; }
     internal Action<ClickHouseDataSourceOptions>? PoolConfigurator { get; set; }
+
+    // Resilience is applied to the settings builder (not the pool options) so it
+    // flows into ClickHouseConnectionSettings.Resilience. Stored as a configurator
+    // over the settings builder so the DataSource factory can apply it to BOTH the
+    // baseline build and the per-connection rotating-credential rebuild.
+    internal Action<ClickHouseConnectionSettingsBuilder>? ResilienceConfigurator { get; private set; }
 
     public IClickHouseDataSourceBuilder WithJwtProvider<TProvider>()
         where TProvider : class, IClickHouseJwtProvider
@@ -111,6 +118,20 @@ internal sealed class ClickHouseDataSourceBuilder : IClickHouseDataSourceBuilder
         PoolConfigurator = existing is null
             ? configure
             : opts => { existing(opts); configure(opts); };
+        return this;
+    }
+
+    public IClickHouseDataSourceBuilder WithResilience(ResilienceOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ResilienceConfigurator = b => b.WithResilience(options);
+        return this;
+    }
+
+    public IClickHouseDataSourceBuilder WithResilience(Action<ResilienceOptionsBuilder> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        ResilienceConfigurator = b => b.WithResilience(configure);
         return this;
     }
 

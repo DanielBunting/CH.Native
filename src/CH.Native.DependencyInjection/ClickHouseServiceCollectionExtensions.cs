@@ -201,9 +201,19 @@ public static class ClickHouseServiceCollectionExtensions
         var ssh = dsBuilder.SshKeyProviderFactory?.Invoke(sp);
         var pwd = dsBuilder.PasswordProviderFactory?.Invoke(sp);
 
+        // A fresh settings builder with any DI-configured resilience layered on.
+        // Used for BOTH the baseline build and the per-connection rotating-credential
+        // rebuild below, so retry/resilience reaches pooled connections on either path.
+        ClickHouseConnectionSettingsBuilder NewSettingsBuilder()
+        {
+            var b = builderFactory(sp);
+            dsBuilder.ResilienceConfigurator?.Invoke(b);
+            return b;
+        }
+
         // Baseline once to capture any settings the builder produces deterministically
         // (host, port, TLS, compression, etc.). Used for ClickHouseDataSourceOptions.Settings.
-        var baseline = builderFactory(sp).Build();
+        var baseline = NewSettingsBuilder().Build();
 
         // ConnectionFactory: rebuild from scratch on every creation, layering provider
         // outputs on top. This is the rotating-credential path.
@@ -219,7 +229,7 @@ public static class ClickHouseServiceCollectionExtensions
         {
             connectionFactory = async ct =>
             {
-                var b = builderFactory(sp);
+                var b = NewSettingsBuilder();
                 if (pwd is not null) b.WithPassword(await InvokeProviderAsync(pwd, ct, "password").ConfigureAwait(false));
                 if (jwt is not null) b.WithJwt(await InvokeProviderAsync(jwt, ct, "JWT").ConfigureAwait(false));
                 if (ssh is not null)
