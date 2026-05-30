@@ -127,7 +127,11 @@ internal sealed class TypeMapper<T>
         var args = new object?[_argsCtorOrdinals.Length];
         for (int i = 0; i < args.Length; i++)
         {
-            var raw = reader.GetValue(_argsCtorOrdinals[i]);
+            // GetValueInternal (not GetValue) so a SQL null arrives as CLR null
+            // and ConvertValue's null guard maps it to default(param). The public
+            // GetValue returns DBNull.Value, which ConvertValue would push through
+            // Convert.ChangeType and surface as "" / a wrong non-null value.
+            var raw = reader.GetValueInternal(_argsCtorOrdinals[i]);
             args[i] = ConvertValue(raw, _argsCtorParamTypes[i]);
         }
         return (T)_argsCtor!.Invoke(args);
@@ -309,7 +313,10 @@ internal sealed class TypeMapper<T>
         var propType = property.PropertyType;
         return (target, reader) =>
         {
-            var value = reader.GetValue(ordinal);
+            // GetValueInternal so a SQL null reaches ConvertValue as CLR null
+            // (returns null) rather than DBNull.Value (pushed through
+            // Convert.ChangeType and mis-converted for strings/enums).
+            var value = reader.GetValueInternal(ordinal);
             var convertedValue = ConvertValue(value, propType);
             setter(target, convertedValue);
         };

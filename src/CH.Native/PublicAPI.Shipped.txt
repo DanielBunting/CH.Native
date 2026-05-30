@@ -262,7 +262,6 @@ CH.Native.Connection.ClickHouseDataSource.CreateBulkInserterAsync(string! databa
 CH.Native.Connection.ClickHouseDataSource.CreateBulkInserterAsync(string! tableName, System.Collections.Generic.IReadOnlyList<string!>! columnNames, CH.Native.BulkInsert.BulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.BulkInsert.DynamicBulkInserter!>
 CH.Native.Connection.ClickHouseDataSource.CreateBulkInserterAsync<T>(string! database, string! tableName, CH.Native.BulkInsert.BulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.BulkInsert.BulkInserter<T!>!>
 CH.Native.Connection.ClickHouseDataSource.CreateBulkInserterAsync<T>(string! tableName, CH.Native.BulkInsert.BulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.BulkInsert.BulkInserter<T!>!>
-CH.Native.Connection.ClickHouseDataSource.DisposeAsync() -> System.Threading.Tasks.ValueTask
 CH.Native.Connection.ClickHouseDataSource.GetStatistics() -> CH.Native.Connection.DataSourceStatistics
 CH.Native.Connection.ClickHouseDataSource.OpenConnectionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.Connection.ClickHouseConnection!>
 CH.Native.Connection.ClickHouseDataSource.Options.get -> CH.Native.Connection.ClickHouseDataSourceOptions!
@@ -1367,4 +1366,5 @@ override CH.Native.Connection.ClickHouseConnection.Open() -> void
 override CH.Native.Connection.ClickHouseConnection.ServerVersion.get -> string!
 override CH.Native.Connection.ClickHouseConnection.State.get -> System.Data.ConnectionState
 CH.Native.Connection.ClickHouseDataSource.CreateConnection() -> CH.Native.Connection.ClickHouseConnection!
-CH.Native.Connection.ClickHouseDataSource.Dispose() -> void
+CH.Native.Connection.ClickHouseDataSource.Resilience.get -> CH.Native.Resilience.ResilienceOptions?
+override CH.Native.Connection.ClickHouseDataSource.ConnectionString.get -> string!

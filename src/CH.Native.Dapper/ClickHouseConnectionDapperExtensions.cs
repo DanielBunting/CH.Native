@@ -11,8 +11,8 @@ namespace CH.Native.Dapper;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Sibling of <see cref="ClickHouseDbConnectionDapperExtensions"/> for the
-/// pool-rented connection shape. C# resolves extensions on the more-derived
+/// Sibling of <see cref="IDbConnectionDapperExtensions"/> for the
+/// <see cref="IDbConnection"/> receiver shape. C# resolves extensions on the more-derived
 /// receiver first, so calls on a <see cref="ClickHouseConnection"/>-typed
 /// variable hit this fast path even when <c>using Dapper;</c> is also imported.
 /// </para>

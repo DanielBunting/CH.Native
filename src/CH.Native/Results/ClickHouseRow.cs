@@ -20,15 +20,15 @@ public readonly struct ClickHouseRow
     /// Gets the value at the specified column ordinal.
     /// </summary>
     /// <param name="ordinal">The zero-based column ordinal.</param>
-    /// <returns>The value at the specified column.</returns>
-    public object? this[int ordinal] => _reader.GetValue(ordinal);
+    /// <returns>The value at the specified column, or <see langword="null"/> for a SQL null.</returns>
+    public object? this[int ordinal] => _reader.GetValueInternal(ordinal);
 
     /// <summary>
     /// Gets the value at the specified column name.
     /// </summary>
     /// <param name="name">The column name (case-insensitive).</param>
-    /// <returns>The value at the specified column.</returns>
-    public object? this[string name] => _reader.GetValue(_reader.GetOrdinal(name));
+    /// <returns>The value at the specified column, or <see langword="null"/> for a SQL null.</returns>
+    public object? this[string name] => _reader.GetValueInternal(_reader.GetOrdinal(name));
 
     /// <summary>
     /// Gets the number of columns in the row.

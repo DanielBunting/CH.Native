@@ -343,9 +343,11 @@ public sealed class ClickHouseDataReader : DbDataReader
     }
 
     // GetValueInternal preserves the nullable shape for the typed-fallback
-    // path inside GetFieldValue. The public DbDataReader.GetValue contract
-    // returns object (non-nullable, DBNull for SQL null).
-    private object? GetValueInternal(int ordinal)
+    // path inside GetFieldValue and for the ClickHouseRow indexer, which both
+    // expose object? and surface SQL null as CLR null. The public
+    // DbDataReader.GetValue contract returns object (non-nullable, DBNull for
+    // SQL null), so it cannot be shared with those callers.
+    internal object? GetValueInternal(int ordinal)
     {
         EnsureCanRead();
         ValidateOrdinal(ordinal);

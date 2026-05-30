@@ -14,8 +14,8 @@ namespace CH.Native.Dapper;
 /// <para>
 /// Row-shaped methods (<c>QueryAsync&lt;T&gt;</c>, <c>QueryFirstAsync&lt;T&gt;</c>, etc.)
 /// are not extended on <see cref="IDbConnection"/> — they live only on the
-/// concrete CH connection types via <see cref="ClickHouseDbConnectionDapperExtensions"/>
-/// and <see cref="ClickHouseConnectionDapperExtensions"/>. C# extension resolution
+/// concrete CH connection type via <see cref="ClickHouseConnectionDapperExtensions"/>.
+/// C# extension resolution
 /// then picks the fast path automatically when the variable is typed as a CH
 /// connection, and falls through to Dapper's <see cref="IDbConnection"/> extension
 /// when it isn't. That removes the historic ambiguity between
@@ -59,7 +59,12 @@ public static class IDbConnectionDapperExtensions
         CommandType? commandType = null)
         => SqlMapper.ExecuteScalarAsync<T>(cnn, sql, param, transaction, commandTimeout, commandType);
 
-    /// <summary>Executes a query returning multiple result sets. Delegates to Dapper. ClickHouse does not support multiple result sets — calling this on a CH connection will fail on the second <c>Read</c>.</summary>
+    /// <summary>
+    /// Not supported. ClickHouse has no multiple-result-set / multi-statement
+    /// concept, so Dapper's grid-reader pattern cannot be honoured. Always throws
+    /// <see cref="NotSupportedException"/> with guidance to issue separate queries.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Always thrown.</exception>
     public static Task<SqlMapper.GridReader> QueryMultipleAsync(
         this IDbConnection cnn,
         string sql,
@@ -67,7 +72,10 @@ public static class IDbConnectionDapperExtensions
         IDbTransaction? transaction = null,
         int? commandTimeout = null,
         CommandType? commandType = null)
-        => SqlMapper.QueryMultipleAsync(cnn, sql, param, transaction, commandTimeout, commandType);
+        => throw new NotSupportedException(
+            "ClickHouse does not support multiple result sets, so QueryMultipleAsync " +
+            "(Dapper's grid-reader pattern) cannot be used. ClickHouse rejects multi-statement " +
+            "queries server-side. Issue each statement as a separate query instead.");
 
     /// <summary>Sync execute; returns affected row count. Delegates to Dapper.</summary>
     public static int Execute(this IDbConnection cnn, string sql, object? param = null,

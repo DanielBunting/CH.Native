@@ -17,6 +17,7 @@ using CH.Native.Exceptions;
 using CH.Native.Parameters;
 using CH.Native.Protocol;
 using CH.Native.Protocol.Messages;
+using CH.Native.Resilience;
 using CH.Native.Results;
 using CH.Native.Sql;
 using CH.Native.Telemetry;
@@ -55,6 +56,12 @@ public sealed class ClickHouseConnection : DbConnection
     private ClickHouseLogger _logger = new(null);
 
     internal ClickHouseLogger Logger => _logger;
+    // Connect-time retry policy, built from settings.Resilience.Retry in ApplySettings.
+    // Null when no retry was configured — OpenAsync then runs connect+handshake directly.
+    // Applies retry-on-connect to the direct/ADO/Dapper open path (the pooled path's
+    // rents flow through OpenAsync too, so they inherit it). Circuit-breaking and
+    // multi-server load-balancing remain the province of ResilientConnection.
+    private RetryPolicy? _retryPolicy;
     private readonly SchemaCache _schemaCache = new();
     private readonly object _queryLock = new();
     // Serializes every _pipeWriter.WriteAsync+FlushAsync pair. PipeWriter is not
@@ -395,6 +402,9 @@ public sealed class ClickHouseConnection : DbConnection
             ? ColumnReaderRegistry.LazyStrings
             : ColumnReaderRegistry.Default;
         _logger = new ClickHouseLogger(settings.Telemetry?.LoggerFactory);
+        _retryPolicy = settings.Resilience?.Retry is { } retryOptions
+            ? new RetryPolicy(retryOptions, _logger)
+            : null;
     }
 
     // ===================== DbConnection / IDbConnection surface =====================
@@ -675,8 +685,33 @@ public sealed class ClickHouseConnection : DbConnection
 
         try
         {
-            await ConnectTcpAsync(cancellationToken);
-            await PerformHandshakeAsync(cancellationToken);
+            if (_retryPolicy is not null)
+            {
+                // Retry transient connect/handshake failures (socket refused, network
+                // blip). Each failed attempt must reset the half-initialised socket/pipe
+                // state first: ConnectTcpAsync allocates a fresh TcpClient and reassigns
+                // _networkStream/_pipeReader/_pipeWriter every call, so without this the
+                // next attempt would overwrite — and leak — the previous attempt's socket.
+                // CloseInternalAsync is a no-op StateChange-wise here (we were never Open).
+                await _retryPolicy.ExecuteAsync(async retryCt =>
+                {
+                    try
+                    {
+                        await ConnectTcpAsync(retryCt);
+                        await PerformHandshakeAsync(retryCt);
+                    }
+                    catch
+                    {
+                        await CloseInternalAsync().ConfigureAwait(false);
+                        throw;
+                    }
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await ConnectTcpAsync(cancellationToken);
+                await PerformHandshakeAsync(cancellationToken);
+            }
             lock (_queryLock) { _isOpen = true; }
             OnStateChange(new System.Data.StateChangeEventArgs(
                 System.Data.ConnectionState.Connecting, System.Data.ConnectionState.Open));

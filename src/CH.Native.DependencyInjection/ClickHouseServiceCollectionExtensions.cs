@@ -147,6 +147,10 @@ public static class ClickHouseServiceCollectionExtensions
         if (serviceKey is null)
         {
             services.TryAddSingleton<ClickHouseDataSource>(sp => CreateDataSource(sp, dsBuilder, builderFactory, pocoSnapshot, sectionPath));
+            // Forward the ADO base type to the same singleton so `[FromServices] DbDataSource`
+            // resolves (the .NET 8+ idiom: inject DbDataSource, call CreateConnection()/
+            // OpenConnectionAsync()). ClickHouseDataSource : DbDataSource makes this valid.
+            services.TryAddSingleton<DbDataSource>(sp => sp.GetRequiredService<ClickHouseDataSource>());
             services.TryAddTransient<ClickHouseConnection>(sp =>
                 sp.GetRequiredService<ClickHouseDataSource>().CreateConnection());
             services.TryAddTransient<DbConnection>(sp =>
@@ -163,6 +167,8 @@ public static class ClickHouseServiceCollectionExtensions
         {
             services.TryAddKeyedSingleton<ClickHouseDataSource>(serviceKey,
                 (sp, key) => CreateDataSource(sp, dsBuilder, builderFactory, pocoSnapshot, sectionPath));
+            services.TryAddKeyedSingleton<DbDataSource>(serviceKey,
+                (sp, key) => sp.GetRequiredKeyedService<ClickHouseDataSource>(key));
             services.TryAddKeyedTransient<ClickHouseConnection>(serviceKey,
                 (sp, key) => sp.GetRequiredKeyedService<ClickHouseDataSource>(key).CreateConnection());
             services.TryAddKeyedTransient<DbConnection>(serviceKey,

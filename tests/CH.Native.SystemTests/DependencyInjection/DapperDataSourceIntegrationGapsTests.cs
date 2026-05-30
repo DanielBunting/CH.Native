@@ -443,21 +443,26 @@ public sealed class DapperDataSourceIntegrationGapsTests
     [Fact]
     public async Task Breaking_Dapper_QueryMultipleAsync_OnDataSourceConnection()
     {
+        // ClickHouse has no multiple-result-set / multi-statement concept, so
+        // Dapper's grid-reader pattern can never work. The CH.Native.Dapper
+        // QueryMultipleAsync extension surfaces that as an immediate, actionable
+        // NotSupportedException rather than letting the raw multi-statement SQL
+        // reach the server and fail with the opaque "error 62 (Syntax error:
+        // Multi-statements are not allowed)". (Called fully-qualified so it binds
+        // to our extension and not Dapper's IDbConnection overload, which is also
+        // in scope via `using Dapper;`.)
         await using var sp = BuildServices();
         var ds = sp.GetRequiredService<ClickHouseDataSource>();
         var conn = await TryOpenDbConnectionAsync(ds)
-            ?? throw GapException("DataSource has no API returning a DbConnection — Dapper.QueryMultipleAsync cannot be invoked.");
+            ?? throw GapException("DataSource has no API returning a DbConnection — QueryMultipleAsync cannot be invoked.");
 
         await using (conn)
         {
-            using var grid = await conn.QueryMultipleAsync(
-                "SELECT toInt64(1); SELECT toInt64(2);");
-            var a = await grid.ReadFirstAsync<long>();
-            Assert.Equal(1L, a);
+            var ex = await Assert.ThrowsAsync<NotSupportedException>(
+                () => CH.Native.Dapper.IDbConnectionDapperExtensions.QueryMultipleAsync(
+                    conn, "SELECT toInt64(1); SELECT toInt64(2);"));
 
-            // NextResult returns false, so Dapper's GridReader throws ObjectDisposedException
-            // when attempting to read a second result set.
-            await Assert.ThrowsAsync<ObjectDisposedException>(() => grid.ReadFirstAsync<long>());
+            Assert.Contains("multiple result sets", ex.Message, StringComparison.OrdinalIgnoreCase);
         }
     }
 
@@ -584,31 +589,46 @@ public sealed class DapperDataSourceIntegrationGapsTests
     }
 
     [Fact]
-    public async Task Breaking_DirectClickHouseConnection_PassesProviderRegisteredViaDI()
+    public async Task DirectClickHouseConnection_DoesNotConsultDIProvider_UseDataSourceInstead()
     {
-        // Negative documentation test: today the direct ctor knows nothing
-        // about ambient DI providers. The fix needs to either route this
-        // ctor through the registered DataSource OR mark it `[Obsolete]`
-        // and force users to the DataSource API. Either way, the gap
-        // surfaces as an unused provider here.
+        // Documents the deliberate seam (Option B): credential providers are a
+        // pooled-DataSource feature, matching Npgsql — a hand-constructed
+        // `new ClickHouseConnection(connStr)` reads only the static credentials
+        // from its connection string and knows nothing about the DI graph.
+        // Rotation comes from the DataSource's open paths, not the bare ctor.
+        // One counting provider, one container: the direct ctor must leave it at
+        // zero; the pooled rent must drive it above zero.
         var invocations = 0;
+        var realPassword = _fx.Password;
+
         await using var sp = BuildServices(b => b.WithPasswordProvider(_ => _ =>
         {
             Interlocked.Increment(ref invocations);
-            return new ValueTask<string>(_fx.Password);
+            return new ValueTask<string>(realPassword);
         }));
 
         // Force the DI graph to materialise so the provider factory is wired up.
-        _ = sp.GetRequiredService<ClickHouseDataSource>();
+        var ds = sp.GetRequiredService<ClickHouseDataSource>();
 
-        await using var direct = new ClickHouseConnection(_fx.ConnectionString);
-        await direct.OpenAsync();
-        _ = (await direct.QueryAsync<long>("SELECT toInt64(1)")).Single();
+        // --- Direct ctor: provider must NOT be consulted (the documented limitation). ---
+        await using (var direct = new ClickHouseConnection(_fx.ConnectionString))
+        {
+            await direct.OpenAsync();
+            _ = (await direct.QueryAsync<long>("SELECT toInt64(1)")).Single();
+        }
+        Assert.Equal(0, Volatile.Read(ref invocations));
 
-        Assert.True(invocations >= 1,
-            "Constructing ClickHouseConnection from a connection string did not consult any " +
-            "credential provider registered via the DI builder. This is the workaround the " +
-            "current docs recommend for Dapper — and it cannot rotate credentials.");
+        // --- DataSource pooled path: same provider IS consulted (the supported path). ---
+        await using (var pooled = await ds.OpenConnectionAsync())
+        {
+            Assert.Equal(1L, (await pooled.QueryAsync<long>("SELECT toInt64(1)")).Single());
+        }
+
+        Assert.True(Volatile.Read(ref invocations) >= 1,
+            "Credential rotation is a DataSource feature: ClickHouseDataSource.OpenConnectionAsync() " +
+            "(and OpenDbConnectionAsync() for the ADO/Dapper path) must consult the registered " +
+            "provider. Direct `new ClickHouseConnection(connStr)` intentionally does not — use the " +
+            "DataSource open paths when credentials rotate.");
     }
 
     // =========================================================================

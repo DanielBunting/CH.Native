@@ -128,8 +128,11 @@ resolution picks the more-derived receiver first, so the rules are simple:
 `using Dapper;` and `using CH.Native.Dapper;` can coexist freely. CH.Native.Dapper
 no longer extends `IDbConnection` with row-shaped methods (`QueryAsync<T>` etc.),
 so there is no ambiguity to resolve. Execute-style methods (`ExecuteAsync`,
-`ExecuteScalarAsync`, `QueryMultipleAsync`) remain as thin pass-throughs to
-Dapper for namespace-import convenience.
+`ExecuteScalarAsync`) remain as thin pass-throughs to Dapper for namespace-import
+convenience. `QueryMultipleAsync` is the exception: ClickHouse has no
+multiple-result-set concept, so CH.Native.Dapper's overload throws
+`NotSupportedException` immediately rather than letting the multi-statement SQL
+reach the server and fail with an opaque syntax error. Issue separate queries instead.
 
 If a DI registration only hands out `IDbConnection`, fast-path resolution
 requires assigning to a concrete-type local first:
