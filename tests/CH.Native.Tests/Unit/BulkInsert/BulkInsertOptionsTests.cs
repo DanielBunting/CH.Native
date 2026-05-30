@@ -94,4 +94,44 @@ public class BulkInsertOptionsTests
         Assert.Equal("Int32", opt.ColumnTypes!["id"]);
         Assert.Equal("String", opt.ColumnTypes!["NAME"]); // case-insensitive lookup honored by caller's dictionary
     }
+
+    [Fact]
+    public void Default_DeduplicationToken_IsNull()
+    {
+        Assert.Null(new BulkInsertOptions().DeduplicationToken);
+    }
+
+    [Fact]
+    public void DeduplicationToken_RoundTrips()
+    {
+        var opt = new BulkInsertOptions { DeduplicationToken = "batch-42" };
+        Assert.Equal("batch-42", opt.DeduplicationToken);
+    }
+
+    [Fact]
+    public void BuildInsertSettings_NoToken_ReturnsNull()
+    {
+        // No token set => no per-query settings; the inserter must not send an
+        // empty settings section.
+        Assert.Null(new BulkInsertOptions().BuildInsertSettings());
+    }
+
+    [Fact]
+    public void BuildInsertSettings_EmptyToken_ReturnsNull()
+    {
+        // Empty string is treated as "no token" (string.IsNullOrEmpty guard),
+        // not as a literal empty dedup token.
+        Assert.Null(new BulkInsertOptions { DeduplicationToken = "" }.BuildInsertSettings());
+    }
+
+    [Fact]
+    public void BuildInsertSettings_WithToken_EmitsInsertDeduplicationToken()
+    {
+        var settings = new BulkInsertOptions { DeduplicationToken = "batch-42" }.BuildInsertSettings();
+
+        Assert.NotNull(settings);
+        var token = Assert.Contains("insert_deduplication_token", settings!);
+        Assert.Equal("batch-42", token);
+        Assert.Single(settings);
+    }
 }

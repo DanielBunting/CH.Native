@@ -14,23 +14,22 @@ namespace CH.Native.SystemTests.BulkInsertFailures;
 /// want to deduplicate retries).
 ///
 /// <para>
-/// The library doesn't surface this option as a typed <see cref="BulkInsertOptions"/>
-/// field. Workaround: set it via per-query SETTINGS or via a session SET.
-/// This file pins:
+/// The library surfaces this as the typed <see cref="BulkInsertOptions.DeduplicationToken"/>
+/// field, which flows through the bulk-insert path as the
+/// <c>insert_deduplication_token</c> query setting. This file pins:
 /// </para>
 /// <list type="bullet">
-/// <item><description>That setting <c>insert_deduplication_token</c> via session SET
-///     does deduplicate same-token inserts, when used with a Replicated/MergeTree
-///     engine that supports it.</description></item>
-/// <item><description>Whether <see cref="BulkInsertOptions"/> exposes a typed surface
-///     for this (today: no — feature gap, documented).</description></item>
+/// <item><description>That <see cref="BulkInsertOptions"/> exposes the typed
+///     <see cref="BulkInsertOptions.DeduplicationToken"/> property.</description></item>
+/// <item><description>That on plain MergeTree the token is a no-op (both inserts land) —
+///     a SingleNode sanity check pinning user expectations.</description></item>
 /// </list>
 ///
 /// <para>
-/// Note: <c>insert_deduplication_token</c> on plain MergeTree is a no-op
-/// in older ClickHouse versions. The test uses a ReplicatedMergeTree which
-/// does honour it, OR documents the gap if the engine isn't available
-/// in the test container.
+/// The positive case — same-token batches deduplicate — requires a
+/// <c>ReplicatedMergeTree</c> engine and lives in
+/// <c>CH.Native.SystemTests.Cluster.InsertDeduplicationTokenReplicatedTests</c>,
+/// which uses the Keeper-backed cluster fixture.
 /// </para>
 /// </summary>
 [Collection("SingleNode")]
@@ -47,31 +46,17 @@ public class InsertDeduplicationTokenTests
     }
 
     [Fact]
-    public async Task BulkInsertOptions_DoesNotExposeDedupToken_FeatureGapDocumented()
+    public void BulkInsertOptions_ExposesDeduplicationToken()
     {
-        // Pin today's surface: BulkInsertOptions has BatchSize, QueryId,
-        // Roles, UseSchemaCache — no DeduplicationToken. This test will
-        // flip when (if) the typed field is added.
-        var optionType = typeof(BulkInsertOptions);
-        var props = optionType.GetProperties()
-            .Select(p => p.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // Pin the typed surface: BulkInsertOptions now exposes a nullable
+        // DeduplicationToken (string?) that flows through to the
+        // insert_deduplication_token query setting.
+        var prop = typeof(BulkInsertOptions).GetProperty(nameof(BulkInsertOptions.DeduplicationToken));
 
-        _output.WriteLine($"BulkInsertOptions properties: {string.Join(", ", props)}");
-        Assert.DoesNotContain("DeduplicationToken", props);
-        Assert.DoesNotContain("InsertDeduplicationToken", props);
-    }
-
-    [Fact(Skip = "Requires ReplicatedMergeTree, which the SingleNodeFixture container does not provision; skip for now.")]
-    public async Task SessionSetDedupToken_PreventsDuplicateBatchOnReplicatedTable()
-    {
-        // Workaround pattern: caller can issue `SET insert_deduplication_token`
-        // on the connection before each bulk insert. Same token = dedup on
-        // ReplicatedMergeTree. Since SingleNodeFixture uses a stand-alone
-        // server without the replication coordination, this test is skipped
-        // by default. It documents the known workaround and serves as a
-        // placeholder for when the test fixture grows a Replicated variant.
-        await Task.CompletedTask;
+        Assert.NotNull(prop);
+        Assert.Equal(typeof(string), prop!.PropertyType);
+        Assert.True(prop.CanRead && prop.CanWrite);
+        Assert.Null(new BulkInsertOptions().DeduplicationToken); // default is null (no token)
     }
 
     [Fact]
