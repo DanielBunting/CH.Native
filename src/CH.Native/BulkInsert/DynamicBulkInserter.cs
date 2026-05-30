@@ -238,11 +238,13 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
 
             var sql = $"INSERT INTO {_quotedQualifiedTable} ({columnList}) VALUES";
             var rolesSnapshot = _options.Roles is null ? null : (IReadOnlyList<string>)_options.Roles.ToArray();
+            var insertSettings = _options.BuildInsertSettings();
             await _connection.SendInsertQueryAsync(
                 sql,
                 cancellationToken,
                 rolesOverride: rolesSnapshot,
-                queryId: effectiveQueryId);
+                queryId: effectiveQueryId,
+                settings: insertSettings);
 
             var useCache = _options.UseSchemaCache ?? _connection.Settings.UseSchemaCache;
 

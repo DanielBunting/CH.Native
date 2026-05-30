@@ -232,11 +232,13 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             var sql = $"INSERT INTO {_quotedQualifiedTable} ({columnList}) VALUES";
             // Snapshot to IReadOnlyList so the wire path doesn't observe later mutation.
             var rolesSnapshot = _options.Roles is null ? null : (IReadOnlyList<string>)_options.Roles.ToArray();
+            var insertSettings = _options.BuildInsertSettings();
             await _connection.SendInsertQueryAsync(
                 sql,
                 cancellationToken,
                 rolesOverride: rolesSnapshot,
-                queryId: effectiveQueryId);
+                queryId: effectiveQueryId,
+                settings: insertSettings);
 
             // Per-call override wins; null falls back to the connection setting.
             var useCache = _options.UseSchemaCache ?? _connection.Settings.UseSchemaCache;

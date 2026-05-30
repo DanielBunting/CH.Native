@@ -65,6 +65,14 @@ public sealed class BulkInsertOptions
     public string? QueryId { get; set; }
 
     /// <summary>
+    /// Gets or sets the <c>insert_deduplication_token</c> sent with the INSERT. On a
+    /// <c>ReplicatedMergeTree</c> engine, batches sharing the same token are deduplicated
+    /// server-side, which lets at-least-once pipelines safely retry an insert. On a plain
+    /// <c>MergeTree</c> the token is a no-op. When <c>null</c> (the default) no token is sent.
+    /// </summary>
+    public string? DeduplicationToken { get; set; }
+
+    /// <summary>
     /// Pre-supplied column types, keyed by column name (OrdinalIgnoreCase).
     /// When set and covering every column being inserted, the dynamic
     /// (POCO-less) bulk-insert path skips the server schema-probe round-trip
@@ -92,4 +100,21 @@ public sealed class BulkInsertOptions
     /// Gets the default options instance.
     /// </summary>
     public static BulkInsertOptions Default { get; } = new();
+
+    /// <summary>
+    /// Builds the per-query settings dictionary derived from these options, or
+    /// <c>null</c> when no settings apply. Shared by the typed and dynamic
+    /// bulk-insert paths so both honour options like
+    /// <see cref="DeduplicationToken"/> identically.
+    /// </summary>
+    internal IReadOnlyDictionary<string, string>? BuildInsertSettings()
+    {
+        if (string.IsNullOrEmpty(DeduplicationToken))
+            return null;
+
+        return new Dictionary<string, string>
+        {
+            ["insert_deduplication_token"] = DeduplicationToken,
+        };
+    }
 }

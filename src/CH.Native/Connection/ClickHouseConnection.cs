@@ -3827,11 +3827,13 @@ public sealed class ClickHouseConnection : DbConnection
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="rolesOverride">Optional per-call role override.</param>
     /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
+    /// <param name="settings">Optional per-query settings (e.g. <c>insert_deduplication_token</c>) sent in the query's settings section.</param>
     internal async Task SendInsertQueryAsync(
         string sql,
         CancellationToken cancellationToken,
         IReadOnlyList<string>? rolesOverride = null,
-        string? queryId = null)
+        string? queryId = null,
+        IReadOnlyDictionary<string, string>? settings = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
@@ -3855,6 +3857,7 @@ public sealed class ClickHouseConnection : DbConnection
             NegotiatedProtocolVersion,
             useCompression: Settings.Compress,
             parameters: null,
+            settings: settings,
             queryId: effectiveQueryId);
 
         lock (_queryLock)

@@ -14,6 +14,8 @@ CH.Native.BulkInsert.BulkInsertOptions.BatchSize.set -> void
 CH.Native.BulkInsert.BulkInsertOptions.BulkInsertOptions() -> void
 CH.Native.BulkInsert.BulkInsertOptions.ColumnTypes.get -> System.Collections.Generic.IReadOnlyDictionary<string!, string!>?
 CH.Native.BulkInsert.BulkInsertOptions.ColumnTypes.set -> void
+CH.Native.BulkInsert.BulkInsertOptions.DeduplicationToken.get -> string?
+CH.Native.BulkInsert.BulkInsertOptions.DeduplicationToken.set -> void
 CH.Native.BulkInsert.BulkInsertOptions.IncludeNullColumns.get -> bool
 CH.Native.BulkInsert.BulkInsertOptions.IncludeNullColumns.set -> void
 CH.Native.BulkInsert.BulkInsertOptions.PreferDirectStreaming.get -> bool
