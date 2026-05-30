@@ -325,7 +325,7 @@ The entry point is the `connection.Table<T>()` extension (or `connection.Table<T
 
 ## Example: Mixed Usage
 
-The two connection types don't share a pool — `ClickHouseConnection` opens its own socket from a connection string, and `ClickHouseDataSource` pools `ClickHouseConnection` instances for the native API. Pick one per code path:
+There's a single connection type — `ClickHouseConnection` exposes both the ADO.NET/Dapper surface and the native API — but two ways to obtain one. Constructing it directly (`new ClickHouseConnection(connectionString)`) opens its own socket and is **not** pooled; `ClickHouseDataSource` pools `ClickHouseConnection` instances and is the recommended choice for services. A directly-constructed connection does not draw from the data source's pool. Pick whichever fits the code path:
 
 ```csharp
 const string ConnectionString = "Host=localhost;Port=9000";
