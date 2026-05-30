@@ -1,7 +1,21 @@
 #nullable enable
+CH.Native.Dapper.ClickHouseConnectionDapperExtensions
 CH.Native.Dapper.ClickHouseDapperArrayHandler<T>
 CH.Native.Dapper.ClickHouseDapperArrayHandler<T>.ClickHouseDapperArrayHandler() -> void
 CH.Native.Dapper.ClickHouseDapperIntegration
+CH.Native.Dapper.IDbConnectionDapperExtensions
 override CH.Native.Dapper.ClickHouseDapperArrayHandler<T>.Parse(object? value) -> T[]?
 override CH.Native.Dapper.ClickHouseDapperArrayHandler<T>.SetValue(System.Data.IDbDataParameter! parameter, T[]? value) -> void
+static CH.Native.Dapper.ClickHouseConnectionDapperExtensions.QueryAsync<T>(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, object? param = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<T>!>!
+static CH.Native.Dapper.ClickHouseConnectionDapperExtensions.QueryFirstAsync<T>(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, object? param = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<T>!
+static CH.Native.Dapper.ClickHouseConnectionDapperExtensions.QueryFirstOrDefaultAsync<T>(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, object? param = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<T?>!
+static CH.Native.Dapper.ClickHouseConnectionDapperExtensions.QuerySingleAsync<T>(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, object? param = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<T>!
+static CH.Native.Dapper.ClickHouseConnectionDapperExtensions.QuerySingleOrDefaultAsync<T>(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, object? param = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<T?>!
 static CH.Native.Dapper.ClickHouseDapperIntegration.Register() -> void
+static CH.Native.Dapper.IDbConnectionDapperExtensions.Execute(this System.Data.IDbConnection! cnn, string! sql, object? param = null, System.Data.IDbTransaction? transaction = null, int? commandTimeout = null, System.Data.CommandType? commandType = null) -> int
+static CH.Native.Dapper.IDbConnectionDapperExtensions.ExecuteAsync(this System.Data.IDbConnection! cnn, string! sql, object? param = null, System.Data.IDbTransaction? transaction = null, int? commandTimeout = null, System.Data.CommandType? commandType = null) -> System.Threading.Tasks.Task<int>!
+static CH.Native.Dapper.IDbConnectionDapperExtensions.ExecuteScalar(this System.Data.IDbConnection! cnn, string! sql, object? param = null, System.Data.IDbTransaction? transaction = null, int? commandTimeout = null, System.Data.CommandType? commandType = null) -> object?
+static CH.Native.Dapper.IDbConnectionDapperExtensions.ExecuteScalar<T>(this System.Data.IDbConnection! cnn, string! sql, object? param = null, System.Data.IDbTransaction? transaction = null, int? commandTimeout = null, System.Data.CommandType? commandType = null) -> T?
+static CH.Native.Dapper.IDbConnectionDapperExtensions.ExecuteScalarAsync(this System.Data.IDbConnection! cnn, string! sql, object? param = null, System.Data.IDbTransaction? transaction = null, int? commandTimeout = null, System.Data.CommandType? commandType = null) -> System.Threading.Tasks.Task<object?>!
+static CH.Native.Dapper.IDbConnectionDapperExtensions.ExecuteScalarAsync<T>(this System.Data.IDbConnection! cnn, string! sql, object? param = null, System.Data.IDbTransaction? transaction = null, int? commandTimeout = null, System.Data.CommandType? commandType = null) -> System.Threading.Tasks.Task<T?>!
+static CH.Native.Dapper.IDbConnectionDapperExtensions.QueryMultipleAsync(this System.Data.IDbConnection! cnn, string! sql, object? param = null, System.Data.IDbTransaction? transaction = null, int? commandTimeout = null, System.Data.CommandType? commandType = null) -> System.Threading.Tasks.Task<Dapper.SqlMapper.GridReader!>!

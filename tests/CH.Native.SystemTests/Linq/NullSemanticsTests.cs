@@ -106,7 +106,7 @@ public class NullSemanticsTests : IAsyncLifetime
     private static async Task<List<T?>> ReadColumnAsync<T>(ClickHouseConnection conn, string sql)
     {
         var result = new List<T?>();
-        await foreach (var row in conn.QueryAsync(sql))
+        await foreach (var row in conn.QueryStreamAsync(sql))
         {
             object? v = row[0];
             if (v is null)

@@ -86,7 +86,7 @@ internal static class LongLivedBulkInserterSample
                               $"({totalRows / totalSw.Elapsed.TotalSeconds:F0} rows/sec).");
 
             Console.WriteLine("\n--- Log volume by level ---");
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT level, count() AS n FROM {tableName} GROUP BY level ORDER BY n DESC"))
             {
                 Console.WriteLine($"  {row["level"],-5}: {row["n"]:N0}");

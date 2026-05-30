@@ -51,7 +51,7 @@ public class IpAddressCanonicalFormTests
                 new Dictionary<string, object?> { ["p1"] = input });
 
             IpRow? row = null;
-            await foreach (var r in conn.QueryAsync<IpRow>($"SELECT id, ip FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync<IpRow>($"SELECT id, ip FROM {table}"))
                 row = r;
 
             Assert.NotNull(row);
@@ -88,7 +88,7 @@ public class IpAddressCanonicalFormTests
                 new Dictionary<string, object?> { ["p1"] = inputLong });
 
             IpRow? row = null;
-            await foreach (var r in conn.QueryAsync<IpRow>($"SELECT id, ip FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync<IpRow>($"SELECT id, ip FROM {table}"))
                 row = r;
 
             Assert.NotNull(row);
@@ -126,7 +126,7 @@ public class IpAddressCanonicalFormTests
                     $"INSERT INTO {table} (id, ip) VALUES (1, {{p1:IPv6}})",
                     new Dictionary<string, object?> { ["p1"] = input });
 
-                await foreach (var r in conn.QueryAsync<IpRow>($"SELECT id, ip FROM {table}"))
+                await foreach (var r in conn.QueryStreamAsync<IpRow>($"SELECT id, ip FROM {table}"))
                     row = r;
             }
             catch (Exception ex)

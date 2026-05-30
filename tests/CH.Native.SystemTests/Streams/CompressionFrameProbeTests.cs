@@ -90,7 +90,7 @@ public class CompressionFrameProbeTests
         Exception? caught = null;
         try
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1").WithCancellation(cts.Token)) { }
+            await foreach (var _ in conn.QueryStreamAsync<int>("SELECT 1").WithCancellation(cts.Token)) { }
         }
         catch (Exception ex) { caught = ex; }
 
@@ -261,7 +261,7 @@ public class CompressionFrameProbeTests
         GC.Collect();
 
         var startBytes = GC.GetTotalAllocatedBytes(precise: true);
-        await foreach (var _ in conn.QueryAsync<int>("SELECT 1")) { }
+        await foreach (var _ in conn.QueryStreamAsync<int>("SELECT 1")) { }
         var endBytes = GC.GetTotalAllocatedBytes(precise: true);
 
         var allocated = endBytes - startBytes;
@@ -420,7 +420,7 @@ public class CompressionFrameProbeTests
         Exception? caught = null;
         try
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1").WithCancellation(cts.Token)) { }
+            await foreach (var _ in conn.QueryStreamAsync<int>("SELECT 1").WithCancellation(cts.Token)) { }
         }
         catch (Exception ex) { caught = ex; }
 

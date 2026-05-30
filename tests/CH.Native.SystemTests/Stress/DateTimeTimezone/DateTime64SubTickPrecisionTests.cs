@@ -43,7 +43,7 @@ public class DateTime64SubTickPrecisionTests
             }
 
             DateTime read = default;
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table}"))
                 read = r.GetFieldValue<DateTime>(0);
 
             Assert.Equal(input, read);
@@ -79,7 +79,7 @@ public class DateTime64SubTickPrecisionTests
             }
 
             DateTime read = default;
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table}"))
                 read = r.GetFieldValue<DateTime>(0);
 
             Assert.Equal(input, read);
@@ -119,7 +119,7 @@ public class DateTime64SubTickPrecisionTests
             }
 
             DateTime read = default;
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table}"))
                 read = r.GetFieldValue<DateTime>(0);
 
             Assert.True(Math.Abs((input - read).Ticks) <= 1);
@@ -158,7 +158,7 @@ public class DateTime64SubTickPrecisionTests
             }
 
             DateTime read = default;
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table}"))
                 read = r.GetFieldValue<DateTime>(0);
 
             Assert.Equal(input, read);
@@ -192,7 +192,7 @@ public class DateTime64SubTickPrecisionTests
             }
 
             DateTime read = default;
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table}"))
                 read = r.GetFieldValue<DateTime>(0);
 
             // CLR ticks should match exactly — we wrote a tick-aligned input.
@@ -240,7 +240,7 @@ public class DateTime64SubTickPrecisionTests
 
             // Bulk-inserted row should round-trip exactly.
             var clrRead = default(DateTime);
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table} WHERE id = 0"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table} WHERE id = 0"))
                 clrRead = r.GetFieldValue<DateTime>(0);
             Assert.Equal(clrInput, clrRead);
 
@@ -251,7 +251,7 @@ public class DateTime64SubTickPrecisionTests
 
             // Reader truncates the trailing "98" ns to nearest 100 ns boundary (".1234567s").
             var serverRead = default(DateTime);
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table} WHERE id = 1"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table} WHERE id = 1"))
                 serverRead = r.GetFieldValue<DateTime>(0);
 
             var expectedTicks = (1718454896123456798L / 100); // truncated nanos → ticks
@@ -287,7 +287,7 @@ public class DateTime64SubTickPrecisionTests
             }
 
             DateTime read = default;
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table}"))
                 read = r.GetFieldValue<DateTime>(0);
 
             Assert.Equal(input, read);

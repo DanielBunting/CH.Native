@@ -35,11 +35,11 @@ public class CompressionSmokeTests
                 $"INSERT INTO {table} VALUES (1, 'hello', 3.14), (2, 'world', 2.71), (3, 'test', 1.41)");
 
             var connStr = _fixture.NativeConnectionStringWithCompression(method);
-            var native = await NativeQueryHelper.QueryAsync(
+            var native = await NativeQueryHelper.QueryStreamAsync(
                 connStr,
                 $"SELECT * FROM {table} ORDER BY id");
 
-            var driver = await DriverQueryHelper.QueryAsync(
+            var driver = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT * FROM {table} ORDER BY id");
 
@@ -86,11 +86,11 @@ public class CompressionSmokeTests
             Assert.Equal(10000UL, Convert.ToUInt64(driverCount));
 
             // Compare a sample of rows
-            var native = await NativeQueryHelper.QueryAsync(
+            var native = await NativeQueryHelper.QueryStreamAsync(
                 connStr,
                 $"SELECT * FROM {table} WHERE id IN (0, 5000, 9999) ORDER BY id");
 
-            var driver = await DriverQueryHelper.QueryAsync(
+            var driver = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT * FROM {table} WHERE id IN (0, 5000, 9999) ORDER BY id");
 
@@ -131,11 +131,11 @@ public class CompressionSmokeTests
                    (3, 'type_a', ['tag3'], {{'key2': 'val2', 'key3': 'val3'}}, -1, '2024-12-31 23:59:59')");
 
             var connStr = _fixture.NativeConnectionStringWithCompression(method);
-            var native = await NativeQueryHelper.QueryAsync(
+            var native = await NativeQueryHelper.QueryStreamAsync(
                 connStr,
                 $"SELECT * FROM {table} ORDER BY id");
 
-            var driver = await DriverQueryHelper.QueryAsync(
+            var driver = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT * FROM {table} ORDER BY id");
 
@@ -165,11 +165,11 @@ public class CompressionSmokeTests
                 $"INSERT INTO {table} VALUES (1, 'no compression'), (2, 'test')");
 
             // Default connection string (no compression)
-            var native = await NativeQueryHelper.QueryAsync(
+            var native = await NativeQueryHelper.QueryStreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT * FROM {table} ORDER BY id");
 
-            var driver = await DriverQueryHelper.QueryAsync(
+            var driver = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT * FROM {table} ORDER BY id");
 

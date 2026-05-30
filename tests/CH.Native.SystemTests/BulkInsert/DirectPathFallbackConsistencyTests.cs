@@ -109,12 +109,12 @@ public class DirectPathFallbackConsistencyTests
         await verifyConn.OpenAsync();
 
         var directIds = new List<int>();
-        await foreach (var row in verifyConn.QueryAsync<DirectPathRow>(
+        await foreach (var row in verifyConn.QueryStreamAsync<DirectPathRow>(
             $"SELECT id, name FROM {directHarness.TableName} ORDER BY id"))
             directIds.Add(row.Id);
 
         var fallbackIds = new List<int>();
-        await foreach (var row in verifyConn.QueryAsync<DirectPathRow>(
+        await foreach (var row in verifyConn.QueryStreamAsync<DirectPathRow>(
             $"SELECT id, name FROM {fallbackHarness.TableName} ORDER BY id"))
             fallbackIds.Add(row.Id);
 

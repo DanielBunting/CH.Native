@@ -1,6 +1,6 @@
 # LINQ Provider
 
-CH.Native ships a typed LINQ provider in `CH.Native.Linq` that translates LINQ expressions to ClickHouse SQL. It's designed for readable, single-table queries — for joins, CTEs, or anything not in the operator list below, fall back to `connection.QueryAsync<T>(sql)`.
+CH.Native ships a typed LINQ provider in `CH.Native.Linq` that translates LINQ expressions to ClickHouse SQL. It's designed for readable, single-table queries — for joins, CTEs, or anything not in the operator list below, fall back to `connection.QueryStreamAsync<T>(sql)`.
 
 ## Entry point
 
@@ -142,13 +142,13 @@ The visitor handles the operators above. Anything else falls outside scope:
 
 | Not supported in LINQ | Workaround |
 |---|---|
-| `Join` (multi-table) | Raw SQL with `connection.QueryAsync<T>` |
+| `Join` (multi-table) | Raw SQL with `connection.QueryStreamAsync<T>` |
 | Subqueries / CTEs | Raw SQL |
 | `Union` / `Intersect` | Raw SQL or `UNION ALL` in raw SQL |
 | User-defined SQL functions | Raw SQL, or extend `ClickHouseExpressionVisitor` |
 | Server-side aggregations beyond Sum/Avg/Min/Max/Count | Raw SQL |
 
-For anything raw, fall back to `connection.QueryAsync<T>("…", new { p })` — see [ADO.NET & Dapper — parameter handling](ado-net-dapper.md) for the parameter forms.
+For anything raw, fall back to `connection.QueryStreamAsync<T>("…", new { p })` — see [ADO.NET & Dapper — parameter handling](ado-net-dapper.md) for the parameter forms.
 
 ## See also
 

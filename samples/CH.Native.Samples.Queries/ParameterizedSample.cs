@@ -64,7 +64,7 @@ internal static class ParameterizedSample
 
             Console.WriteLine();
             Console.WriteLine($"--- Anonymous params: {category} > {minPrice:C} (in-stock only) ---");
-            await foreach (var p in connection.QueryAsync<Product>(
+            await foreach (var p in connection.QueryStreamAsync<Product>(
                 $"""
                 SELECT id, name, category, price, in_stock
                 FROM {tableName}
@@ -91,7 +91,7 @@ internal static class ParameterizedSample
 
             Console.WriteLine();
             Console.WriteLine("--- Dictionary params: Furniture > $200 (in-stock only) ---");
-            await foreach (var p in connection.QueryAsync<Product>(
+            await foreach (var p in connection.QueryStreamAsync<Product>(
                 $"""
                 SELECT id, name, category, price, in_stock
                 FROM {tableName}

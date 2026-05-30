@@ -1,6 +1,9 @@
 using CH.Native.Ado;
 using CH.Native.Connection;
-using CH.Native.Dapper;
+using CH.Native.Commands;
+using CH.Native.Results;
+using CH.Native.Connection;
+// CH.Native.Dapper not imported to avoid IDbConnection extension ambiguity with Dapper namespace; qualify Register() calls below.
 using CH.Native.Mapping;
 using CH.Native.SystemTests.Fixtures;
 using Dapper;
@@ -68,7 +71,7 @@ public class DapperVsTypedRowMapperDivergenceTests : IAsyncLifetime
         await conn.OpenAsync();
 
         var rows = new List<UserRowWithAttribute>();
-        await foreach (var row in conn.QueryAsync<UserRowWithAttribute>(
+        await foreach (var row in conn.QueryStreamAsync<UserRowWithAttribute>(
             $"SELECT user_id, display_name FROM {_table} ORDER BY user_id"))
         {
             rows.Add(row);
@@ -90,7 +93,7 @@ public class DapperVsTypedRowMapperDivergenceTests : IAsyncLifetime
         await conn.OpenAsync();
 
         var rows = new List<UserRowNoAttribute>();
-        await foreach (var row in conn.QueryAsync<UserRowNoAttribute>(
+        await foreach (var row in conn.QueryStreamAsync<UserRowNoAttribute>(
             $"SELECT user_id, display_name FROM {_table} ORDER BY user_id"))
         {
             rows.Add(row);
@@ -108,9 +111,9 @@ public class DapperVsTypedRowMapperDivergenceTests : IAsyncLifetime
         // DefaultTypeMap.MatchNamesWithUnderscores = true so the Dapper path
         // bridges snake_case columns to PascalCase properties out of the
         // box, matching the typed mapper's snake_case fallback.
-        ClickHouseDapperIntegration.Register();
+        CH.Native.Dapper.ClickHouseDapperIntegration.Register();
 
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         var rows = (await conn.QueryAsync<UserRowDapperConvention>(
@@ -140,12 +143,12 @@ public class DapperVsTypedRowMapperDivergenceTests : IAsyncLifetime
         // toggling MNWU mid-process only affects deserializers compiled
         // after the toggle. Production callers don't typically toggle at
         // runtime, but the test must be hermetic.
-        ClickHouseDapperIntegration.Register();
+        CH.Native.Dapper.ClickHouseDapperIntegration.Register();
         var originalValue = DefaultTypeMap.MatchNamesWithUnderscores;
         DefaultTypeMap.MatchNamesWithUnderscores = false;
         try
         {
-            await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+            await using var conn = new ClickHouseConnection(_fx.ConnectionString);
             await conn.OpenAsync();
 
             var rows = (await conn.QueryAsync<UserRowOptOutPoco>(
@@ -156,7 +159,7 @@ public class DapperVsTypedRowMapperDivergenceTests : IAsyncLifetime
             Assert.Equal(string.Empty, rows[0].DisplayName);
 
             // A second Register call must not clobber the caller's override.
-            ClickHouseDapperIntegration.Register();
+            CH.Native.Dapper.ClickHouseDapperIntegration.Register();
             Assert.False(DefaultTypeMap.MatchNamesWithUnderscores);
         }
         finally
@@ -172,15 +175,15 @@ public class DapperVsTypedRowMapperDivergenceTests : IAsyncLifetime
         // Both paths see the same number of rows. Useful regression
         // guard: a future refactor that breaks one path's iteration
         // would surface here.
-        ClickHouseDapperIntegration.Register();
+        CH.Native.Dapper.ClickHouseDapperIntegration.Register();
 
         await using var nativeConn = new ClickHouseConnection(_fx.BuildSettings());
         await nativeConn.OpenAsync();
-        await using var dbConn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var dbConn = new ClickHouseConnection(_fx.ConnectionString);
         await dbConn.OpenAsync();
 
         var typedCount = 0;
-        await foreach (var _ in nativeConn.QueryAsync<UserRowWithAttribute>(
+        await foreach (var _ in nativeConn.QueryStreamAsync<UserRowWithAttribute>(
             $"SELECT user_id, display_name FROM {_table}"))
             typedCount++;
 

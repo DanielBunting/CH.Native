@@ -3,7 +3,7 @@ using CH.Native.Connection;
 namespace CH.Native.Samples.Queries;
 
 /// <summary>
-/// <c>connection.QueryAsync(sql)</c> — schemaless row streaming via
+/// <c>connection.QueryStreamAsync(sql)</c> — schemaless row streaming via
 /// <c>IAsyncEnumerable&lt;ClickHouseRow&gt;</c>. Models an ad-hoc reporting tool
 /// where the column shape is known only at the SQL level and there's no POCO
 /// to map onto.
@@ -75,7 +75,7 @@ internal static class RawRowsSample
             // first via the non-parameterised path's queryId overload, then run
             // the parameterised query immediately after — connection.LastQueryId
             // captures whichever query ran last.
-            await foreach (var row in connection.QueryAsync(sql, new { threshold }, cts.Token))
+            await foreach (var row in connection.QueryStreamAsync(sql, new { threshold }, cts.Token))
             {
                 Console.WriteLine(
                     $"{row["warehouse"],-10} " +
@@ -89,7 +89,7 @@ internal static class RawRowsSample
             var sumQueryId = $"rows-warehouse-totals-{Guid.NewGuid():N}";
             Console.WriteLine();
             Console.WriteLine("--- Warehouse totals (with explicit queryId) ---");
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT warehouse, sum(on_hand) AS total_on_hand FROM {tableName} GROUP BY warehouse ORDER BY warehouse",
                 cts.Token,
                 queryId: sumQueryId))

@@ -37,7 +37,7 @@ public class AggregateFunctionTypeTests
 
             // The crucial assertion: SELECT * does not throw on the state column.
             var rows = new List<(int id, ClickHouseAggregateState s)>();
-            await foreach (var r in conn.QueryAsync($"SELECT id, v_state FROM {mv} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT id, v_state FROM {mv} ORDER BY id"))
             {
                 rows.Add((r.GetFieldValue<int>("id"), r.GetFieldValue<ClickHouseAggregateState>("v_state")));
             }
@@ -48,7 +48,7 @@ public class AggregateFunctionTypeTests
 
             // Cross-check: finalizeAggregation gives the expected totals.
             var totals = new Dictionary<int, long>();
-            await foreach (var r in conn.QueryAsync(
+            await foreach (var r in conn.QueryStreamAsync(
                 $"SELECT id, toInt64(finalizeAggregation(v_state)) AS total FROM {mv} ORDER BY id"))
             {
                 totals[r.GetFieldValue<int>("id")] = r.GetFieldValue<long>("total");
@@ -82,7 +82,7 @@ public class AggregateFunctionTypeTests
             await conn.ExecuteNonQueryAsync($"INSERT INTO {src} VALUES (1, 10), (1, 20), (1, 5), (2, 100)");
 
             var rows = new List<(int id, ClickHouseAggregateState c, ClickHouseAggregateState mn, ClickHouseAggregateState mx)>();
-            await foreach (var r in conn.QueryAsync($"SELECT id, c_state, min_state, max_state FROM {mv} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT id, c_state, min_state, max_state FROM {mv} ORDER BY id"))
             {
                 rows.Add((
                     r.GetFieldValue<int>("id"),
@@ -103,7 +103,7 @@ public class AggregateFunctionTypeTests
 
             // Server-side cross-checks against finalizeAggregation.
             var checks = new Dictionary<int, (long count, int min, int max)>();
-            await foreach (var r in conn.QueryAsync(
+            await foreach (var r in conn.QueryStreamAsync(
                 $"SELECT id, toInt64(finalizeAggregation(c_state)) AS c, " +
                 $"finalizeAggregation(min_state) AS mn, finalizeAggregation(max_state) AS mx " +
                 $"FROM {mv} ORDER BY id"))
@@ -143,7 +143,7 @@ public class AggregateFunctionTypeTests
             await conn.ExecuteNonQueryAsync($"OPTIMIZE TABLE {table} FINAL");
 
             var rows = new List<(int id, long total)>();
-            await foreach (var r in conn.QueryAsync($"SELECT id, total FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT id, total FROM {table} ORDER BY id"))
             {
                 rows.Add((r.GetFieldValue<int>("id"), r.GetFieldValue<long>("total")));
             }

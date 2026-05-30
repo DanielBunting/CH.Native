@@ -1,4 +1,7 @@
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.Dapper;
 using Xunit;
 

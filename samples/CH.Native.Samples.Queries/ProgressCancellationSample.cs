@@ -74,7 +74,7 @@ internal static class ProgressCancellationSample
         {
             // Stream from a deliberately unbounded source. Cancel once we've
             // proven the streaming works.
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 "SELECT number FROM numbers(1000000000)",
                 cts.Token,
                 queryId: $"progress-cancel-{Guid.NewGuid():N}"))

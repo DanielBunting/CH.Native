@@ -73,7 +73,7 @@ public class DataSourceDisposeWithActiveRentsTests
                     await using var conn = await ds.OpenConnectionAsync();
                     startedGate.Signal();
                     // Long-ish query so the rent is in-flight when dispose runs.
-                    await foreach (var _ in conn.QueryAsync<int>("SELECT sleep(3)")) { }
+                    await foreach (var _ in conn.QueryStreamAsync<int>("SELECT sleep(3)")) { }
                 }
                 catch (Exception ex)
                 {

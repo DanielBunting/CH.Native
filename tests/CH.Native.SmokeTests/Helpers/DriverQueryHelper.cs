@@ -4,7 +4,7 @@ namespace CH.Native.SmokeTests.Helpers;
 
 public static class DriverQueryHelper
 {
-    public static async Task<List<object?[]>> QueryAsync(string connectionString, string sql)
+    public static async Task<List<object?[]>> QueryStreamAsync(string connectionString, string sql)
     {
         var results = new List<object?[]>();
 

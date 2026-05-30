@@ -61,7 +61,7 @@ public class ReaderEdgeCaseProbeTests
             // Decimal32/64 surface as System.Decimal (the wire fits in 96 bits) — only
             // Decimal128/256 use ClickHouseDecimal.
             var got = new List<decimal>();
-            await foreach (var r in conn.QueryAsync($"SELECT v FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT v FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<decimal>(0));
 
             Assert.Equal(3, got.Count);
@@ -92,7 +92,7 @@ public class ReaderEdgeCaseProbeTests
 
             // Decimal64 surfaces as System.Decimal (fits in 96 bits) — see Decimal32 test.
             var got = new List<decimal>();
-            await foreach (var r in conn.QueryAsync($"SELECT v FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT v FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<decimal>(0));
 
             Assert.Equal(2, got.Count);
@@ -120,7 +120,7 @@ public class ReaderEdgeCaseProbeTests
                 $"INSERT INTO {table} VALUES (1, '-1'), (2, '0'), (3, '1'), (4, '-12345678901234567890')");
 
             var got = new List<ClickHouseDecimal>();
-            await foreach (var r in conn.QueryAsync($"SELECT v FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT v FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<ClickHouseDecimal>(0));
 
             Assert.Equal(4, got.Count);
@@ -151,7 +151,7 @@ public class ReaderEdgeCaseProbeTests
                 $"INSERT INTO {table} VALUES (1, '{nines75}'), (2, '-{nines75}'), (3, '0')");
 
             var got = new List<ClickHouseDecimal>();
-            await foreach (var r in conn.QueryAsync($"SELECT v FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT v FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<ClickHouseDecimal>(0));
 
             Assert.Equal(3, got.Count);
@@ -185,7 +185,7 @@ public class ReaderEdgeCaseProbeTests
                 "(4, [toDecimal128('0.0000', 4)])");
 
             var got = new List<ClickHouseDecimal?[]>();
-            await foreach (var r in conn.QueryAsync($"SELECT v FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT v FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<ClickHouseDecimal?[]>(0));
 
             Assert.Equal(4, got.Count);
@@ -217,7 +217,7 @@ public class ReaderEdgeCaseProbeTests
         try
         {
             using var cts = new CancellationTokenSource(AntiHangTimeout);
-            await foreach (var _ in conn.QueryAsync<ClickHouseDecimal>(
+            await foreach (var _ in conn.QueryStreamAsync<ClickHouseDecimal>(
                 "SELECT toDecimal128(1, 39)").WithCancellation(cts.Token)) { }
         }
         catch (Exception ex) { caught = ex; }
@@ -252,7 +252,7 @@ public class ReaderEdgeCaseProbeTests
             // Date materialises as DateOnly on the wire — fetch as object via the
             // indexer to dodge any T-coercion ambiguity, then probe what's inside.
             var got = new List<object?>();
-            await foreach (var r in conn.QueryAsync($"SELECT v FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT v FROM {table} ORDER BY id"))
                 got.Add(r[0]);
 
             _output.WriteLine($"Date pre-epoch: type={got[0]?.GetType().Name}, value={got[0]}");
@@ -283,7 +283,7 @@ public class ReaderEdgeCaseProbeTests
             // Date32 surfaces as DateOnly. Use that explicitly rather than relying on
             // GetFieldValue<DateTime> bridging (which only handles DateTimeOffset).
             var got = new List<DateOnly>();
-            await foreach (var r in conn.QueryAsync($"SELECT v FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT v FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<DateOnly>(0));
 
             Assert.Equal(2, got.Count);
@@ -302,7 +302,7 @@ public class ReaderEdgeCaseProbeTests
         // DateTimeOffset → DateTime. The row-level GetFieldValue<DateTime> *does* —
         // so use that path for tz-aware DateTime types.
         DateTime? value = null;
-        await foreach (var r in conn.QueryAsync(sql))
+        await foreach (var r in conn.QueryStreamAsync(sql))
         {
             value = r.GetFieldValue<DateTime>(0);
         }
@@ -355,7 +355,7 @@ public class ReaderEdgeCaseProbeTests
                 "(2, toDateTime64('2023-10-29 01:30:00.000', 3, 'UTC'))");    // 01:30 GMT
 
             var got = new List<DateTime>();
-            await foreach (var r in conn.QueryAsync($"SELECT v FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT v FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<DateTime>(0));
 
             _output.WriteLine($"DST-fallback row 1: {got[0]:yyyy-MM-dd HH:mm:ss.fff zzz} (Kind={got[0].Kind})");
@@ -408,7 +408,7 @@ public class ReaderEdgeCaseProbeTests
         {
             await conn.ExecuteNonQueryAsync($"INSERT INTO {table} VALUES (1, (0, 0))");
             var got = new List<Point>();
-            await foreach (var r in conn.QueryAsync($"SELECT p FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT p FROM {table}"))
                 got.Add(r.GetFieldValue<Point>(0));
 
             Assert.Single(got);
@@ -439,7 +439,7 @@ public class ReaderEdgeCaseProbeTests
                 "SELECT 2,                (CAST(1.0/0 AS Float64), CAST(-1.0/0 AS Float64))::Point) ORDER BY id");
 
             var got = new List<Point>();
-            await foreach (var r in conn.QueryAsync($"SELECT p FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT p FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<Point>(0));
 
             _output.WriteLine($"NaN row: ({got[0].X}, {got[0].Y})");
@@ -468,7 +468,7 @@ public class ReaderEdgeCaseProbeTests
         {
             await conn.ExecuteNonQueryAsync($"INSERT INTO {table} VALUES (1, [])");
             var got = new List<Point[][]>();
-            await foreach (var r in conn.QueryAsync($"SELECT poly FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT poly FROM {table}"))
                 got.Add(r.GetFieldValue<Point[][]>(0));
 
             Assert.Single(got);
@@ -495,7 +495,7 @@ public class ReaderEdgeCaseProbeTests
                 $"INSERT INTO {table} VALUES (1, [[(0,0),(1,1),(1,0),(0,1),(0,0)]])");
 
             var got = new List<Point[][]>();
-            await foreach (var r in conn.QueryAsync($"SELECT poly FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT poly FROM {table}"))
                 got.Add(r.GetFieldValue<Point[][]>(0));
 
             Assert.Single(got);
@@ -524,7 +524,7 @@ public class ReaderEdgeCaseProbeTests
 
             int rows = 0;
             int totalVerts = 0;
-            await foreach (var r in conn.QueryAsync($"SELECT mp FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT mp FROM {table}"))
             {
                 var mp = r.GetFieldValue<Point[][][]>(0);
                 rows++;
@@ -558,7 +558,7 @@ public class ReaderEdgeCaseProbeTests
                 $"INSERT INTO {table} VALUES (1, [(2.5, 7.0)])");
 
             var got = new List<Point[]>();
-            await foreach (var r in conn.QueryAsync($"SELECT r FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT r FROM {table}"))
                 got.Add(r.GetFieldValue<Point[]>(0));
 
             Assert.Single(got);
@@ -609,7 +609,7 @@ public class ReaderEdgeCaseProbeTests
         // or a hang waiting for bytes already consumed.
         await using var conn = await OpenAsync();
         var rows = new List<int>();
-        await foreach (var r in conn.QueryAsync(
+        await foreach (var r in conn.QueryStreamAsync(
             "SELECT toString(number) AS s, toInt32(number * 7) AS x FROM numbers(1000)"))
         {
             // Read only column 1 (x). The reader must still skip column 0 (s) cleanly.
@@ -624,7 +624,7 @@ public class ReaderEdgeCaseProbeTests
     {
         await using var conn = await OpenAsync(b => b.WithCompression(true));
         var rows = 0;
-        await foreach (var r in conn.QueryAsync(
+        await foreach (var r in conn.QueryStreamAsync(
             "SELECT number, toString(number), toFloat64(number) / 7, toDate('2024-01-01') + toIntervalDay(number % 365) " +
             "FROM numbers(50000)"))
         {
@@ -640,7 +640,7 @@ public class ReaderEdgeCaseProbeTests
             .WithCompression(true)
             .WithCompressionMethod(CH.Native.Compression.CompressionMethod.Zstd));
         var rows = 0;
-        await foreach (var r in conn.QueryAsync(
+        await foreach (var r in conn.QueryStreamAsync(
             "SELECT number, toString(number), toFloat64(number) / 7 FROM numbers(20000)"))
         {
             rows++;
@@ -662,7 +662,7 @@ public class ReaderEdgeCaseProbeTests
         long expected = 0;
         const int N = 100_000;
         for (int i = 0; i < N; i++) expected += i;
-        await foreach (var r in conn.QueryAsync(
+        await foreach (var r in conn.QueryStreamAsync(
             $"SELECT number FROM numbers({N}) SETTINGS max_block_size=128"))
         {
             sum += (long)r.GetFieldValue<ulong>(0);

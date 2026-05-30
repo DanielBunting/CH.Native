@@ -91,7 +91,7 @@ internal static class ResilientSample
             // Streamed read.
             Console.WriteLine();
             Console.WriteLine("--- Resilient streamed read ---");
-            await foreach (var row in resilient.QueryAsync<Datum>(
+            await foreach (var row in resilient.QueryStreamAsync<Datum>(
                 $"SELECT id, label, value FROM {tableName} ORDER BY id",
                 cts.Token))
             {

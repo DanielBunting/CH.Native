@@ -1,5 +1,6 @@
 using System.Security.Cryptography.X509Certificates;
 using CH.Native.Connection;
+using CH.Native.Resilience;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace CH.Native.DependencyInjection;
@@ -47,6 +48,23 @@ public interface IClickHouseDataSourceBuilder
 
     /// <summary>Overrides pool options. Called after any config-bound defaults.</summary>
     IClickHouseDataSourceBuilder WithPool(Action<ClickHouseDataSourceOptions> configure);
+
+    /// <summary>
+    /// Configures resilience (retry / circuit-breaker / health-check) options for
+    /// connections produced by this DataSource. The settings flow into
+    /// <see cref="ClickHouseConnectionSettings.Resilience"/>, which
+    /// <c>ClickHouseConnection.OpenAsync</c> consults for retry-on-connect — so
+    /// this is the DI-path equivalent of a connection-string <c>MaxRetries=…</c>
+    /// or <see cref="ClickHouseConnectionSettingsBuilder.WithResilience(ResilienceOptions)"/>.
+    /// </summary>
+    IClickHouseDataSourceBuilder WithResilience(ResilienceOptions options);
+
+    /// <summary>
+    /// Configures resilience options via a builder callback. Equivalent to
+    /// <see cref="ClickHouseConnectionSettingsBuilder.WithResilience(Action{ResilienceOptionsBuilder})"/>
+    /// on the DI path — e.g. <c>.WithResilience(r =&gt; r.WithRetry())</c>.
+    /// </summary>
+    IClickHouseDataSourceBuilder WithResilience(Action<ResilienceOptionsBuilder> configure);
 
     /// <summary>
     /// Forces the auth-pairing validator (and, by extension, the

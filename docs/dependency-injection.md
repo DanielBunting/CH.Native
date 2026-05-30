@@ -101,7 +101,7 @@ app.MapGet("/events", async (
     CancellationToken ct) =>
 {
     await using var conn = await replica.OpenConnectionAsync(ct);
-    return Results.Ok(await conn.QueryAsync<Event>(
+    return Results.Ok(await conn.QueryStreamAsync<Event>(
         "SELECT * FROM events LIMIT 100", cancellationToken: ct).ToListAsync(ct));
 });
 ```

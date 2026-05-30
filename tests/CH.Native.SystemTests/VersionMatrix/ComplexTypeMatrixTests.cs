@@ -56,7 +56,7 @@ public class ComplexTypeMatrixTests
                 "(3, map('only', 99))");
 
             var got = new Dictionary<int, Dictionary<string, int>>();
-            await foreach (var r in conn.QueryAsync($"SELECT id, m FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT id, m FROM {table} ORDER BY id"))
             {
                 got[r.GetFieldValue<int>(0)] = r.GetFieldValue<Dictionary<string, int>>(1);
             }
@@ -86,7 +86,7 @@ public class ComplexTypeMatrixTests
                 "(2, (-7, '', '2030-12-31 23:59:59.999'))");
 
             var got = new List<object?[]>();
-            await foreach (var r in conn.QueryAsync($"SELECT id, t.1, t.2, t.3 FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT id, t.1, t.2, t.3 FROM {table} ORDER BY id"))
             {
                 got.Add(new object?[]
                 {
@@ -134,7 +134,7 @@ public class ComplexTypeMatrixTests
             }
 
             var got = new List<IpRow>();
-            await foreach (var r in conn.QueryAsync<IpRow>($"SELECT id, v4, v6 FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync<IpRow>($"SELECT id, v4, v6 FROM {table} ORDER BY id"))
                 got.Add(r);
 
             Assert.Equal(rows.Length, got.Count);
@@ -174,7 +174,7 @@ public class ComplexTypeMatrixTests
             }
 
             var got = new List<UuidRow>();
-            await foreach (var r in conn.QueryAsync<UuidRow>($"SELECT id, u FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync<UuidRow>($"SELECT id, u FROM {table} ORDER BY id"))
                 got.Add(r);
 
             Assert.Equal(rows.Count, got.Count);
@@ -212,7 +212,7 @@ public class ComplexTypeMatrixTests
                     $"INSERT INTO {table} VALUES ({i}, '{values[i].ToString()}')");
 
             var got = new List<ClickHouseDecimal>();
-            await foreach (var r in conn.QueryAsync($"SELECT v FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT v FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<ClickHouseDecimal>(0));
 
             Assert.Equal(values.Length, got.Count);
@@ -248,7 +248,7 @@ public class ComplexTypeMatrixTests
                     $"INSERT INTO {table} VALUES ({i}, '{values[i].ToString()}')");
 
             var got = new List<ClickHouseDecimal>();
-            await foreach (var r in conn.QueryAsync($"SELECT v FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT v FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<ClickHouseDecimal>(0));
 
             Assert.Equal(values.Length, got.Count);
@@ -292,7 +292,7 @@ public class ComplexTypeMatrixTests
             }
 
             int idx = 0;
-            await foreach (var r in conn.QueryAsync(
+            await foreach (var r in conn.QueryStreamAsync(
                 $"SELECT id, ts_utc, ts_lon, ts_la FROM {table} ORDER BY id"))
             {
                 var utc = r.GetFieldValue<DateTime>(1);
@@ -335,7 +335,7 @@ public class ComplexTypeMatrixTests
                     $"INSERT INTO {table} VALUES ({i}, ({pts[i].X}, {pts[i].Y}))");
 
             var got = new List<Point>();
-            await foreach (var r in conn.QueryAsync($"SELECT p FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT p FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<Point>(0));
 
             Assert.Equal(pts, got);
@@ -363,7 +363,7 @@ public class ComplexTypeMatrixTests
                 "(2, '{\"nested\":{\"k\":1}}')");
 
             var got = new List<string>();
-            await foreach (var r in conn.QueryAsync(
+            await foreach (var r in conn.QueryStreamAsync(
                 $"SELECT toString(j) FROM {table} ORDER BY id"))
             {
                 got.Add(r.GetFieldValue<string>(0));
@@ -397,7 +397,7 @@ public class ComplexTypeMatrixTests
                 "(3, NULL)");
 
             var got = new List<string?>();
-            await foreach (var r in conn.QueryAsync(
+            await foreach (var r in conn.QueryStreamAsync(
                 $"SELECT if(isNull(v), NULL, toString(v)) FROM {table} ORDER BY id"))
             {
                 got.Add(r.IsDBNull(0) ? null : r.GetFieldValue<string>(0));
@@ -431,7 +431,7 @@ public class ComplexTypeMatrixTests
                 "(3, NULL)");
 
             var got = new List<string?>();
-            await foreach (var r in conn.QueryAsync(
+            await foreach (var r in conn.QueryStreamAsync(
                 $"SELECT if(isNull(d), NULL, toString(d)) FROM {table} ORDER BY id"))
             {
                 got.Add(r.IsDBNull(0) ? null : r.GetFieldValue<string>(0));

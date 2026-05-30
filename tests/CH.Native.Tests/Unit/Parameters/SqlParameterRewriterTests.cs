@@ -174,6 +174,51 @@ public class SqlParameterRewriterTests
         Assert.Contains("not provided", ex.Message);
     }
 
+    [Theory]
+    [InlineData("limit")]
+    [InlineData("offset")]
+    [InlineData("LIMIT")]
+    [InlineData("Offset")]
+    public void Rewrite_ReservedTailClauseName_ThrowsArgumentException(string reserved)
+    {
+        // ClickHouse's parser misreads {limit:Type}/{offset:Type} as the start of a
+        // LIMIT/OFFSET clause, so these names are rejected up front (case-insensitively)
+        // with a message that points at the rename workaround.
+        var parameters = new ClickHouseParameterCollection();
+        parameters.Add(reserved, 10);
+
+        var ex = Assert.Throws<ArgumentException>(() =>
+            SqlParameterRewriter.Rewrite($"SELECT * FROM t LIMIT @{reserved}", parameters));
+
+        Assert.Contains(reserved, ex.Message);
+        Assert.Contains("tail-clause keyword", ex.Message);
+    }
+
+    [Fact]
+    public void Rewrite_ReservedNameAmongOthers_StillThrows()
+    {
+        // The guard scans every parameter, not just the first.
+        var parameters = new ClickHouseParameterCollection();
+        parameters.Add("country", "USA");
+        parameters.Add("limit", 5);
+
+        Assert.Throws<ArgumentException>(() =>
+            SqlParameterRewriter.Rewrite(
+                "SELECT * FROM t WHERE country = @country LIMIT @limit", parameters));
+    }
+
+    [Fact]
+    public void Rewrite_NameContainingButNotEqualToReserved_IsAllowed()
+    {
+        // Only exact (case-insensitive) matches are reserved — 'max_limit' is fine.
+        var parameters = new ClickHouseParameterCollection();
+        parameters.Add("max_limit", 5);
+
+        var result = SqlParameterRewriter.Rewrite("SELECT * FROM t LIMIT @max_limit", parameters);
+
+        Assert.Equal("SELECT * FROM t LIMIT {max_limit:Int32}", result);
+    }
+
     #endregion
 
     #region BuildParameterSettings

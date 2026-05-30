@@ -107,7 +107,7 @@ public sealed class JwtProviderInvocationCadenceTests
         {
             try
             {
-                await foreach (var _ in rent1.QueryAsync<int>(
+                await foreach (var _ in rent1.QueryStreamAsync<int>(
                     "SELECT count() FROM numbers(10000000000)",
                     queryId: queryId)) { }
             }

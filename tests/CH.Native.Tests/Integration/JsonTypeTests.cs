@@ -77,7 +77,7 @@ public class JsonTypeTests
 
             // Query and verify
             var count = 0;
-            await foreach (var row in connection.QueryAsync($"SELECT id, data FROM {tableName} ORDER BY id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT id, data FROM {tableName} ORDER BY id"))
             {
                 count++;
                 var id = row.GetFieldValue<ulong>("id");
@@ -131,7 +131,7 @@ public class JsonTypeTests
                 (2, NULL)");
 
             var results = new List<(ulong id, JsonDocument? data)>();
-            await foreach (var row in connection.QueryAsync($"SELECT id, data FROM {tableName} ORDER BY id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT id, data FROM {tableName} ORDER BY id"))
             {
                 var id = row.GetFieldValue<ulong>("id");
                 var data = row.GetFieldValue<JsonDocument?>("data");
@@ -292,7 +292,7 @@ public class JsonTypeTests
                 (2, '{{""user"":{{""profile"":{{""address"":{{""city"":""LA""}}}}}}}}')");
 
             var cities = new List<string>();
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT data.user.profile.address.city::String as city FROM {tableName} ORDER BY id SETTINGS output_format_native_write_json_as_string=1"))
             {
                 cities.Add(row.GetFieldValue<string>("city"));
@@ -354,7 +354,7 @@ public class JsonTypeTests
                 (3, '{{""user"":{{""status"":""active""}}}}')");
 
             var count = 0;
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT id FROM {tableName} WHERE data.user.status::String = 'active' SETTINGS output_format_native_write_json_as_string=1"))
             {
                 count++;
@@ -391,7 +391,7 @@ public class JsonTypeTests
                 (3, '{{""user"":{{""city"":""LA""}}}}')");
 
             var results = new Dictionary<string, ulong>();
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT data.user.city::String as city, count() as cnt FROM {tableName} GROUP BY city SETTINGS output_format_native_write_json_as_string=1"))
             {
                 results[row.GetFieldValue<string>("city")] = row.GetFieldValue<ulong>("cnt");
@@ -434,7 +434,7 @@ public class JsonTypeTests
                 INSERT INTO {tableName} VALUES
                 (1, ['{{""name"":""Alice""}}', '{{""name"":""Bob""}}'])");
 
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT id, documents FROM {tableName} SETTINGS output_format_native_write_json_as_string=1"))
             {
                 var id = row.GetFieldValue<ulong>("id");
@@ -477,7 +477,7 @@ public class JsonTypeTests
             await connection.ExecuteNonQueryAsync($@"
                 INSERT INTO {tableName} VALUES (1, [])");
 
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT documents FROM {tableName} SETTINGS output_format_native_write_json_as_string=1"))
             {
                 var documents = row.GetFieldValue<JsonDocument[]>("documents");
@@ -513,7 +513,7 @@ public class JsonTypeTests
                 INSERT INTO {tableName} VALUES
                 (1, ['{{""type"":""click"",""data"":{{""x"":100,""y"":200}}}}', '{{""type"":""scroll"",""data"":{{""offset"":500}}}}'])");
 
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT events FROM {tableName} SETTINGS output_format_native_write_json_as_string=1"))
             {
                 var events = row.GetFieldValue<JsonDocument[]>("events");

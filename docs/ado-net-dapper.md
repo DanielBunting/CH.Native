@@ -8,9 +8,9 @@ CH.Native provides a standard ADO.NET provider for compatibility with existing .
 
 | Class | Base Class | Description |
 |-------|------------|-------------|
-| `ClickHouseDbConnection` | DbConnection | Database connection |
-| `ClickHouseDbCommand` | DbCommand | SQL command |
-| `ClickHouseDbDataReader` | DbDataReader | Forward-only result reader |
+| `ClickHouseConnection` | DbConnection | Database connection |
+| `ClickHouseCommand` | DbCommand | SQL command |
+| `ClickHouseDataReader` | DbDataReader | Forward-only result reader |
 | `ClickHouseDbParameter` | DbParameter | Query parameter |
 | `ClickHouseDbParameterCollection` | DbParameterCollection | Parameter collection |
 
@@ -19,7 +19,7 @@ CH.Native provides a standard ADO.NET provider for compatibility with existing .
 ```csharp
 using CH.Native.Ado;
 
-await using var connection = new ClickHouseDbConnection("Host=localhost;Port=9000");
+await using var connection = new ClickHouseConnection("Host=localhost;Port=9000");
 await connection.OpenAsync();
 
 // ExecuteScalar
@@ -73,39 +73,73 @@ cmd.Parameters.Add(new ClickHouseDbParameter
 using var reader = await cmd.ExecuteReaderAsync();
 ```
 
-### Reaching Native Features
+### One connection, both surfaces
 
-The ADO.NET surface (`ClickHouseDbConnection` / `DbCommand` / `DbDataReader`) is intentionally narrow — it covers what Dapper, EF Core scaffolding, and other ADO.NET consumers expect, and nothing more. For native-only capabilities (`BulkInserter<T>`, `DynamicBulkInserter`, `IAsyncEnumerable<T>` streaming, LINQ via `connection.Table<T>()`, role activation, etc.), open a `ClickHouseConnection` directly using the same connection string:
+`ClickHouseConnection` exposes both the ADO.NET contract (it inherits `DbConnection`, and `CreateCommand()` returns a `ClickHouseCommand : DbCommand` with `Parameters` on the DbCommand side) **and** the native API (`BulkInsertAsync`, `CreateBulkInserter<T>`, `QueryStreamAsync<T>` / `QueryTypedAsync<T>`, role activation, LINQ via `connection.Table<T>()`). Use the same instance for both:
 
 ```csharp
 const string ConnectionString = "Host=localhost;Port=9000";
 
-// ADO.NET path (Dapper, scaffolding)
-await using var dbConnection = new ClickHouseDbConnection(ConnectionString);
-await dbConnection.OpenAsync();
-var user = await dbConnection.QueryFirstAsync<User>(
+await using var connection = new ClickHouseConnection(ConnectionString);
+await connection.OpenAsync();
+
+// ADO.NET / Dapper
+var user = await connection.QueryFirstAsync<User>(
     "SELECT * FROM users WHERE id = @id", new { id = 1 });
 
-// Native path for bulk insert
-await using var nativeConnection = new ClickHouseConnection(ConnectionString);
-await nativeConnection.OpenAsync();
-await nativeConnection.BulkInsertAsync("users", newUsers);
+// Native bulk insert on the same physical socket
+await connection.BulkInsertAsync("users", newUsers);
 ```
 
-In a long-running service, share a single `ClickHouseDataSource` across both paths instead of opening a fresh connection each time — see [Connection Pooling](connection-pooling.md) and [Dependency Injection](dependency-injection.md).
+In a long-running service, share a single `ClickHouseDataSource` so each unit of work rents a pooled connection — see [Connection Pooling](connection-pooling.md) and [Dependency Injection](dependency-injection.md).
 
 ## Dapper Integration
 
-CH.Native works with [Dapper](https://github.com/DapperLib/Dapper) for simple object mapping.
+CH.Native ships a dedicated package — **`CH.Native.Dapper`** — that exposes the
+familiar Dapper API (`QueryAsync<T>`, `QueryFirstAsync<T>`, `ExecuteAsync`, …)
+on top of CH.Native's typed-accessor read path. Compared to vanilla Dapper over
+our ADO.NET surface it skips the per-value boxing tax that Dapper's compiled
+mapper pays for value-type columns — typically **30-40% lower allocations** on
+1M-row reads while keeping the exact same call shape.
 
 ### Setup
 
 ```csharp
 using CH.Native.Ado;
+using CH.Native.Dapper;
+// `using Dapper;` is fine alongside CH.Native.Dapper — they no longer collide
+// on row-shaped methods.
 using Dapper;
 
-await using var connection = new ClickHouseDbConnection("Host=localhost;Port=9000");
+await using var connection = new ClickHouseConnection("Host=localhost;Port=9000");
 await connection.OpenAsync();
+```
+
+### Resolution rules — which `QueryAsync<T>` runs?
+
+The fast path is exposed only on the concrete CH connection types. C# extension
+resolution picks the more-derived receiver first, so the rules are simple:
+
+| Variable typed as | Result |
+|---|---|
+| `ClickHouseConnection` (whether via `new ClickHouseConnection(...)` or `await ds.OpenConnectionAsync()`) | **Fast path** — `ClickHouseConnectionDapperExtensions.QueryAsync<T>` wins via more-derived receiver |
+| `IDbConnection` or `DbConnection` | **Dapper's classic path** — `Dapper.SqlMapper.QueryAsync<T>` (per-value boxing) |
+
+`using Dapper;` and `using CH.Native.Dapper;` can coexist freely. CH.Native.Dapper
+no longer extends `IDbConnection` with row-shaped methods (`QueryAsync<T>` etc.),
+so there is no ambiguity to resolve. Execute-style methods (`ExecuteAsync`,
+`ExecuteScalarAsync`) remain as thin pass-throughs to Dapper for namespace-import
+convenience. `QueryMultipleAsync` is the exception: ClickHouse has no
+multiple-result-set concept, so CH.Native.Dapper's overload throws
+`NotSupportedException` immediately rather than letting the multi-statement SQL
+reach the server and fail with an opaque syntax error. Issue separate queries instead.
+
+If a DI registration only hands out `IDbConnection`, fast-path resolution
+requires assigning to a concrete-type local first:
+
+```csharp
+ClickHouseConnection ch = await ds.OpenConnectionAsync(); // fast-path-eligible
+var rows = await ch.QueryAsync<User>(sql);                // CH.Native.Dapper fast path
 ```
 
 ### Query
@@ -181,6 +215,27 @@ SELECT id AS UserId, name AS FullName FROM users
 
 ## Parameter Handling
 
+### Reserved parameter names (`limit` / `offset`)
+
+ClickHouse 26.x's parser misinterprets `{limit:Type}` and `{offset:Type}` as the
+start of a LIMIT/OFFSET clause and rejects the query with
+`CANNOT_PARSE_QUOTED_STRING: expected opening quote ''', got '1'`. Other SQL
+keywords (`select`, `from`, `where`, `group`, `order`, …) work fine as
+placeholder names — only the two tail-clause keywords that take a numeric
+argument trip the parser.
+
+CH.Native fails fast with a clear `ArgumentException` if you try either name,
+so you'll see a descriptive error instead of the cryptic server message.
+Rename the parameter:
+
+```csharp
+// Don't:  new { limit = 10, offset = 5 }
+// Do:     new { max_rows = 10, start_at = 5 }
+await connection.QueryAsync<Row>(
+    "SELECT * FROM events ORDER BY ts LIMIT @max_rows OFFSET @start_at",
+    new { max_rows = 10, start_at = 5 });
+```
+
 ### Supported Parameter Types
 
 | .NET Type | ClickHouse Type |
@@ -208,13 +263,13 @@ var users = await connection.QueryAsync<User>(
 );
 ```
 
-**Workaround:** open a `ClickHouseConnection` for the array-parameter call — the native API expands arrays correctly:
+**Workaround:** open a native `ClickHouseConnection` for the array-parameter call — the native API expands arrays correctly:
 
 ```csharp
 await using var native = new ClickHouseConnection(ConnectionString);
 await native.OpenAsync();
 
-var users = await native.QueryAsync<User>(
+var users = await native.QueryStreamAsync<User>(
     "SELECT * FROM users WHERE id IN @ids",
     new { ids = new[] { 1, 2, 3 } }
 ).ToListAsync();
@@ -270,13 +325,13 @@ The entry point is the `connection.Table<T>()` extension (or `connection.Table<T
 
 ## Example: Mixed Usage
 
-The two connection types don't share a pool — `ClickHouseDbConnection` opens its own socket from a connection string, and `ClickHouseDataSource` pools `ClickHouseConnection` instances for the native API. Pick one per code path:
+There's a single connection type — `ClickHouseConnection` exposes both the ADO.NET/Dapper surface and the native API — but two ways to obtain one. Constructing it directly (`new ClickHouseConnection(connectionString)`) opens its own socket and is **not** pooled; `ClickHouseDataSource` pools `ClickHouseConnection` instances and is the recommended choice for services. A directly-constructed connection does not draw from the data source's pool. Pick whichever fits the code path:
 
 ```csharp
 const string ConnectionString = "Host=localhost;Port=9000";
 
 // Dapper / ADO.NET path: a fresh DbConnection per unit of work.
-await using (var dbConnection = new ClickHouseDbConnection(ConnectionString))
+await using (var dbConnection = new ClickHouseConnection(ConnectionString))
 {
     await dbConnection.OpenAsync();
     var user = await dbConnection.QueryFirstAsync<User>(
@@ -296,7 +351,7 @@ await using (var native = await dataSource.OpenConnectionAsync())
 
 await using (var native = await dataSource.OpenConnectionAsync())
 {
-    await foreach (var row in native.QueryAsync<LogEntry>(
+    await foreach (var row in native.QueryStreamAsync<LogEntry>(
         "SELECT * FROM logs WHERE date = today()"))
     {
         ProcessLog(row);
@@ -304,7 +359,7 @@ await using (var native = await dataSource.OpenConnectionAsync())
 }
 ```
 
-If your hot path is Dapper, keep using `ClickHouseDbConnection`; reach for the native side only where it pays off (bulk insert, streaming, LINQ).
+If your hot path is Dapper, keep using `ClickHouseConnection`; reach for the native side only where it pays off (bulk insert, streaming, LINQ).
 
 ## See Also
 

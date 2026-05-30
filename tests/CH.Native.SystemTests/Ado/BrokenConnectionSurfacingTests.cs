@@ -1,6 +1,9 @@
 using System.Data;
 using CH.Native.Ado;
 using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
+using CH.Native.Connection;
 using CH.Native.Exceptions;
 using CH.Native.SystemTests.Fixtures;
 using Xunit;
@@ -37,7 +40,7 @@ public class BrokenConnectionSurfacingTests
     [Fact]
     public async Task ExecuteOnClosedConnection_ThrowsTypedInvalidOperation()
     {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         // Deliberately do not open.
 
         var cmd = conn.CreateCommand();
@@ -60,7 +63,7 @@ public class BrokenConnectionSurfacingTests
     [Fact]
     public async Task ExecuteAfterDispose_ThrowsObjectDisposedOrInvalidOp()
     {
-        var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
         var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT 1";
@@ -79,7 +82,7 @@ public class BrokenConnectionSurfacingTests
     public async Task ConnectionState_ReflectsActualState()
     {
         // ADO contract: ConnectionState should be observable and consistent.
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         Assert.Equal(ConnectionState.Closed, conn.State);
 
         await conn.OpenAsync();
@@ -96,7 +99,7 @@ public class BrokenConnectionSurfacingTests
         // NOT poison the connection. Pre-fix this was the contract that
         // distinguished "wire is broken" (poison) from "your SQL is wrong"
         // (just a typed exception).
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         var bad = conn.CreateCommand();

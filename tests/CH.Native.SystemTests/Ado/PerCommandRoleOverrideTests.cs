@@ -1,5 +1,8 @@
 using CH.Native.Ado;
 using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
+using CH.Native.Connection;
 using CH.Native.SystemTests.Fixtures;
 using Xunit;
 using Xunit.Abstractions;
@@ -59,12 +62,12 @@ public class PerCommandRoleOverrideTests : IAsyncLifetime
     [Fact]
     public async Task PerCommandRoleOverride_ActivatesOnlyForThatCommand()
     {
-        await using var conn = new ClickHouseDbConnection(TestUserConnectionString);
+        await using var conn = new ClickHouseConnection(TestUserConnectionString);
         await conn.OpenAsync();
 
         // Default role (readonly) — the visible roles via currentRoles()
         // should NOT include the writer role.
-        using (var defaultCmd = (ClickHouseDbCommand)conn.CreateCommand())
+        using (var defaultCmd = (ClickHouseCommand)conn.CreateCommand())
         {
             defaultCmd.CommandText = "SELECT arrayStringConcat(currentRoles(), ',') AS roles";
             var defaultRoles = (string)(await defaultCmd.ExecuteScalarAsync())!;
@@ -74,7 +77,7 @@ public class PerCommandRoleOverrideTests : IAsyncLifetime
         }
 
         // Override on a single command.
-        using (var overrideCmd = (ClickHouseDbCommand)conn.CreateCommand())
+        using (var overrideCmd = (ClickHouseCommand)conn.CreateCommand())
         {
             overrideCmd.CommandText = "SELECT arrayStringConcat(currentRoles(), ',') AS roles";
             overrideCmd.Roles.Add(WriterRole);
@@ -84,7 +87,7 @@ public class PerCommandRoleOverrideTests : IAsyncLifetime
         }
 
         // Next command on same connection — back to default role.
-        using (var afterCmd = (ClickHouseDbCommand)conn.CreateCommand())
+        using (var afterCmd = (ClickHouseCommand)conn.CreateCommand())
         {
             afterCmd.CommandText = "SELECT arrayStringConcat(currentRoles(), ',') AS roles";
             var laterRoles = (string)(await afterCmd.ExecuteScalarAsync())!;
@@ -97,11 +100,11 @@ public class PerCommandRoleOverrideTests : IAsyncLifetime
     [Fact]
     public async Task PerCommandRoleOverride_NonExistentRole_SurfacesAccessDenied_DoesNotPoisonConnection()
     {
-        await using var conn = new ClickHouseDbConnection(TestUserConnectionString);
+        await using var conn = new ClickHouseConnection(TestUserConnectionString);
         await conn.OpenAsync();
 
         // Override with a role the user does not have.
-        using (var bogusCmd = (ClickHouseDbCommand)conn.CreateCommand())
+        using (var bogusCmd = (ClickHouseCommand)conn.CreateCommand())
         {
             bogusCmd.CommandText = "SELECT 1";
             bogusCmd.Roles.Add($"never_granted_{Guid.NewGuid():N}");
@@ -112,7 +115,7 @@ public class PerCommandRoleOverrideTests : IAsyncLifetime
 
         // Subsequent command on the same connection succeeds — the failed
         // role override didn't break the connection.
-        using (var ok = (ClickHouseDbCommand)conn.CreateCommand())
+        using (var ok = (ClickHouseCommand)conn.CreateCommand())
         {
             ok.CommandText = "SELECT 42";
             var result = await ok.ExecuteScalarAsync();

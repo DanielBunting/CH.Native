@@ -44,7 +44,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<bool>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<bool>("Value"));
             }
@@ -89,7 +89,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<Int128>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<Int128>("Value"));
             }
@@ -129,7 +129,7 @@ public class BulkInsertTypeRoundTripTests
                 $"INSERT INTO {tableName} VALUES (1, 12345678901234567890), (2, -12345678901234567890), (3, 0)");
 
             var results = new List<BigInteger>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<BigInteger>("Value"));
             }
@@ -173,7 +173,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<UInt128>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<UInt128>("Value"));
             }
@@ -212,7 +212,7 @@ public class BulkInsertTypeRoundTripTests
                 $"INSERT INTO {tableName} VALUES (1, 99999999999999999999999999999999), (2, 0)");
 
             var results = new List<BigInteger>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<BigInteger>("Value"));
             }
@@ -256,7 +256,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<decimal>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<decimal>("Value"));
             }
@@ -301,7 +301,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<decimal>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<decimal>("Value"));
             }
@@ -346,7 +346,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<decimal>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<decimal>("Value"));
             }
@@ -391,7 +391,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<decimal>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<decimal>("Value"));
             }
@@ -436,7 +436,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<byte[]>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<byte[]>("Value"));
             }
@@ -503,7 +503,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<sbyte>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<sbyte>("Value"));
             }
@@ -547,7 +547,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<short>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<short>("Value"));
             }
@@ -591,7 +591,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<IPAddress>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<IPAddress>("Value"));
             }
@@ -637,7 +637,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<IPAddress>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<IPAddress>("Value"));
             }
@@ -683,7 +683,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<DateOnly>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<DateOnly>("Value"));
             }
@@ -730,7 +730,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<DateTime>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<DateTime>("Value"));
             }
@@ -773,7 +773,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<System.Runtime.CompilerServices.ITuple>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 var tuple = row.GetFieldValue<object>("Value");
                 results.Add((System.Runtime.CompilerServices.ITuple)tuple);
@@ -836,7 +836,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<string>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<string>("Value"));
             }
@@ -885,7 +885,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<bool?>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<bool?>("Value"));
             }
@@ -930,7 +930,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<decimal?>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<decimal?>("Value"));
             }
@@ -978,7 +978,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<TimeOnly>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<TimeOnly>("Value"));
             }
@@ -1026,7 +1026,7 @@ public class BulkInsertTypeRoundTripTests
             await inserter.CompleteAsync();
 
             var results = new List<TimeOnly>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<TimeOnly>("Value"));
             }
@@ -1067,7 +1067,7 @@ public class BulkInsertTypeRoundTripTests
                     (3, toBFloat16(0.0))");
 
             var results = new List<float>();
-            await foreach (var row in connection.QueryAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT Value FROM {tableName} ORDER BY Id"))
             {
                 results.Add(row.GetFieldValue<float>("Value"));
             }

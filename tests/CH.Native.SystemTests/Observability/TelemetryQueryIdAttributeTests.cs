@@ -1,6 +1,9 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.BulkInsert;
 using CH.Native.Connection;
 using CH.Native.Linq;
@@ -111,10 +114,10 @@ public class TelemetryQueryIdAttributeTests
         var (listener, stopped) = CaptureActivities();
         using (listener)
         {
-            await using (var conn = new ClickHouseDbConnection(_fx.ConnectionString))
+            await using (var conn = new ClickHouseConnection(_fx.ConnectionString))
             {
                 await conn.OpenAsync();
-                using var cmd = (ClickHouseDbCommand)conn.CreateCommand();
+                using var cmd = (ClickHouseCommand)conn.CreateCommand();
                 cmd.CommandText = "SELECT 1";
                 cmd.QueryId = explicitId;
                 _ = await cmd.ExecuteScalarAsync();

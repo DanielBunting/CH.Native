@@ -1,11 +1,15 @@
 using System.Data;
+using System.Data.Common;
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 
 namespace CH.Native.Samples.Queries;
 
 /// <summary>
-/// Standard ADO.NET surface — <c>ClickHouseDbConnection</c>,
-/// <c>ClickHouseDbCommand</c>, <c>DbDataReader</c>, <c>DbParameter</c>. Models a
+/// Standard ADO.NET surface — <c>ClickHouseConnection</c>,
+/// <c>ClickHouseCommand</c>, <c>DbDataReader</c>, <c>DbParameter</c>. Models a
 /// reporting tool that targets <c>System.Data.Common</c> abstractions and only
 /// needs to know it's hitting a database, not which one.
 /// </summary>
@@ -22,7 +26,7 @@ internal static class AdoNetSample
     {
         var tableName = $"sample_orders_{Guid.NewGuid():N}";
 
-        await using var connection = new ClickHouseDbConnection(connectionString);
+        await using var connection = new ClickHouseConnection(connectionString);
         await connection.OpenAsync();
 
         try
@@ -63,8 +67,11 @@ internal static class AdoNetSample
 
             // Parameterised SELECT via DbCommand + DbParameter. Bound by name
             // server-side, safe against injection. CommandTimeout becomes a
-            // per-row deadline once the reader starts streaming.
-            await using var cmd = connection.CreateCommand();
+            // per-row deadline once the reader starts streaming. Typing the
+            // local as DbCommand makes the ADO parameter collection visible —
+            // the strongly-typed ClickHouseCommand.Parameters returns the
+            // native ClickHouseParameterCollection instead.
+            await using DbCommand cmd = connection.CreateCommand();
             cmd.CommandText = $"SELECT order_id, customer, total, placed_at FROM {tableName} WHERE customer = @customer ORDER BY placed_at";
             cmd.CommandTimeout = 30; // seconds
             var customerParam = cmd.CreateParameter();

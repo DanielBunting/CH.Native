@@ -56,7 +56,7 @@ public class CompressionScanBoundaryTests
 
         var query = Task.Run(async () =>
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1")) { }
+            await foreach (var _ in conn.QueryStreamAsync<int>("SELECT 1")) { }
         });
 
         var winner = await Task.WhenAny(query, Task.Delay(AntiHangTimeout));
@@ -98,7 +98,7 @@ public class CompressionScanBoundaryTests
         OperationCanceledException? caught = null;
         try
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1").WithCancellation(cts.Token)) { }
+            await foreach (var _ in conn.QueryStreamAsync<int>("SELECT 1").WithCancellation(cts.Token)) { }
         }
         catch (OperationCanceledException ex) { caught = ex; }
 
@@ -145,7 +145,7 @@ public class CompressionScanBoundaryTests
         OperationCanceledException? caught = null;
         try
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1").WithCancellation(cts.Token)) { }
+            await foreach (var _ in conn.QueryStreamAsync<int>("SELECT 1").WithCancellation(cts.Token)) { }
         }
         catch (OperationCanceledException ex) { caught = ex; }
 
@@ -202,7 +202,7 @@ public class CompressionScanBoundaryTests
 
         var query = Task.Run(async () =>
         {
-            await foreach (var _ in conn.QueryAsync<int>("SELECT 1")) { }
+            await foreach (var _ in conn.QueryStreamAsync<int>("SELECT 1")) { }
         });
 
         var winner = await Task.WhenAny(query, Task.Delay(AntiHangTimeout));

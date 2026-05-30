@@ -88,7 +88,7 @@ public class AggregationIdiomCoverageTests : IAsyncLifetime
         await conn.OpenAsync();
 
         var rows = new List<QuantilesRow>();
-        await foreach (var row in conn.QueryAsync<QuantilesRow>(
+        await foreach (var row in conn.QueryStreamAsync<QuantilesRow>(
             $"SELECT quantiles(0.5, 0.95, 0.99)(latency) AS qs FROM {_table}"))
         {
             rows.Add(row);
@@ -122,7 +122,7 @@ public class AggregationIdiomCoverageTests : IAsyncLifetime
         await conn.OpenAsync();
 
         var rows = new List<TopKRow>();
-        await foreach (var row in conn.QueryAsync<TopKRow>(
+        await foreach (var row in conn.QueryStreamAsync<TopKRow>(
             $"SELECT topK(3)(country) AS countries FROM {_table}"))
         {
             rows.Add(row);
@@ -143,7 +143,7 @@ public class AggregationIdiomCoverageTests : IAsyncLifetime
         await conn.OpenAsync();
 
         var rows = new List<GroupArrayRow>();
-        await foreach (var row in conn.QueryAsync<GroupArrayRow>(
+        await foreach (var row in conn.QueryStreamAsync<GroupArrayRow>(
             $"SELECT groupArray(country) AS all_countries FROM (SELECT DISTINCT country FROM {_table})"))
         {
             rows.Add(row);

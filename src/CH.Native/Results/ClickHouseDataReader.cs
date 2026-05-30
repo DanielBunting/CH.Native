@@ -1,4 +1,7 @@
+using System.Collections;
 using System.Collections.Concurrent;
+using System.Data;
+using System.Data.Common;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
@@ -11,9 +14,27 @@ using CH.Native.Telemetry;
 namespace CH.Native.Results;
 
 /// <summary>
-/// Provides a way to read a forward-only stream of rows from a ClickHouse query result.
+/// Forward-only stream of rows from a ClickHouse query result. Implements the
+/// standard ADO.NET <see cref="DbDataReader"/> contract so Dapper, EF Core, and
+/// other ADO consumers bind directly — no intermediate wrapper.
 /// </summary>
-public sealed class ClickHouseDataReader : IClickHouseDataReader
+/// <remarks>
+/// <para>
+/// Native callers should call <see cref="ReadAsync(System.Threading.CancellationToken)"/>
+/// (which returns <see cref="ValueTask{Boolean}"/>) at least once before reading
+/// schema properties like <see cref="FieldCount"/>; the strict
+/// <see cref="EnsureInitialized"/> contract preserves the existing native
+/// fast-fail behaviour.
+/// </para>
+/// <para>
+/// ADO callers reaching the reader through <see cref="DbDataReader"/> may read
+/// schema properties without a prior <c>Read</c>; in that case the schema is
+/// primed via a synchronous <c>ReadAsync</c> dispatched through
+/// <see cref="Task.Run(Func{Task})"/> so a captured single-threaded
+/// <see cref="SynchronizationContext"/> cannot deadlock.
+/// </para>
+/// </remarks>
+public sealed class ClickHouseDataReader : DbDataReader
 {
     private readonly IAsyncEnumerator<object> _messageEnumerator;
     private readonly ClickHouseConnection? _connection;
@@ -31,6 +52,21 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
     private ClickHouseColumn[]? _columns;
     private Dictionary<string, int>? _ordinalLookup;
 
+    // ADO state. Populated by ClickHouseCommand.ExecuteDbDataReaderAsync via
+    // AttachAdoLifetime so the timeout fires per-row (not just at query
+    // dispatch) and CommandBehavior.CloseConnection closes the underlying
+    // connection on dispose.
+    private CancellationTokenSource? _timeoutCts;
+    private ClickHouseConnection? _connectionToClose;
+
+    // ADO lazy schema-priming state. ADO consumers may read FieldCount/HasRows
+    // before any ReadAsync; the first ReadAsync is dispatched eagerly when
+    // they do, and the first row is replayed on the next caller-driven
+    // ReadAsync so the consumer doesn't lose it.
+    private bool _adoPrimed;
+    private bool _adoHasFirstRow;
+    private bool _adoFirstRowConsumed;
+
     internal ClickHouseDataReader(
         IAsyncEnumerator<object> messageEnumerator,
         ClickHouseConnection? connection = null,
@@ -46,6 +82,20 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
     }
 
     /// <summary>
+    /// Attaches ADO lifetime state to this reader. Called by
+    /// <c>ClickHouseCommand.ExecuteDbDataReaderAsync</c> after the reader is
+    /// constructed via the native path so the CommandTimeout token survives
+    /// across <see cref="ReadAsync(System.Threading.CancellationToken)"/> iterations
+    /// and the <see cref="CommandBehavior.CloseConnection"/> flag closes the
+    /// underlying connection on dispose.
+    /// </summary>
+    internal void AttachAdoLifetime(CancellationTokenSource? timeoutCts, ClickHouseConnection? connectionToClose)
+    {
+        _timeoutCts = timeoutCts;
+        _connectionToClose = connectionToClose;
+    }
+
+    /// <summary>
     /// Gets the query ID for this reader's query. This reflects either the caller-supplied ID
     /// or the auto-generated GUID sent on the wire, matching the value in ClickHouse's
     /// <c>system.query_log</c>. Null if the reader was constructed without a query ID
@@ -53,36 +103,42 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
     /// </summary>
     public string? QueryId { get; }
 
-    /// <summary>
-    /// Gets the number of columns in the result set.
-    /// </summary>
+    /// <summary>Number of columns in the result set.</summary>
     /// <exception cref="InvalidOperationException">Thrown if column metadata is not yet available.</exception>
-    public int FieldCount
+    public override int FieldCount
     {
         get
         {
-            EnsureInitialized();
+            EnsureInitializedForAdo();
             return _columns!.Length;
         }
     }
 
-    /// <summary>
-    /// Gets a value indicating whether the result set has any rows.
-    /// </summary>
+    /// <summary>True when the result set has at least one row.</summary>
     /// <exception cref="InvalidOperationException">Thrown if column metadata is not yet available.</exception>
-    public bool HasRows
+    public override bool HasRows
     {
         get
         {
-            EnsureInitialized();
-            return _currentBlock is not null && _currentBlock.RowCount > 0;
+            EnsureInitializedForAdo();
+            return _adoHasFirstRow || (_currentBlock is not null && _currentBlock.RowCount > 0);
         }
     }
 
-    /// <summary>
-    /// Gets a value indicating whether the reader is closed.
-    /// </summary>
-    public bool IsClosed => _disposed;
+    /// <summary>True after <c>Close</c>/<c>Dispose</c> has run.</summary>
+    public override bool IsClosed => _disposed;
+
+    /// <inheritdoc />
+    public override int Depth => 0;
+
+    /// <inheritdoc />
+    public override int RecordsAffected => -1;
+
+    /// <inheritdoc />
+    public override object this[int ordinal] => GetValue(ordinal) ?? DBNull.Value;
+
+    /// <inheritdoc />
+    public override object this[string name] => GetValue(GetOrdinal(name)) ?? DBNull.Value;
 
     /// <summary>
     /// Gets the column metadata for all columns in the result set.
@@ -97,14 +153,37 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
         }
     }
 
+    // Hot-path cached Tasks for the synchronous-completion fast path in the
+    // Task<bool>-shaped DbDataReader.ReadAsync override. Avoids allocating a
+    // new Task per row on buffered reads.
+    private static readonly Task<bool> s_completedTrue = Task.FromResult(true);
+    private static readonly Task<bool> s_completedFalse = Task.FromResult(false);
+
     /// <summary>
-    /// Advances the reader to the next row.
+    /// Core row-advance path. Returns <see cref="ValueTask{Boolean}"/> so
+    /// internal pipelines avoid a heap-allocated <see cref="Task"/> per row;
+    /// the <see cref="ReadAsync(CancellationToken)"/> override wraps with a
+    /// cached completed Task on the synchronous-completion fast path.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>True if there is another row; false if no more rows are available.</returns>
-    public async ValueTask<bool> ReadAsync(CancellationToken cancellationToken = default)
+    private async ValueTask<bool> ReadCoreAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+
+        // First-row replay for ADO callers who hit FieldCount/HasRows before
+        // any explicit Read. We already pulled the first block; hand it back
+        // here once before continuing through MoveToNextBlockAsync.
+        if (_adoPrimed && !_adoFirstRowConsumed)
+        {
+            _adoFirstRowConsumed = true;
+            if (_adoHasFirstRow)
+            {
+                _rowsRead++;
+                return true;
+            }
+            // ADO priming hit empty; fall through so the next Read drains.
+        }
 
         bool advanced;
         try
@@ -148,15 +227,51 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
     }
 
     /// <summary>
+    /// Advances the reader to the next row. Bridges to <see cref="ReadCoreAsync"/>;
+    /// pays a <see cref="Task"/> allocation only when the underlying call
+    /// completes asynchronously (the buffered hot path returns a cached
+    /// completed Task).
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public override Task<bool> ReadAsync(CancellationToken cancellationToken)
+    {
+        var vt = ReadCoreAsync(cancellationToken);
+        if (vt.IsCompletedSuccessfully)
+            return vt.Result ? s_completedTrue : s_completedFalse;
+        return vt.AsTask();
+    }
+
+
+    /// <summary>
+    /// Synchronous Read. When there is no captured
+    /// <see cref="SynchronizationContext"/> or non-default
+    /// <see cref="TaskScheduler"/> we block on the async result directly;
+    /// otherwise we hop to the thread pool via
+    /// <see cref="Task.Run{TResult}(Func{Task{TResult}})"/> so a UI / classic
+    /// ASP.NET caller cannot deadlock against the async continuation.
+    /// </summary>
+    public override bool Read()
+    {
+        if (SynchronizationContext.Current is null && TaskScheduler.Current == TaskScheduler.Default)
+            return ReadAsync(CancellationToken.None).GetAwaiter().GetResult();
+        return Task.Run(() => ReadAsync(CancellationToken.None)).GetAwaiter().GetResult();
+    }
+
+    /// <inheritdoc />
+    public override bool NextResult() => false;
+
+    /// <inheritdoc />
+    public override Task<bool> NextResultAsync(CancellationToken cancellationToken)
+        => Task.FromResult(false);
+
+    /// <summary>
     /// Gets the value at the specified column ordinal.
     /// </summary>
-    /// <param name="ordinal">The zero-based column ordinal.</param>
-    /// <returns>The value at the specified column.</returns>
-    public object? GetValue(int ordinal)
+    public override object GetValue(int ordinal)
     {
         EnsureCanRead();
         ValidateOrdinal(ordinal);
-        return _currentBlock!.GetValue(_currentRowIndex, ordinal);
+        return _currentBlock!.GetValue(_currentRowIndex, ordinal) ?? DBNull.Value;
     }
 
     /// <summary>
@@ -165,7 +280,7 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
     /// <typeparam name="T">The expected type.</typeparam>
     /// <param name="ordinal">The zero-based column ordinal.</param>
     /// <returns>The typed value at the specified column.</returns>
-    public T GetFieldValue<T>(int ordinal)
+    public override T GetFieldValue<T>(int ordinal)
     {
         // Fast path: VariantValue<T0, T1> — skip the boxed ClickHouseVariant materialisation
         // and read directly from VariantTypedColumn arm columns.
@@ -176,7 +291,18 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
             return VariantValueDispatcher<T>.Read(_currentBlock!, _currentRowIndex, ordinal);
         }
 
-        var value = GetValue(ordinal);
+        // Fast path: column storage matches the requested T exactly — read
+        // straight from TypedColumn<T>'s typed indexer with no boxing. Cuts
+        // ~24B/row for value-type columns on the Dapper-style row mapper hot
+        // path (which calls GetXxx via GetFieldValue<T> per column per row).
+        if (_currentBlock is not null && (uint)ordinal < (uint)_currentBlock.ColumnCount
+            && _currentBlock.Columns[ordinal] is TypedColumn<T> typedColumn)
+        {
+            EnsureCanRead();
+            return typedColumn[_currentRowIndex];
+        }
+
+        var value = GetValueInternal(ordinal);
 
         if (value is null)
         {
@@ -216,26 +342,91 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
         return (T)Convert.ChangeType(value, typeof(T));
     }
 
+    // GetValueInternal preserves the nullable shape for the typed-fallback
+    // path inside GetFieldValue and for the ClickHouseRow indexer, which both
+    // expose object? and surface SQL null as CLR null. The public
+    // DbDataReader.GetValue contract returns object (non-nullable, DBNull for
+    // SQL null), so it cannot be shared with those callers.
+    internal object? GetValueInternal(int ordinal)
+    {
+        EnsureCanRead();
+        ValidateOrdinal(ordinal);
+        return _currentBlock!.GetValue(_currentRowIndex, ordinal);
+    }
+
     /// <summary>
     /// Gets a typed value at the specified column name.
     /// </summary>
-    /// <typeparam name="T">The expected type.</typeparam>
-    /// <param name="name">The column name.</param>
-    /// <returns>The typed value at the specified column.</returns>
     public T GetFieldValue<T>(string name)
     {
         return GetFieldValue<T>(GetOrdinal(name));
     }
 
+    /// <inheritdoc />
+    public override bool GetBoolean(int ordinal) { ThrowIfClosed(); return GetFieldValue<bool>(ordinal); }
+
+    /// <inheritdoc />
+    public override byte GetByte(int ordinal) { ThrowIfClosed(); return GetFieldValue<byte>(ordinal); }
+
+    /// <inheritdoc />
+    public override char GetChar(int ordinal) { ThrowIfClosed(); return GetFieldValue<char>(ordinal); }
+
+    /// <inheritdoc />
+    public override DateTime GetDateTime(int ordinal) { ThrowIfClosed(); return GetFieldValue<DateTime>(ordinal); }
+
+    /// <inheritdoc />
+    public override decimal GetDecimal(int ordinal) { ThrowIfClosed(); return GetFieldValue<decimal>(ordinal); }
+
+    /// <inheritdoc />
+    public override double GetDouble(int ordinal) { ThrowIfClosed(); return GetFieldValue<double>(ordinal); }
+
+    /// <inheritdoc />
+    public override float GetFloat(int ordinal) { ThrowIfClosed(); return GetFieldValue<float>(ordinal); }
+
+    /// <inheritdoc />
+    public override Guid GetGuid(int ordinal) { ThrowIfClosed(); return GetFieldValue<Guid>(ordinal); }
+
+    /// <inheritdoc />
+    public override short GetInt16(int ordinal) { ThrowIfClosed(); return GetFieldValue<short>(ordinal); }
+
+    /// <inheritdoc />
+    public override int GetInt32(int ordinal) { ThrowIfClosed(); return GetFieldValue<int>(ordinal); }
+
+    /// <inheritdoc />
+    public override long GetInt64(int ordinal) { ThrowIfClosed(); return GetFieldValue<long>(ordinal); }
+
+    /// <inheritdoc />
+    public override string GetString(int ordinal) { ThrowIfClosed(); return GetFieldValue<string>(ordinal); }
+
+    /// <inheritdoc />
+    public override int GetValues(object[] values)
+    {
+        ThrowIfClosed();
+        var count = Math.Min(values.Length, FieldCount);
+        for (int i = 0; i < count; i++)
+            values[i] = GetValue(i);
+        return count;
+    }
+
+    /// <inheritdoc />
+    public override long GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length)
+    {
+        throw new NotSupportedException("GetBytes is not supported. Use GetFieldValue<byte[]>() instead.");
+    }
+
+    /// <inheritdoc />
+    public override long GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length)
+    {
+        throw new NotSupportedException("GetChars is not supported. Use GetString() instead.");
+    }
+
     /// <summary>
     /// Gets the column ordinal for the specified column name.
     /// </summary>
-    /// <param name="name">The column name (case-insensitive).</param>
-    /// <returns>The zero-based column ordinal.</returns>
     /// <exception cref="ArgumentException">Thrown if the column name is not found.</exception>
-    public int GetOrdinal(string name)
+    public override int GetOrdinal(string name)
     {
-        EnsureInitialized();
+        EnsureInitializedForAdo();
 
         _ordinalLookup ??= BuildOrdinalLookup();
 
@@ -248,11 +439,9 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
     /// <summary>
     /// Gets the name of the column at the specified ordinal.
     /// </summary>
-    /// <param name="ordinal">The zero-based column ordinal.</param>
-    /// <returns>The column name.</returns>
-    public string GetName(int ordinal)
+    public override string GetName(int ordinal)
     {
-        EnsureInitialized();
+        EnsureInitializedForAdo();
         ValidateOrdinal(ordinal);
         return _columns![ordinal].Name;
     }
@@ -260,23 +449,22 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
     /// <summary>
     /// Gets the ClickHouse type name of the column at the specified ordinal.
     /// </summary>
-    /// <param name="ordinal">The zero-based column ordinal.</param>
-    /// <returns>The ClickHouse type name.</returns>
     public string GetTypeName(int ordinal)
     {
-        EnsureInitialized();
+        EnsureInitializedForAdo();
         ValidateOrdinal(ordinal);
         return _columns![ordinal].ClickHouseTypeName;
     }
 
+    /// <inheritdoc />
+    public override string GetDataTypeName(int ordinal) => GetTypeName(ordinal);
+
     /// <summary>
     /// Gets the CLR type of the column at the specified ordinal.
     /// </summary>
-    /// <param name="ordinal">The zero-based column ordinal.</param>
-    /// <returns>The CLR type.</returns>
-    public Type GetFieldType(int ordinal)
+    public override Type GetFieldType(int ordinal)
     {
-        EnsureInitialized();
+        EnsureInitializedForAdo();
         ValidateOrdinal(ordinal);
         return _columns![ordinal].ClrType;
     }
@@ -284,22 +472,66 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
     /// <summary>
     /// Checks if the value at the specified ordinal is null.
     /// </summary>
-    /// <param name="ordinal">The zero-based column ordinal.</param>
-    /// <returns>True if the value is null; otherwise false.</returns>
-    public bool IsDBNull(int ordinal)
+    public override bool IsDBNull(int ordinal)
     {
-        return GetValue(ordinal) is null;
+        EnsureCanRead();
+        ValidateOrdinal(ordinal);
+        // ITypedColumn.IsNull avoids the GetValue boxing for non-nullable
+        // value-type storage — TypedColumn<long/double/DateTime/...>
+        // short-circuits to `return false`.
+        return _currentBlock!.Columns[ordinal].IsNull(_currentRowIndex);
     }
 
     /// <summary>
     /// Checks if the value at the specified column name is null.
     /// </summary>
-    /// <param name="name">The column name.</param>
-    /// <returns>True if the value is null; otherwise false.</returns>
     public bool IsDBNull(string name)
     {
         return IsDBNull(GetOrdinal(name));
     }
+
+    /// <inheritdoc />
+    public override IEnumerator GetEnumerator() => new DbEnumerator(this);
+
+    /// <inheritdoc />
+    public override DataTable GetSchemaTable()
+    {
+        EnsureInitializedForAdo();
+        var table = new DataTable("SchemaTable");
+
+        table.Columns.Add("ColumnName", typeof(string));
+        table.Columns.Add("ColumnOrdinal", typeof(int));
+        table.Columns.Add("DataType", typeof(Type));
+        table.Columns.Add("ProviderType", typeof(string));
+        table.Columns.Add("AllowDBNull", typeof(bool));
+
+        for (int i = 0; i < FieldCount; i++)
+        {
+            var row = table.NewRow();
+            row["ColumnName"] = GetName(i);
+            row["ColumnOrdinal"] = i;
+            row["DataType"] = GetFieldType(i);
+            var typeName = GetDataTypeName(i);
+            row["ProviderType"] = typeName;
+            row["AllowDBNull"] = typeName.StartsWith("Nullable(", StringComparison.Ordinal);
+            table.Rows.Add(row);
+        }
+
+        return table;
+    }
+
+    /// <summary>
+    /// Synchronous Close. Dispatched via <see cref="Task.Run(Func{Task})"/>
+    /// so a captured single-threaded <see cref="SynchronizationContext"/>
+    /// (UI / classic ASP.NET) cannot deadlock against the async dispose.
+    /// </summary>
+    public override void Close()
+    {
+        Task.Run(() => CloseAsync()).GetAwaiter().GetResult();
+    }
+
+    /// <inheritdoc />
+    public override Task CloseAsync() => DisposeAsync().AsTask();
 
     /// <summary>
     /// Disposes the reader and drains any remaining server messages.
@@ -318,7 +550,7 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
         _connection?.ExitBusy();
     }
 
-    public async ValueTask DisposeAsync()
+    public override async ValueTask DisposeAsync()
     {
         if (_disposed)
             return;
@@ -394,7 +626,27 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
             // completion didn't fire (e.g. DisposeAsync called before any
             // ReadAsync, or drain threw). ExitBusy is idempotent.
             _connection?.ExitBusy();
+
+            // ADO lifetime hooks set by ClickHouseCommand.ExecuteDbDataReaderAsync.
+            _timeoutCts?.Dispose();
+            _timeoutCts = null;
+            if (_connectionToClose is not null)
+            {
+                var conn = _connectionToClose;
+                _connectionToClose = null;
+                await conn.CloseAsync();
+            }
         }
+    }
+
+    /// <inheritdoc />
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            Close();
+        }
+        base.Dispose(disposing);
     }
 
     private async ValueTask InitializeAsync(CancellationToken cancellationToken)
@@ -494,11 +746,28 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
         return lookup;
     }
 
+    /// <summary>
+    /// Native priming contract: throws if no <see cref="ReadAsync(System.Threading.CancellationToken)"/>
+    /// has run. Preserved so existing native callers continue to fast-fail.
+    /// </summary>
     private void EnsureInitialized()
     {
         if (!_hasInitialized)
             throw new InvalidOperationException(
                 "Reader has not been initialized. Call ReadAsync() first.");
+    }
+
+    /// <summary>
+    /// ADO priming contract: lazily dispatches a first <c>ReadAsync</c> so
+    /// schema-shaped property getters work for ADO consumers who haven't called
+    /// <c>Read</c> yet. Dispatched via <see cref="Task.Run(Func{Task})"/> to
+    /// escape any captured single-threaded synchronization context.
+    /// </summary>
+    private void EnsureInitializedForAdo()
+    {
+        if (_hasInitialized) return;
+        _adoHasFirstRow = Task.Run(() => ReadCoreAsync(CancellationToken.None).AsTask()).GetAwaiter().GetResult();
+        _adoPrimed = true;
     }
 
     private void EnsureCanRead()
@@ -520,6 +789,12 @@ public sealed class ClickHouseDataReader : IClickHouseDataReader
         if (_currentBlock is null)
             throw new InvalidOperationException(
                 "No data available.");
+    }
+
+    private void ThrowIfClosed()
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(ClickHouseDataReader), "The DataReader has been closed.");
     }
 
     private void ValidateOrdinal(int ordinal)

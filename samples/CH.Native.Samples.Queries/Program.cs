@@ -27,6 +27,7 @@ Func<string, Task>? runner = sampleName switch
     "linq-sample"     => LinqSampleClauseSample.RunAsync,
     "adonet"          => AdoNetSample.RunAsync,
     "dapper"          => DapperSample.RunAsync,
+    "dapper-di"       => DapperSample.RunWithDependencyInjectionAsync,
     "pooled"          => DataSourcePooledSample.RunAsync,
     "resilient"       => ResilientSample.RunAsync,
     "progress"        => ProgressCancellationSample.RunAsync,
@@ -58,16 +59,17 @@ static void PrintUsage()
         Samples:
             scalar           connection.ExecuteScalarAsync<T>(sql, ...)
             reader           connection.ExecuteReaderAsync(sql, ...) — ClickHouseDataReader
-            rows             connection.QueryAsync(sql) — IAsyncEnumerable<ClickHouseRow>
-            typed            connection.QueryAsync<T>(sql) — reflection-mapped POCOs
+            rows             connection.QueryStreamAsync(sql) — IAsyncEnumerable<ClickHouseRow>
+            typed            connection.QueryStreamAsync<T>(sql) — reflection-mapped POCOs
             typed-fast       connection.QueryTypedAsync<T>(sql) — high-perf, no boxing
-            parameterized    QueryAsync<T>(sql, params) — anon-obj / IDictionary parameters
+            parameterized    QueryStreamAsync<T>(sql, params) — anon-obj / IDictionary parameters
             linq             connection.Table<T>(name).Where/Select/OrderBy/Take + ToSql
             linq-aggregates  CountAsync / SumAsync / AverageAsync / MinAsync / MaxAsync / Any / First / Single
             linq-final       connection.Table<T>(name).Final() — ReplacingMergeTree current state
             linq-sample      connection.Table<T>(name).Sample(0.1).WithQueryId(...) — approximate analytics
-            adonet           ClickHouseDbConnection / ClickHouseDbCommand / DbDataReader
+            adonet           ClickHouseConnection / ClickHouseCommand / DbDataReader
             dapper           Dapper QueryAsync / QueryFirstAsync / ExecuteScalarAsync after Register()
+            dapper-di        Dapper on a pooled connection rented from a DI-resolved ClickHouseDataSource
             pooled           dataSource.Table<T>(name) + concurrent rented-connection queries
             resilient        ResilientConnection — multi-host failover, retry policy
             progress         IProgress<QueryProgress> + CancellationToken — long-running query control

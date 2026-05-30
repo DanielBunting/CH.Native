@@ -78,7 +78,7 @@ public class OrderByPaginationTests : IAsyncLifetime
             .ToListAsync();
 
         var oracle = new List<IdActive>();
-        await foreach (var row in _conn.QueryAsync(
+        await foreach (var row in _conn.QueryStreamAsync(
             $"SELECT id, active FROM {_facts.TableName} ORDER BY active DESC, id ASC"))
         {
             oracle.Add(new IdActive

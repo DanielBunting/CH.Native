@@ -1,6 +1,9 @@
 using System.Data;
 using System.Data.Common;
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.SmokeTests.Fixtures;
 using CH.Native.SmokeTests.Helpers;
 using Dapper;
@@ -22,7 +25,7 @@ public class AdoNetSmokeTests
     [Fact]
     public async Task ExecuteScalar_ReturnsMatchingResult()
     {
-        await using var nativeConn = new ClickHouseDbConnection(_fixture.NativeConnectionString);
+        await using var nativeConn = new ClickHouseConnection(_fixture.NativeConnectionString);
         await nativeConn.OpenAsync();
         using var nativeCmd = nativeConn.CreateCommand();
         nativeCmd.CommandText = "SELECT 42";
@@ -40,7 +43,7 @@ public class AdoNetSmokeTests
     [Fact]
     public async Task ExecuteScalar_StringResult()
     {
-        await using var nativeConn = new ClickHouseDbConnection(_fixture.NativeConnectionString);
+        await using var nativeConn = new ClickHouseConnection(_fixture.NativeConnectionString);
         await nativeConn.OpenAsync();
         using var nativeCmd = nativeConn.CreateCommand();
         nativeCmd.CommandText = "SELECT 'hello world'";
@@ -71,7 +74,7 @@ public class AdoNetSmokeTests
 
             // Read via native ADO.NET
             var nativeResults = new List<(int id, bool isNull, string? val)>();
-            await using var nativeConn = new ClickHouseDbConnection(_fixture.NativeConnectionString);
+            await using var nativeConn = new ClickHouseConnection(_fixture.NativeConnectionString);
             await nativeConn.OpenAsync();
             using var nativeCmd = nativeConn.CreateCommand();
             nativeCmd.CommandText = $"SELECT id, val FROM {table} ORDER BY id";
@@ -130,7 +133,7 @@ public class AdoNetSmokeTests
                 $"INSERT INTO {table} VALUES (1, 'test', 3.14)");
 
             // Get schema from native
-            await using var nativeConn = new ClickHouseDbConnection(_fixture.NativeConnectionString);
+            await using var nativeConn = new ClickHouseConnection(_fixture.NativeConnectionString);
             await nativeConn.OpenAsync();
             using var nativeCmd = nativeConn.CreateCommand();
             nativeCmd.CommandText = $"SELECT * FROM {table}";
@@ -187,7 +190,7 @@ public class AdoNetSmokeTests
                 $"INSERT INTO {table} VALUES (1, 'alice', 100.5), (2, 'bob', 200.25), (3, 'charlie', 300.75)");
 
             // Dapper via CH.Native ADO.NET
-            await using var nativeConn = new ClickHouseDbConnection(_fixture.NativeConnectionString);
+            await using var nativeConn = new ClickHouseConnection(_fixture.NativeConnectionString);
             await nativeConn.OpenAsync();
             var nativeRows = (await nativeConn.QueryAsync<dynamic>(
                 $"SELECT id, name, value FROM {table} ORDER BY id")).ToList();
@@ -222,7 +225,7 @@ public class AdoNetSmokeTests
     [Fact]
     public async Task ConnectionState_MatchesBehavior()
     {
-        await using var nativeConn = new ClickHouseDbConnection(_fixture.NativeConnectionString);
+        await using var nativeConn = new ClickHouseConnection(_fixture.NativeConnectionString);
         Assert.Equal(ConnectionState.Closed, nativeConn.State);
         await nativeConn.OpenAsync();
         Assert.Equal(ConnectionState.Open, nativeConn.State);
@@ -248,7 +251,7 @@ public class AdoNetSmokeTests
                 $"INSERT INTO {table} VALUES (1), (2), (3)");
 
             // Multiple queries on same native connection
-            await using var nativeConn = new ClickHouseDbConnection(_fixture.NativeConnectionString);
+            await using var nativeConn = new ClickHouseConnection(_fixture.NativeConnectionString);
             await nativeConn.OpenAsync();
 
             using var cmd1 = nativeConn.CreateCommand();

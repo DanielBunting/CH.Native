@@ -62,7 +62,7 @@ internal static class OneShotBulkInsertSample
                               $"({rowCount / sw.Elapsed.TotalSeconds:F0} rows/sec).");
 
             Console.WriteLine("\n--- Average readings by sensor (first 5) ---");
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"""
                 SELECT
                     sensor_id,

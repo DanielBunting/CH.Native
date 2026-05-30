@@ -47,7 +47,7 @@ public class TimezoneRoundTripTests
             }
 
             var results = new List<DateTime>();
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table} ORDER BY id"))
                 results.Add(r.GetFieldValue<DateTime>(0));
 
             for (int i = 0; i < inputs.Length; i++)
@@ -84,7 +84,7 @@ public class TimezoneRoundTripTests
                 $"INSERT INTO {table} VALUES (toDateTime('2024-03-10 09:30:00', 'UTC'))");
 
             DateTime read = default;
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table}"))
                 read = r.GetFieldValue<DateTime>(0);
 
             var utc = read.Kind == DateTimeKind.Utc ? read : read.ToUniversalTime();
@@ -123,7 +123,7 @@ public class TimezoneRoundTripTests
             }
 
             var got = new List<DateOnly>();
-            await foreach (var r in conn.QueryAsync($"SELECT d FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT d FROM {table} ORDER BY id"))
                 got.Add(r.GetFieldValue<DateOnly>(0));
 
             Assert.Equal(inputs, got);

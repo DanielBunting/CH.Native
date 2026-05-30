@@ -7,6 +7,8 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\CH.Native\CH.Native.csproj" />
     <ProjectReference Include="..\..\src\CH.Native.Dapper\CH.Native.Dapper.csproj" />
+    <ProjectReference Include="..\..\src\CH.Native.DependencyInjection\CH.Native.DependencyInjection.csproj" />
     <PackageReference Include="Dapper" Version="2.1.*" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.*" />
   </ItemGroup>
 </Project>

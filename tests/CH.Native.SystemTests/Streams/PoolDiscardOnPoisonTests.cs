@@ -104,7 +104,7 @@ public class PoolDiscardOnPoisonTests
 
         var query = Task.Run(async () =>
         {
-            await foreach (var _ in conn1.QueryAsync<int>("SELECT 1")) { }
+            await foreach (var _ in conn1.QueryStreamAsync<int>("SELECT 1")) { }
         });
         await Assert.ThrowsAsync<ClickHouseProtocolException>(() => query);
         Assert.False(conn1.CanBePooled);
@@ -139,7 +139,7 @@ public class PoolDiscardOnPoisonTests
 
         // Drive a clean Data + EOS round to leave the connection in a usable state.
         session1.EnqueueBytes(BuildEmptyBlockPlusEosPlusJunk(junkBytes: 0));
-        await foreach (var _ in conn1.QueryAsync<int>("SELECT 1")) { }
+        await foreach (var _ in conn1.QueryStreamAsync<int>("SELECT 1")) { }
         Assert.True(conn1.CanBePooled);
 
         await conn1.DisposeAsync();
@@ -214,7 +214,7 @@ public class PoolDiscardOnPoisonTests
 
         await Assert.ThrowsAsync<ClickHouseServerException>(async () =>
         {
-            await foreach (var _ in conn1.QueryAsync<int>("SELECT 1")) { }
+            await foreach (var _ in conn1.QueryStreamAsync<int>("SELECT 1")) { }
         });
 
         Assert.True(conn1.CanBePooled,

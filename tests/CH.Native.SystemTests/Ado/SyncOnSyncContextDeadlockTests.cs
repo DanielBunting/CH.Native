@@ -1,5 +1,8 @@
 using System.Collections.Concurrent;
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.SystemTests.Fixtures;
 using Xunit;
 
@@ -30,7 +33,7 @@ public class SyncOnSyncContextDeadlockTests
         SynchronizationContext.SetSynchronizationContext(ctx);
         try
         {
-            using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+            using var conn = new ClickHouseConnection(_fx.ConnectionString);
 
             // Post the entire sync flow to the single-threaded pump. If any await
             // inside the chain captures this context, the resumption queues

@@ -1,7 +1,12 @@
 using System.Net.Sockets;
 using CH.Native.Ado;
 using CH.Native.Connection;
-using CH.Native.Dapper;
+using CH.Native.Commands;
+using CH.Native.Results;
+using CH.Native.Connection;
+// CH.Native.Dapper not imported — `using Dapper;` brings Dapper's IDbConnection
+// extensions into scope, and importing CH.Native.Dapper here would conflict.
+// The one Register() call is fully qualified below.
 using CH.Native.Exceptions;
 using CH.Native.SystemTests.BulkInsertFailures.Helpers;
 using CH.Native.SystemTests.Fixtures;
@@ -25,7 +30,7 @@ public class DapperChaosTests : IAsyncLifetime
 
     static DapperChaosTests()
     {
-        ClickHouseDapperIntegration.Register();
+        CH.Native.Dapper.ClickHouseDapperIntegration.Register();
     }
 
     public DapperChaosTests(ToxiproxyFixture proxy, ITestOutputHelper output)
@@ -71,7 +76,7 @@ public class DapperChaosTests : IAsyncLifetime
                     new() { ["timeout"] = 0 });
             });
 
-            await using var conn = new ClickHouseDbConnection(ConnectionString);
+            await using var conn = new ClickHouseConnection(ConnectionString);
             await conn.OpenAsync();
 
             Exception? caught = null;
@@ -96,7 +101,7 @@ public class DapperChaosTests : IAsyncLifetime
             Assert.True(typedFailure,
                 $"Expected typed ClickHouse failure; got {caught.GetType().FullName}: {caught.Message}");
 
-            // Note: ClickHouseDbConnection.State does NOT auto-transition to Closed on
+            // Note: ClickHouseConnection.State does NOT auto-transition to Closed on
             // wire failure today — that is a known ADO.NET-surface gap (the wrapper's
             // _state is only updated by Open/Close paths). We assert reusability instead
             // of State: a follow-up call must surface a typed failure, proving the
@@ -134,7 +139,7 @@ public class DapperChaosTests : IAsyncLifetime
             // Streaming Dapper query disposed after partial enumeration. The connection
             // must either drain cleanly or be evicted; either way the next query must work.
             int rowsConsumed = 0;
-            await using (var conn = new ClickHouseDbConnection(ConnectionString))
+            await using (var conn = new ClickHouseConnection(ConnectionString))
             {
                 await conn.OpenAsync();
                 using var rows = conn.Query<DapperRow>(
@@ -146,7 +151,7 @@ public class DapperChaosTests : IAsyncLifetime
             Assert.Equal(50, rowsConsumed);
 
             // A separate connection runs a fresh query — proves no shared state corruption.
-            await using var verify = new ClickHouseDbConnection(ConnectionString);
+            await using var verify = new ClickHouseConnection(ConnectionString);
             await verify.OpenAsync();
             var total = (await verify.QueryAsync<long>(
                 $"SELECT count() FROM {harness.TableName}")).Single();

@@ -61,7 +61,7 @@ internal static class CollectionSample
                               $"({rows.Count / sw.Elapsed.TotalSeconds:F0} rows/sec).");
 
             Console.WriteLine("\n--- Top 5 SKUs by revenue ---");
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"""
                 SELECT sku, round(sum(qty * unit_price), 2) AS revenue
                 FROM {tableName}

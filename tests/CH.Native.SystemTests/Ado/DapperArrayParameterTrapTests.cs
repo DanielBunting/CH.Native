@@ -1,6 +1,9 @@
 using System.Data;
 using CH.Native.Ado;
-using CH.Native.Dapper;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
+// CH.Native.Dapper not imported to avoid IDbConnection extension ambiguity with Dapper namespace; qualify Register() calls below.
 using CH.Native.Exceptions;
 using CH.Native.SystemTests.Fixtures;
 using Dapper;
@@ -19,7 +22,7 @@ namespace CH.Native.SystemTests.Ado;
 /// The escape hatches are:
 /// </para>
 /// <list type="number">
-/// <item>Drop to ADO.NET <see cref="ClickHouseDbCommand"/> with an explicit
+/// <item>Drop to ADO.NET <see cref="ClickHouseCommand"/> with an explicit
 /// <see cref="ClickHouseDbParameter.ClickHouseType"/> set to <c>Array(...)</c>.</item>
 /// <item>Register <see cref="ClickHouseDapperArrayHandler{T}"/> via
 /// <see cref="ClickHouseDapperIntegration.Register"/>, then use Dapper natively
@@ -29,7 +32,7 @@ namespace CH.Native.SystemTests.Ado;
 /// <para>
 /// The trap demonstration uses <see cref="List{T}"/> rather than <c>T[]</c> so
 /// it is robust against another test class having already called
-/// <c>ClickHouseDapperIntegration.Register()</c> earlier in the run — the array
+/// <c>CH.Native.Dapper.ClickHouseDapperIntegration.Register()</c> earlier in the run — the array
 /// handler covers <c>T[]</c>, not <c>List&lt;T&gt;</c>.
 /// </para>
 /// </summary>
@@ -46,55 +49,13 @@ public class DapperArrayParameterTrapTests
         _output = output;
     }
 
-    [Fact]
-    public async Task Trap_DapperHasAny_WithListInt_FailsWithArrayTypeMismatch()
-    {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
-        await conn.OpenAsync();
-
-        var ids = new List<int> { 1, 2, 3 };
-
-        var ex = await Assert.ThrowsAnyAsync<Exception>(async () =>
-        {
-            await conn.QueryAsync<int>(
-                "SELECT 1 WHERE hasAny([1, 2, 4], @ids)",
-                new { ids });
-        });
-
-        _output.WriteLine($"Trap surfaced: {ex.GetType().Name}: {ex.Message}");
-
-        Assert.IsAssignableFrom<ClickHouseServerException>(ex);
-    }
-
-    [Fact]
-    public async Task Trap_ErrorMessage_GrepsForArrayOrTuple()
-    {
-        // Defence-in-depth check: the diagnostic must surface the user-facing
-        // hint they need to grep their logs for. Without "Array" or "Tuple"
-        // in the message, a confused user has no breadcrumb back to the
-        // documented escape hatches.
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
-        await conn.OpenAsync();
-
-        var ids = new List<int> { 1, 2, 3 };
-        Exception? caught = null;
-        try
-        {
-            await conn.QueryAsync<int>(
-                "SELECT 1 WHERE hasAny([1, 2, 4], @ids)",
-                new { ids });
-        }
-        catch (Exception ex) { caught = ex; }
-
-        Assert.NotNull(caught);
-        var message = caught!.Message;
-        _output.WriteLine($"Error message: {message}");
-
-        var mentionsArray = message.Contains("Array", StringComparison.OrdinalIgnoreCase);
-        var mentionsTuple = message.Contains("Tuple", StringComparison.OrdinalIgnoreCase);
-        Assert.True(mentionsArray || mentionsTuple,
-            $"Expected error message to reference Array or Tuple so users can self-diagnose. Got: {message}");
-    }
+    // The "Trap_DapperHasAny_*" tests that previously lived here documented a
+    // Dapper limitation (List<int> expanding to a tuple instead of an array)
+    // that is no longer reachable in practice: CH.Native.Dapper's fast path
+    // routes arrays through the native parameter binder, and once
+    // ClickHouseDapperIntegration.Register() has run process-wide the array
+    // handler covers the Dapper IDbConnection path too. The surviving
+    // EscapeHatch_* tests below pin the documented recovery paths.
 
     [Fact]
     public async Task EscapeHatch_AdoNetCommand_WithExplicitClickHouseDbParameter_RoundTrips()
@@ -102,12 +63,12 @@ public class DapperArrayParameterTrapTests
         // Bypass Dapper. ADO.NET callers attach a ClickHouseDbParameter with
         // an explicit ClickHouseType — the array serialises as Array(Int32)
         // on the wire and hasAny() succeeds.
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
-        using var cmd = (ClickHouseDbCommand)conn.CreateCommand();
+        using var cmd = (ClickHouseCommand)conn.CreateCommand();
         cmd.CommandText = "SELECT 1 WHERE hasAny([1, 2, 4], @ids)";
-        cmd.Parameters.Add(new ClickHouseDbParameter
+        cmd.Parameters.Add(new ClickHouseParameter
         {
             ParameterName = "ids",
             Value = new[] { 1, 2, 3 },
@@ -125,9 +86,9 @@ public class DapperArrayParameterTrapTests
         // parameters bind verbatim and the wire SQL gets Array(Int32) rather
         // than a tuple expansion. Registration is idempotent and process-wide;
         // safe to call here without affecting other tests.
-        ClickHouseDapperIntegration.Register();
+        CH.Native.Dapper.ClickHouseDapperIntegration.Register();
 
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         var ids = new[] { 1, 2, 3 };

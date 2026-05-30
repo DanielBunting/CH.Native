@@ -248,7 +248,7 @@ public class DataReaderTests
 
         var rows = new List<(int id, string name)>();
 
-        await foreach (var row in connection.QueryAsync(
+        await foreach (var row in connection.QueryStreamAsync(
             "SELECT number as id, toString(number) as name FROM numbers(5)"))
         {
             rows.Add((
@@ -272,7 +272,7 @@ public class DataReaderTests
         await connection.OpenAsync();
 
         int count = 0;
-        await foreach (var row in connection.QueryAsync(
+        await foreach (var row in connection.QueryStreamAsync(
             "SELECT number FROM numbers(10000)"))
         {
             count++;
@@ -293,7 +293,7 @@ public class DataReaderTests
         await connection.OpenAsync();
 
         var count = 0;
-        await foreach (var row in connection.QueryAsync("SELECT 1 WHERE 1 = 0"))
+        await foreach (var row in connection.QueryStreamAsync("SELECT 1 WHERE 1 = 0"))
         {
             count++;
         }
@@ -307,7 +307,7 @@ public class DataReaderTests
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
-        await foreach (var row in connection.QueryAsync("SELECT 42 as value, 'test' as text"))
+        await foreach (var row in connection.QueryStreamAsync("SELECT 42 as value, 'test' as text"))
         {
             // Access by index
             Assert.Equal((byte)42, row[0]);
@@ -335,7 +335,7 @@ public class DataReaderTests
         await connection.OpenAsync();
 
         var items = new List<SimpleDto>();
-        await foreach (var item in connection.QueryAsync<SimpleDto>(
+        await foreach (var item in connection.QueryStreamAsync<SimpleDto>(
             "SELECT toInt32(number) as Id, toString(number) as Name FROM numbers(3)"))
         {
             items.Add(item);
@@ -363,7 +363,7 @@ public class DataReaderTests
         await connection.OpenAsync();
 
         var items = new List<PartialDto>();
-        await foreach (var item in connection.QueryAsync<PartialDto>(
+        await foreach (var item in connection.QueryStreamAsync<PartialDto>(
             "SELECT toInt32(1) as Id"))
         {
             items.Add(item);
@@ -382,7 +382,7 @@ public class DataReaderTests
 
         var items = new List<SimpleDto>();
         // Query has extra column not in DTO
-        await foreach (var item in connection.QueryAsync<SimpleDto>(
+        await foreach (var item in connection.QueryStreamAsync<SimpleDto>(
             "SELECT toInt32(1) as Id, 'test' as Name, now() as ExtraColumn"))
         {
             items.Add(item);
@@ -407,7 +407,7 @@ public class DataReaderTests
 
         var items = new List<NullableDto>();
         // Use CAST to get proper Nullable types
-        await foreach (var item in connection.QueryAsync<NullableDto>(
+        await foreach (var item in connection.QueryStreamAsync<NullableDto>(
             "SELECT CAST(NULL AS Nullable(Int32)) as NullableId, CAST('hello' AS Nullable(String)) as NullableName"))
         {
             items.Add(item);
@@ -425,7 +425,7 @@ public class DataReaderTests
         await connection.OpenAsync();
 
         var count = 0;
-        await foreach (var item in connection.QueryAsync<SimpleDto>(
+        await foreach (var item in connection.QueryStreamAsync<SimpleDto>(
             "SELECT toInt32(1) as Id, 'test' as Name WHERE 1 = 0"))
         {
             count++;
@@ -442,7 +442,7 @@ public class DataReaderTests
 
         var items = new List<SimpleDto>();
         // Column names differ in case from property names
-        await foreach (var item in connection.QueryAsync<SimpleDto>(
+        await foreach (var item in connection.QueryStreamAsync<SimpleDto>(
             "SELECT toInt32(42) as ID, 'test' as NAME"))
         {
             items.Add(item);

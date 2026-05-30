@@ -53,7 +53,7 @@ public class IgnoreAttributeReadSemanticsTests : IAsyncLifetime
         await conn.OpenAsync();
 
         var rows = new List<RowWithIgnore>();
-        await foreach (var row in conn.QueryAsync<RowWithIgnore>(
+        await foreach (var row in conn.QueryStreamAsync<RowWithIgnore>(
             $"SELECT user_id, display_name, ignored_field FROM {_table} ORDER BY user_id"))
         {
             rows.Add(row);
@@ -94,7 +94,7 @@ public class IgnoreAttributeReadSemanticsTests : IAsyncLifetime
         await conn.OpenAsync();
 
         var rows = new List<RowWithIgnore>();
-        await foreach (var row in conn.QueryAsync<RowWithIgnore>(
+        await foreach (var row in conn.QueryStreamAsync<RowWithIgnore>(
             $"SELECT user_id, display_name, ignored_field FROM {_table} ORDER BY user_id"))
         {
             rows.Add(row);
@@ -112,7 +112,7 @@ public class IgnoreAttributeReadSemanticsTests : IAsyncLifetime
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
-            await foreach (var _ in conn.QueryAsync<RecordWithIgnoredCtorParam>(
+            await foreach (var _ in conn.QueryStreamAsync<RecordWithIgnoredCtorParam>(
                 $"SELECT user_id, display_name, ignored_field FROM {_table}"))
             {
             }

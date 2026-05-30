@@ -74,7 +74,7 @@ public class LinqSmokeTests
                 .OrderBy(r => r.Name)
                 .ToListAsync();
 
-            var driverResults = await DriverQueryHelper.QueryAsync(
+            var driverResults = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT id, name, amount, category FROM {table} WHERE amount > 100 ORDER BY name");
 
@@ -109,7 +109,7 @@ public class LinqSmokeTests
                 .OrderBy(r => r.Id)
                 .ToListAsync();
 
-            var driverResults = await DriverQueryHelper.QueryAsync(
+            var driverResults = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT id, name, amount, category FROM {table} WHERE name LIKE '%li%' ORDER BY id");
 
@@ -141,7 +141,7 @@ public class LinqSmokeTests
                 .OrderBy(r => r.Id)
                 .ToListAsync();
 
-            var driverResults = await DriverQueryHelper.QueryAsync(
+            var driverResults = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT id, name, amount, category FROM {table} WHERE category LIKE 'elec%' ORDER BY id");
 
@@ -174,7 +174,7 @@ public class LinqSmokeTests
                 .Take(3)
                 .ToListAsync();
 
-            var driverResults = await DriverQueryHelper.QueryAsync(
+            var driverResults = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT id, name, amount, category FROM {table} ORDER BY id LIMIT 3 OFFSET 2");
 
@@ -234,7 +234,7 @@ public class LinqSmokeTests
                 .ThenBy(r => r.Amount)
                 .ToListAsync();
 
-            var driverResults = await DriverQueryHelper.QueryAsync(
+            var driverResults = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT id, name, amount, category FROM {table} ORDER BY category, amount");
 
@@ -274,7 +274,7 @@ public class LinqSmokeTests
             var linqResults = await connection.Table<LinqTestRecord>(table)
                 .ToListAsync();
 
-            var driverResults = await DriverQueryHelper.QueryAsync(
+            var driverResults = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT id, name, amount, category FROM {table}");
 
@@ -304,11 +304,11 @@ public class LinqSmokeTests
                 .OrderBy(r => r.Id)
                 .ToSql();
 
-            var native = await NativeQueryHelper.QueryAsync(
+            var native = await NativeQueryHelper.QueryStreamAsync(
                 _fixture.NativeConnectionString, sql);
 
             // Equivalent raw SQL for driver
-            var driver = await DriverQueryHelper.QueryAsync(
+            var driver = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT id, name, amount, category FROM {table} WHERE amount > 50 ORDER BY id");
 

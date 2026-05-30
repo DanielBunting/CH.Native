@@ -1,5 +1,8 @@
 using CH.Native.Ado;
 using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
+using CH.Native.Connection;
 using CH.Native.SmokeTests.Fixtures;
 using CH.Native.SmokeTests.Helpers;
 using Xunit;
@@ -47,19 +50,19 @@ public class ProtocolSmokeTests
             Assert.Equal(100000UL, Convert.ToUInt64(driverCount));
 
             // Compare checksum of all data
-            var nativeChecksum = await NativeQueryHelper.QueryAsync(
+            var nativeChecksum = await NativeQueryHelper.QueryStreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT sum(sipHash64(id, value)) FROM {table}");
-            var driverChecksum = await DriverQueryHelper.QueryAsync(
+            var driverChecksum = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT sum(sipHash64(id, value)) FROM {table}");
             ResultComparer.AssertResultsEqual(nativeChecksum, driverChecksum, "100K rows checksum");
 
             // Spot-check first, middle, and last rows
-            var native = await NativeQueryHelper.QueryAsync(
+            var native = await NativeQueryHelper.QueryStreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT id, value FROM {table} WHERE id IN (0, 50000, 99999) ORDER BY id");
-            var driver = await DriverQueryHelper.QueryAsync(
+            var driver = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT id, value FROM {table} WHERE id IN (0, 50000, 99999) ORDER BY id");
 
@@ -83,10 +86,10 @@ public class ProtocolSmokeTests
                 _fixture.NativeConnectionString,
                 $"CREATE TABLE {table} (id Int32, val String) ENGINE = Memory");
 
-            var native = await NativeQueryHelper.QueryAsync(
+            var native = await NativeQueryHelper.QueryStreamAsync(
                 _fixture.NativeConnectionString,
                 $"SELECT * FROM {table}");
-            var driver = await DriverQueryHelper.QueryAsync(
+            var driver = await DriverQueryHelper.QueryStreamAsync(
                 _fixture.DriverConnectionString,
                 $"SELECT * FROM {table}");
 
@@ -105,7 +108,7 @@ public class ProtocolSmokeTests
     public async Task ServerVersion_IsNonEmpty()
     {
         // Native driver: use ADO.NET ServerVersion property
-        await using var nativeConn = new ClickHouseDbConnection(_fixture.NativeConnectionString);
+        await using var nativeConn = new ClickHouseConnection(_fixture.NativeConnectionString);
         await nativeConn.OpenAsync();
         var nativeVersion = nativeConn.ServerVersion;
 
@@ -129,10 +132,10 @@ public class ProtocolSmokeTests
         // Generate a query with many columns
         var cols = string.Join(", ", Enumerable.Range(1, 100).Select(i => $"number + {i} AS col_{i}"));
 
-        var native = await NativeQueryHelper.QueryAsync(
+        var native = await NativeQueryHelper.QueryStreamAsync(
             _fixture.NativeConnectionString,
             $"SELECT {cols} FROM numbers(5)");
-        var driver = await DriverQueryHelper.QueryAsync(
+        var driver = await DriverQueryHelper.QueryStreamAsync(
             _fixture.DriverConnectionString,
             $"SELECT {cols} FROM numbers(5)");
 
@@ -143,10 +146,10 @@ public class ProtocolSmokeTests
     public async Task SystemTables_Query()
     {
         // Query a real system table that both drivers must handle
-        var native = await NativeQueryHelper.QueryAsync(
+        var native = await NativeQueryHelper.QueryStreamAsync(
             _fixture.NativeConnectionString,
             "SELECT name, engine FROM system.databases ORDER BY name");
-        var driver = await DriverQueryHelper.QueryAsync(
+        var driver = await DriverQueryHelper.QueryStreamAsync(
             _fixture.DriverConnectionString,
             "SELECT name, engine FROM system.databases ORDER BY name");
 

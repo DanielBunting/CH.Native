@@ -56,7 +56,7 @@ public class AggregateFunctionScenarioTests
                 $"INSERT INTO {src} VALUES (1, 10), (1, 20), (1, 5), (2, 100)");
 
             int rows = 0;
-            await foreach (var r in conn.QueryAsync(
+            await foreach (var r in conn.QueryStreamAsync(
                 $"SELECT id, c_state, s_state, mn_state, mx_state, a_state, al_state FROM {mv} ORDER BY id"))
             {
                 Assert.Equal("count", r.GetFieldValue<ClickHouseAggregateState>("c_state").FunctionName);
@@ -71,7 +71,7 @@ public class AggregateFunctionScenarioTests
 
             // finalizeAggregation cross-check on a subset.
             var totals = new Dictionary<int, (long c, long s, int mn, int mx)>();
-            await foreach (var r in conn.QueryAsync(
+            await foreach (var r in conn.QueryStreamAsync(
                 $"SELECT id, " +
                 $"  toInt64(finalizeAggregation(c_state)) AS c, " +
                 $"  toInt64(finalizeAggregation(s_state)) AS s, " +
@@ -113,7 +113,7 @@ public class AggregateFunctionScenarioTests
         {
             // No INSERTs — MV stays empty.
             int rows = 0;
-            await foreach (var _ in conn.QueryAsync($"SELECT id, s FROM {mv} ORDER BY id"))
+            await foreach (var _ in conn.QueryStreamAsync($"SELECT id, s FROM {mv} ORDER BY id"))
                 rows++;
             Assert.Equal(0, rows);
         }
@@ -148,7 +148,7 @@ public class AggregateFunctionScenarioTests
                 await conn.ExecuteNonQueryAsync($"INSERT INTO {src} VALUES (1, 3), (1, 4), (2, 7)");
 
                 var states = new List<ClickHouseAggregateState>();
-                await foreach (var r in conn.QueryAsync($"SELECT s FROM {mv} ORDER BY id"))
+                await foreach (var r in conn.QueryStreamAsync($"SELECT s FROM {mv} ORDER BY id"))
                     states.Add(r.GetFieldValue<ClickHouseAggregateState>("s"));
 
                 Assert.NotEmpty(states);
@@ -183,7 +183,7 @@ public class AggregateFunctionScenarioTests
             await conn.ExecuteNonQueryAsync($"OPTIMIZE TABLE {table} FINAL");
 
             var got = new Dictionary<int, long>();
-            await foreach (var r in conn.QueryAsync($"SELECT id, total FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT id, total FROM {table} ORDER BY id"))
                 got[r.GetFieldValue<int>("id")] = r.GetFieldValue<long>("total");
 
             Assert.Equal(300L, got[1]); // 100 + 200 merged
@@ -213,7 +213,7 @@ public class AggregateFunctionScenarioTests
             await conn.ExecuteNonQueryAsync($"OPTIMIZE TABLE {table} FINAL");
 
             var got = new Dictionary<int, string>();
-            await foreach (var r in conn.QueryAsync($"SELECT id, smallest FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT id, smallest FROM {table} ORDER BY id"))
                 got[r.GetFieldValue<int>("id")] = r.GetFieldValue<string>("smallest");
 
             Assert.Equal("apple", got[1]);
@@ -251,7 +251,7 @@ public class AggregateFunctionScenarioTests
                 """);
             await conn.ExecuteNonQueryAsync($"OPTIMIZE TABLE {table} FINAL");
 
-            await foreach (var r in conn.QueryAsync($"SELECT id, running_max, sum_state FROM {table}"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT id, running_max, sum_state FROM {table}"))
             {
                 Assert.Equal(1, r.GetFieldValue<int>("id"));
                 Assert.Equal(50, r.GetFieldValue<int>("running_max"));

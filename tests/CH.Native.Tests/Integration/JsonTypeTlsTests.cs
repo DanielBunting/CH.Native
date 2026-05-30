@@ -70,7 +70,7 @@ public class JsonTypeTlsTests
                 INSERT INTO {tableName} VALUES
                 (1, '{{""secure"":true}}')");
 
-            await foreach (var row in connection.QueryAsync($"SELECT data FROM {tableName}"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT data FROM {tableName}"))
             {
                 var data = row.GetFieldValue<JsonDocument>("data");
                 using (data)
@@ -132,7 +132,7 @@ public class JsonTypeTlsTests
                 (2, NULL)");
 
             var results = new List<(ulong id, JsonDocument? data)>();
-            await foreach (var row in connection.QueryAsync($"SELECT id, data FROM {tableName} ORDER BY id"))
+            await foreach (var row in connection.QueryStreamAsync($"SELECT id, data FROM {tableName} ORDER BY id"))
             {
                 var id = row.GetFieldValue<ulong>("id");
                 var data = row.GetFieldValue<JsonDocument?>("data");

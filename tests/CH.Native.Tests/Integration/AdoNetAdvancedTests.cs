@@ -1,6 +1,9 @@
 using System.Data;
 using System.Data.Common;
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.Mapping;
 using CH.Native.Tests.Fixtures;
 using Dapper;
@@ -21,7 +24,7 @@ public class AdoNetAdvancedTests
     [Fact]
     public async Task AdoNet_DbNull_Handling()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var tableName = $"test_dbnull_{Guid.NewGuid():N}";
@@ -82,7 +85,7 @@ public class AdoNetAdvancedTests
     [Fact]
     public async Task AdoNet_GetSchemaTable_ReturnsColumns()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -118,7 +121,7 @@ public class AdoNetAdvancedTests
     [Fact]
     public async Task Dapper_MultiMapping_TwoTables()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var usersTable = $"test_mm_users_{Guid.NewGuid():N}";
@@ -184,30 +187,26 @@ public class AdoNetAdvancedTests
     }
 
     [Fact]
-    public async Task Dapper_QueryMultiple_NotSupported()
+    public async Task Dapper_QueryMultiple_OnlyFirstResultSetAvailable()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
-        // ClickHouse handles multi-statement queries — verify it doesn't throw
-        // (this is different from SQL Server/PostgreSQL which may reject or handle separately)
-        try
-        {
-            using var multi = await connection.QueryMultipleAsync("SELECT 1; SELECT 2");
-            // If it succeeds, we just verify no crash
-            var first = await multi.ReadFirstAsync<int>();
-            Assert.Equal(1, first);
-        }
-        catch (Exception)
-        {
-            // If it does throw, that's also acceptable behavior
-        }
+        // ClickHouse does not support multiple result sets. The server either
+        // rejects multi-statement SQL or silently runs only the first statement.
+        // Either way, only one result set is available — Dapper's GridReader
+        // sees NextResult → false and throws on a second Read call.
+        using var multi = await connection.QueryMultipleAsync("SELECT 1");
+        var first = await multi.ReadFirstAsync<int>();
+        Assert.Equal(1, first);
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => multi.ReadFirstAsync<int>());
     }
 
     [Fact]
     public async Task AdoNet_Prepare_NoOp()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -231,7 +230,7 @@ public class AdoNetAdvancedTests
     [Fact]
     public async Task AdoNet_CommandTimeout_Respected()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -248,7 +247,7 @@ public class AdoNetAdvancedTests
     [Fact]
     public async Task Dapper_InsertAndQuery_SameConnection()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         var tableName = $"test_dapper_iq_{Guid.NewGuid():N}";

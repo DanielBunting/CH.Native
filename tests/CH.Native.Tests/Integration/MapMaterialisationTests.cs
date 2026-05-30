@@ -127,7 +127,7 @@ public class MapMaterialisationTests
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
-        await foreach (var row in connection.QueryAsync<DuplicateMapPoco>(
+        await foreach (var row in connection.QueryStreamAsync<DuplicateMapPoco>(
             "SELECT 1 AS Id, cast(map('a', 1, 'a', 2) as Map(String, Int32)) AS Data"))
         {
             Assert.Equal(1, row.Id);
@@ -146,7 +146,7 @@ public class MapMaterialisationTests
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
-        await foreach (var row in connection.QueryAsync<DuplicateMapDictionaryPoco>(
+        await foreach (var row in connection.QueryStreamAsync<DuplicateMapDictionaryPoco>(
             "SELECT 1 AS Id, cast(map('a', 1, 'a', 2) as Map(String, Int32)) AS Data"))
         {
             Assert.Equal(1, row.Id);
@@ -161,7 +161,7 @@ public class MapMaterialisationTests
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
-        await foreach (var row in connection.QueryAsync<DuplicateMapKvpArrayPoco>(
+        await foreach (var row in connection.QueryStreamAsync<DuplicateMapKvpArrayPoco>(
             "SELECT 1 AS Id, cast(map('a', 1, 'a', 2) as Map(String, Int32)) AS Data"))
         {
             Assert.Equal(1, row.Id);
@@ -199,7 +199,7 @@ public class MapMaterialisationTests
             });
             await inserter.CompleteAsync();
 
-            await foreach (var row in connection.QueryAsync<DuplicateMapPoco>(
+            await foreach (var row in connection.QueryStreamAsync<DuplicateMapPoco>(
                 $"SELECT Id, Data FROM {tableName}"))
             {
                 Assert.Equal(1, row.Id);
@@ -240,7 +240,7 @@ public class MapMaterialisationTests
             });
             await inserter.CompleteAsync();
 
-            await foreach (var row in connection.QueryAsync<DuplicateMapKvpArrayPoco>(
+            await foreach (var row in connection.QueryStreamAsync<DuplicateMapKvpArrayPoco>(
                 $"SELECT Id, Data FROM {tableName}"))
             {
                 Assert.Equal(1, row.Id);
@@ -286,7 +286,7 @@ public class MapMaterialisationTests
             });
             await inserter.CompleteAsync();
 
-            await foreach (var row in connection.QueryAsync<IReadOnlyListMapPoco>(
+            await foreach (var row in connection.QueryStreamAsync<IReadOnlyListMapPoco>(
                 $"SELECT Id, Data FROM {tableName}"))
             {
                 Assert.Equal(1, row.Id);
@@ -382,7 +382,7 @@ public class MapMaterialisationTests
             });
             await inserter.CompleteAsync();
 
-            await foreach (var row in connection.QueryAsync<MixedShapePoco>(
+            await foreach (var row in connection.QueryStreamAsync<MixedShapePoco>(
                 $"SELECT Id, Stats, Audit FROM {tableName}"))
             {
                 Assert.Equal(7, row.Id);

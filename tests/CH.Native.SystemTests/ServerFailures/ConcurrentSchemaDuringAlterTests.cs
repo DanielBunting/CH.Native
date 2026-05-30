@@ -13,7 +13,7 @@ namespace CH.Native.SystemTests.ServerFailures;
 /// schema — only complete pre-ALTER or complete post-ALTER snapshots.
 ///
 /// <para>The native ADO.NET <c>GetSchema("Columns")</c> override is not yet
-/// implemented in <c>ClickHouseDbConnection</c>, so this test queries
+/// implemented in <c>ClickHouseConnection</c>, so this test queries
 /// <c>system.columns</c> directly. The concurrency story is unaffected by
 /// where the schema metadata is fetched from.</para>
 /// </summary>
@@ -117,7 +117,7 @@ public class ConcurrentSchemaDuringAlterTests
         ClickHouseConnection conn, string table)
     {
         var cols = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var row in conn.QueryAsync(
+        await foreach (var row in conn.QueryStreamAsync(
             $"SELECT name FROM system.columns WHERE database = currentDatabase() AND table = '{table}' ORDER BY position"))
         {
             var name = row[0] as string;

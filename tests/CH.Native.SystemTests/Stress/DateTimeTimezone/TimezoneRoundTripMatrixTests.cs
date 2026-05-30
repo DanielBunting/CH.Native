@@ -54,7 +54,7 @@ public class TimezoneRoundTripMatrixTests
             }
 
             DateTime read = default;
-            await foreach (var r in conn.QueryAsync($"SELECT ts FROM {table} ORDER BY id"))
+            await foreach (var r in conn.QueryStreamAsync($"SELECT ts FROM {table} ORDER BY id"))
                 read = r.GetFieldValue<DateTime>(0);
 
             Assert.Equal(DateTimeKind.Utc, read.Kind);

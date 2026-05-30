@@ -77,7 +77,7 @@ public class MapMaterialisationSmokeTests
                 await inserter.CompleteAsync();
             }
 
-            await foreach (var row in connection.QueryAsync<MapPoco>(
+            await foreach (var row in connection.QueryStreamAsync<MapPoco>(
                 $"SELECT Id, Tags FROM {table}"))
             {
                 Assert.Equal(1, row.Id);
@@ -102,7 +102,7 @@ public class MapMaterialisationSmokeTests
         await using var connection = new ClickHouseConnection(_fixture.NativeConnectionString);
         await connection.OpenAsync();
 
-        await foreach (var row in connection.QueryAsync(
+        await foreach (var row in connection.QueryStreamAsync(
             "SELECT cast(map('a', 1, 'b', 2) as Map(String, Int32)) AS m"))
         {
             var value = row[0];

@@ -1,5 +1,8 @@
 using System.Data;
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.Tests.Fixtures;
 using Xunit;
 
@@ -20,7 +23,7 @@ public class AdoNetTests
     [Fact]
     public async Task OpenAsync_ValidConnection_OpensSuccessfully()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
 
         await connection.OpenAsync();
 
@@ -30,7 +33,7 @@ public class AdoNetTests
     [Fact]
     public async Task OpenAsync_SetsServerVersion()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
 
         await connection.OpenAsync();
 
@@ -41,7 +44,7 @@ public class AdoNetTests
     [Fact]
     public async Task OpenAsync_SetsDataSource()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
 
         await connection.OpenAsync();
 
@@ -51,7 +54,7 @@ public class AdoNetTests
     [Fact]
     public void Open_StateTransitions_CorrectlyManaged()
     {
-        using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        using var connection = new ClickHouseConnection(_fixture.ConnectionString);
 
         Assert.Equal(ConnectionState.Closed, connection.State);
 
@@ -65,7 +68,7 @@ public class AdoNetTests
     [Fact]
     public void ConnectionString_SetWhileOpen_ThrowsInvalidOperationException()
     {
-        using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         connection.Open();
 
         var ex = Assert.Throws<InvalidOperationException>(() =>
@@ -77,7 +80,7 @@ public class AdoNetTests
     [Fact]
     public async Task CloseAsync_CanBeCalledMultipleTimes()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         await connection.CloseAsync();
@@ -89,7 +92,7 @@ public class AdoNetTests
     [Fact]
     public void BeginTransaction_ThrowsNotSupportedException()
     {
-        using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         connection.Open();
 
         var ex = Assert.Throws<NotSupportedException>(() =>
@@ -101,7 +104,7 @@ public class AdoNetTests
     [Fact]
     public async Task ChangeDatabase_SwitchesToNewDatabase()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         // Create a test database
@@ -138,7 +141,7 @@ public class AdoNetTests
     [Fact]
     public async Task ExecuteNonQuery_CreateTable_Succeeds()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -161,7 +164,7 @@ public class AdoNetTests
     [Fact]
     public async Task ExecuteScalar_ReturnsFirstColumnFirstRow()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -175,7 +178,7 @@ public class AdoNetTests
     [Fact]
     public async Task ExecuteScalar_WithString_ReturnsString()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -189,7 +192,7 @@ public class AdoNetTests
     [Fact]
     public async Task ExecuteReader_ReturnsMultipleRows()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -209,7 +212,7 @@ public class AdoNetTests
     [Fact]
     public void CommandType_StoredProcedure_ThrowsNotSupportedException()
     {
-        using var cmd = new ClickHouseDbCommand();
+        using var cmd = new ClickHouseCommand();
 
         var ex = Assert.Throws<NotSupportedException>(() =>
             cmd.CommandType = CommandType.StoredProcedure);
@@ -220,7 +223,7 @@ public class AdoNetTests
     [Fact]
     public async Task CommandTimeout_CancelsLongRunningQuery()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -243,12 +246,12 @@ public class AdoNetTests
     [Fact]
     public async Task Parameters_IntParameter_WorksCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT @value as result";
-        cmd.Parameters.Add(new ClickHouseDbParameter { ParameterName = "value", Value = 42 });
+        cmd.Parameters.Add(new ClickHouseParameter { ParameterName = "value", Value = 42 });
 
         var result = await cmd.ExecuteScalarAsync();
 
@@ -258,12 +261,12 @@ public class AdoNetTests
     [Fact]
     public async Task Parameters_StringParameter_WorksCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT @name as result";
-        cmd.Parameters.Add(new ClickHouseDbParameter { ParameterName = "name", Value = "test" });
+        cmd.Parameters.Add(new ClickHouseParameter { ParameterName = "name", Value = "test" });
 
         var result = await cmd.ExecuteScalarAsync();
 
@@ -273,13 +276,13 @@ public class AdoNetTests
     [Fact]
     public async Task Parameters_MultipleParameters_WorkCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT @a + @b as result";
-        cmd.Parameters.Add(new ClickHouseDbParameter { ParameterName = "a", Value = 10 });
-        cmd.Parameters.Add(new ClickHouseDbParameter { ParameterName = "b", Value = 20 });
+        cmd.Parameters.Add(new ClickHouseParameter { ParameterName = "a", Value = 10 });
+        cmd.Parameters.Add(new ClickHouseParameter { ParameterName = "b", Value = 20 });
 
         var result = await cmd.ExecuteScalarAsync();
 
@@ -289,12 +292,12 @@ public class AdoNetTests
     [Fact]
     public async Task Parameters_WithExplicitClickHouseType_UsesSpecifiedType()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT @value as result";
-        cmd.Parameters.Add(new ClickHouseDbParameter
+        cmd.Parameters.Add(new ClickHouseParameter
         {
             ParameterName = "value",
             Value = 123,
@@ -316,7 +319,7 @@ public class AdoNetTests
     [Fact]
     public async Task DataReader_GetFieldCount_ReturnsCorrectCount()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -330,7 +333,7 @@ public class AdoNetTests
     [Fact]
     public async Task DataReader_GetName_ReturnsColumnNames()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -345,7 +348,7 @@ public class AdoNetTests
     [Fact]
     public async Task DataReader_GetOrdinal_ReturnsCorrectIndex()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -360,7 +363,7 @@ public class AdoNetTests
     [Fact]
     public async Task DataReader_TypeGetters_WorkCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -384,7 +387,7 @@ public class AdoNetTests
     [Fact]
     public async Task DataReader_GetFieldValue_WorksForGenericTypes()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -400,7 +403,7 @@ public class AdoNetTests
     [Fact]
     public async Task DataReader_IsDBNull_DetectsNullValues()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -417,7 +420,7 @@ public class AdoNetTests
     [Fact]
     public async Task DataReader_GetSchemaTable_ReturnsColumnMetadata()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -442,7 +445,7 @@ public class AdoNetTests
     [Fact]
     public async Task DataReader_RecordsAffected_ReturnsMinusOne()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -454,9 +457,94 @@ public class AdoNetTests
     }
 
     [Fact]
+    public async Task DataReader_ReadAsync_ReturnsCorrectValuesAcrossManyRows()
+    {
+        // Pins the exact values returned by ReadAsync across a multi-block result
+        // set. Acts as a correctness guard for any future fast-path / state-machine
+        // optimisation on the hot Read/ReadAsync path.
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = @"
+            SELECT
+                toInt64(number)        AS id,
+                concat('row_', toString(number)) AS name,
+                toFloat64(number) * 1.5 AS value,
+                toDateTime('2026-01-01 00:00:00', 'UTC') + INTERVAL number SECOND AS created
+            FROM numbers(5000)
+            ORDER BY number";
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        var baseDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        int expected = 0;
+        while (await reader.ReadAsync())
+        {
+            Assert.Equal(expected, reader.GetInt64(0));
+            Assert.Equal($"row_{expected}", reader.GetString(1));
+            Assert.Equal(expected * 1.5, reader.GetDouble(2), precision: 9);
+            Assert.Equal(baseDate.AddSeconds(expected), reader.GetDateTime(3));
+
+            // Indexer and IsDBNull paths must agree
+            Assert.False(reader.IsDBNull(0));
+            Assert.False(reader.IsDBNull(1));
+            Assert.Equal((long)expected, (long)reader[0]);
+            Assert.Equal($"row_{expected}", (string)reader["name"]);
+
+            expected++;
+        }
+
+        Assert.Equal(5000, expected);
+        Assert.False(await reader.ReadAsync()); // exhausted reader returns false
+        Assert.False(await reader.ReadAsync()); // and stays false on subsequent calls
+    }
+
+    [Fact]
+    public async Task DataReader_SyncRead_MatchesReadAsync()
+    {
+        // Sync Read() is called by Dapper's unbuffered enumerator. Verify it
+        // returns identical values to the async path so any sync-path
+        // optimisation can't silently diverge.
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT toInt32(number) AS n FROM numbers(1000)";
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        int expected = 0;
+        while (reader.Read())
+        {
+            Assert.Equal(expected, reader.GetInt32(0));
+            expected++;
+        }
+
+        Assert.Equal(1000, expected);
+        Assert.False(reader.Read());
+    }
+
+    [Fact]
+    public async Task DataReader_ReadAsync_EmptyResultSet_ReturnsFalseImmediately()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT toInt32(1) AS n WHERE 1 = 0";
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+
+        Assert.False(await reader.ReadAsync());
+        Assert.False(await reader.ReadAsync()); // idempotent
+        Assert.False(reader.Read());
+    }
+
+    [Fact]
     public async Task DataReader_NextResult_ReturnsFalse()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -471,7 +559,7 @@ public class AdoNetTests
     [Fact]
     public async Task DataReader_Indexer_ByOrdinalAndName()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -489,23 +577,23 @@ public class AdoNetTests
     #region Provider Factory Tests
 
     [Fact]
-    public void ProviderFactory_CreateConnection_ReturnsClickHouseDbConnection()
+    public void ProviderFactory_CreateConnection_ReturnsClickHouseConnection()
     {
         var factory = ClickHouseProviderFactory.Instance;
 
         using var connection = factory.CreateConnection();
 
-        Assert.IsType<ClickHouseDbConnection>(connection);
+        Assert.IsType<ClickHouseConnection>(connection);
     }
 
     [Fact]
-    public void ProviderFactory_CreateCommand_ReturnsClickHouseDbCommand()
+    public void ProviderFactory_CreateCommand_ReturnsClickHouseCommand()
     {
         var factory = ClickHouseProviderFactory.Instance;
 
         using var command = factory.CreateCommand();
 
-        Assert.IsType<ClickHouseDbCommand>(command);
+        Assert.IsType<ClickHouseCommand>(command);
     }
 
     [Fact]
@@ -533,7 +621,7 @@ public class AdoNetTests
     [Fact]
     public async Task ExecuteReader_EmptyResult_HasRowsReturnsFalse()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -548,7 +636,7 @@ public class AdoNetTests
     [Fact]
     public async Task ExecuteReader_EmptyResult_SchemaStillAvailable()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -566,7 +654,7 @@ public class AdoNetTests
     [Fact]
     public async Task ExecuteScalar_EmptyResult_ReturnsNull()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -584,7 +672,7 @@ public class AdoNetTests
     [Fact]
     public async Task ExecuteNonQuery_InvalidSql_ThrowsException()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -597,13 +685,13 @@ public class AdoNetTests
     [Fact]
     public async Task ExecuteReader_MissingParameter_ThrowsException()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
         // Reference @missing_param but only provide @existing_param
         cmd.CommandText = "SELECT @missing_param, @existing_param as value";
-        cmd.Parameters.Add(new ClickHouseDbParameter { ParameterName = "existing_param", Value = 1 });
+        cmd.Parameters.Add(new ClickHouseParameter { ParameterName = "existing_param", Value = 1 });
         // Not adding @missing_param
 
         // Exception thrown during parameter rewriting (before query is sent)
@@ -614,7 +702,7 @@ public class AdoNetTests
     [Fact]
     public async Task ExecuteScalar_NonExistentTable_ThrowsException()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -628,7 +716,7 @@ public class AdoNetTests
     [Fact]
     public void ExecuteNonQuery_ConnectionNotOpen_ThrowsInvalidOperationException()
     {
-        using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT 1";
 
@@ -638,7 +726,7 @@ public class AdoNetTests
     [Fact]
     public void ExecuteNonQuery_ConnectionNotSet_ThrowsInvalidOperationException()
     {
-        using var cmd = new ClickHouseDbCommand();
+        using var cmd = new ClickHouseCommand();
         cmd.CommandText = "SELECT 1";
 
         Assert.Throws<InvalidOperationException>(() => cmd.ExecuteNonQuery());
@@ -651,7 +739,7 @@ public class AdoNetTests
     [Fact]
     public async Task Connection_MultipleCommands_ExecuteSequentially()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         // First command
@@ -682,12 +770,12 @@ public class AdoNetTests
     [Fact]
     public async Task Command_Reuse_ExecuteMultipleTimes()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT @value as result";
-        var param = new ClickHouseDbParameter { ParameterName = "value", Value = 0 };
+        var param = new ClickHouseParameter { ParameterName = "value", Value = 0 };
         cmd.Parameters.Add(param);
 
         // Execute multiple times with different parameter values
@@ -702,7 +790,7 @@ public class AdoNetTests
     [Fact]
     public async Task Command_ChangeCommandText_ExecuteDifferentQueries()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -719,7 +807,7 @@ public class AdoNetTests
     [Fact]
     public async Task Connection_ReopenAfterClose_Succeeds()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
 
         // First open/close cycle
         await connection.OpenAsync();
@@ -744,7 +832,7 @@ public class AdoNetTests
     [Fact]
     public async Task DataReader_DisposeBeforeReadingAllRows_Succeeds()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -768,7 +856,7 @@ public class AdoNetTests
     [Fact]
     public async Task DataReader_GetValues_ReturnsAllColumns()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -789,7 +877,7 @@ public class AdoNetTests
     [Fact]
     public async Task DataReader_GetValues_PartialArray_ReturnsSubset()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -810,7 +898,7 @@ public class AdoNetTests
     [Fact]
     public void DataReader_SyncRead_Works()
     {
-        using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         connection.Open(); // Sync open
 
         using var cmd = connection.CreateCommand();
@@ -834,7 +922,7 @@ public class AdoNetTests
     [Fact]
     public async Task ExecuteReader_LargeResultSet_StreamsWithoutOOM()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
@@ -863,12 +951,12 @@ public class AdoNetTests
     [Fact]
     public async Task ExecuteScalar_WithArrayParameter_WorksCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT length(@arr)";
-        cmd.Parameters.Add(new ClickHouseDbParameter { ParameterName = "arr", Value = new int[] { 1, 2, 3, 4, 5 } });
+        cmd.Parameters.Add(new ClickHouseParameter { ParameterName = "arr", Value = new int[] { 1, 2, 3, 4, 5 } });
 
         var result = await cmd.ExecuteScalarAsync();
         Assert.Equal(5UL, result);
@@ -877,12 +965,12 @@ public class AdoNetTests
     [Fact]
     public async Task ExecuteScalar_WithArrayParameterHasAny_FiltersCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT count() FROM numbers(10) WHERE hasAny([number], @ids)";
-        cmd.Parameters.Add(new ClickHouseDbParameter { ParameterName = "ids", Value = new ulong[] { 2, 4, 6, 8 } });
+        cmd.Parameters.Add(new ClickHouseParameter { ParameterName = "ids", Value = new ulong[] { 2, 4, 6, 8 } });
 
         var result = await cmd.ExecuteScalarAsync();
         Assert.Equal(4UL, result);
@@ -891,12 +979,12 @@ public class AdoNetTests
     [Fact]
     public async Task ExecuteScalar_WithStringArrayParameter_WorksCorrectly()
     {
-        await using var connection = new ClickHouseDbConnection(_fixture.ConnectionString);
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         using var cmd = connection.CreateCommand();
         cmd.CommandText = "SELECT arrayStringConcat(@names, ', ')";
-        cmd.Parameters.Add(new ClickHouseDbParameter { ParameterName = "names", Value = new string[] { "Alice", "Bob", "Charlie" } });
+        cmd.Parameters.Add(new ClickHouseParameter { ParameterName = "names", Value = new string[] { "Alice", "Bob", "Charlie" } });
 
         var result = await cmd.ExecuteScalarAsync();
         Assert.Equal("Alice, Bob, Charlie", result);

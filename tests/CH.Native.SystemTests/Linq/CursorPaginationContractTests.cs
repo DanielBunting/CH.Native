@@ -76,7 +76,7 @@ public class CursorPaginationContractTests : IAsyncLifetime
             var sql = $"SELECT ts, id, body FROM {_table} {whereClause} ORDER BY ts, id LIMIT {pageSize}";
 
             var rows = new List<EventRow>();
-            await foreach (var row in conn.QueryAsync<EventRow>(sql))
+            await foreach (var row in conn.QueryStreamAsync<EventRow>(sql))
                 rows.Add(row);
 
             if (rows.Count == 0) break;

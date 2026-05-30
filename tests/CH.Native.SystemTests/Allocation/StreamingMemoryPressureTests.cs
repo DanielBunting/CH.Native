@@ -39,8 +39,8 @@ public class StreamingMemoryPressureTests
         await using var conn = new ClickHouseConnection(_fx.BuildSettings());
         await conn.OpenAsync();
 
-        var smallRetained = await MeasureRetainedAfterStreamAsync(conn, rowCount: 100_000);
-        var largeRetained = await MeasureRetainedAfterStreamAsync(conn, rowCount: 1_000_000);
+        var smallRetained = await MeasureRetainedAfterQueryStreamAsync(conn, rowCount: 100_000);
+        var largeRetained = await MeasureRetainedAfterQueryStreamAsync(conn, rowCount: 1_000_000);
 
         _output.WriteLine($"100k rows retained after GC: {smallRetained:N0} bytes");
         _output.WriteLine($"  1M rows retained after GC: {largeRetained:N0} bytes");
@@ -65,7 +65,7 @@ public class StreamingMemoryPressureTests
             $"(ceiling {ceilingBytes:N0}).");
     }
 
-    private static async Task<long> MeasureRetainedAfterStreamAsync(ClickHouseConnection conn, int rowCount)
+    private static async Task<long> MeasureRetainedAfterQueryStreamAsync(ClickHouseConnection conn, int rowCount)
     {
         // Drain finalizers and Gen2 before capturing the baseline.
         GC.Collect();
@@ -74,7 +74,7 @@ public class StreamingMemoryPressureTests
         var start = GC.GetTotalMemory(forceFullCollection: true);
 
         ulong sum = 0;
-        await foreach (var row in conn.QueryAsync($"SELECT number FROM numbers({rowCount})"))
+        await foreach (var row in conn.QueryStreamAsync($"SELECT number FROM numbers({rowCount})"))
         {
             sum += Convert.ToUInt64(row[0]);
         }
@@ -104,7 +104,7 @@ public class StreamingMemoryPressureTests
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         long rowCount = 0;
-        await foreach (var _ in conn.QueryAsync("SELECT number FROM numbers(5000000)"))
+        await foreach (var _ in conn.QueryStreamAsync("SELECT number FROM numbers(5000000)"))
         {
             rowCount++;
         }

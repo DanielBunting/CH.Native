@@ -1,6 +1,9 @@
 using System.Collections.Concurrent;
+using System.Data.Common;
+using CH.Native.Ado;
 using CH.Native.BulkInsert;
 using CH.Native.Linq;
+using CH.Native.Resilience;
 using CH.Native.Telemetry;
 
 namespace CH.Native.Connection;
@@ -14,7 +17,7 @@ namespace CH.Native.Connection;
 /// the returned connection — disposing it returns the connection to the pool
 /// instead of closing the socket.
 /// </summary>
-public sealed class ClickHouseDataSource : IAsyncDisposable
+public sealed class ClickHouseDataSource : DbDataSource
 {
     private readonly ClickHouseDataSourceOptions _options;
     private readonly ConcurrentStack<PoolEntry> _idle = new();
@@ -153,6 +156,22 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
     /// <summary>The baseline connection settings.</summary>
     public ClickHouseConnectionSettings Settings => _options.Settings;
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// The canonical password-less connection-string representation of the
+    /// baseline <see cref="Settings"/> (mirrors <see cref="ClickHouseConnection.ConnectionString"/>).
+    /// </remarks>
+    public override string ConnectionString => _options.Settings.ToString();
+
+    /// <summary>
+    /// The resilience policy (retry / circuit-breaker options) configured on the
+    /// baseline <see cref="Settings"/>, or <c>null</c> if none was set. Exposed so an
+    /// ADO/Dapper consumer holding the DataSource can discover the same policy that
+    /// connections opened from it apply on connect (see
+    /// <see cref="ClickHouseConnection.OpenAsync"/>).
+    /// </summary>
+    public ResilienceOptions? Resilience => _options.Settings.Resilience;
+
     /// <summary>The pool configuration.</summary>
     public ClickHouseDataSourceOptions Options => _options;
 
@@ -161,7 +180,7 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
     /// if no idle one is available. The returned <see cref="ClickHouseConnection"/>
     /// transparently returns itself to the pool on disposal.
     /// </summary>
-    public async ValueTask<ClickHouseConnection> OpenConnectionAsync(CancellationToken cancellationToken = default)
+    public new async ValueTask<ClickHouseConnection> OpenConnectionAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
@@ -250,6 +269,56 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
             throw;
         }
     }
+
+    /// <summary>
+    /// <see cref="DbDataSource"/> hook backing <see cref="DbDataSource.OpenConnectionAsync"/>.
+    /// Routes through the pool (so ADO/Dapper consumers that hold a
+    /// <see cref="DbDataSource"/> get pooling, credential providers, and keyed
+    /// services identically to the native <see cref="OpenConnectionAsync"/> path).
+    /// </summary>
+    protected override async ValueTask<DbConnection> OpenDbConnectionAsync(CancellationToken cancellationToken = default) =>
+        await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// <see cref="DbDataSource"/> hook backing the synchronous
+    /// <see cref="DbDataSource.OpenConnection"/>. Bridges the async pooled rent
+    /// via <see cref="Task.Run(Func{Task})"/> so a captured single-threaded
+    /// <see cref="SynchronizationContext"/> can't deadlock against the pool.
+    /// </summary>
+    protected override DbConnection OpenDbConnection() =>
+        Task.Run(async () => (DbConnection)await OpenConnectionAsync().ConfigureAwait(false)).GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Creates an <i>unopened</i> native connection bound to this DataSource's
+    /// <b>baseline</b> settings. Mirrors <see cref="DbDataSource.CreateConnection"/>
+    /// in shape: the returned instance is NOT pooled — it exists so callers
+    /// can use the ADO "construct, configure, open" lifecycle and so DI can
+    /// register <see cref="DbConnection"/> / <see cref="System.Data.IDbConnection"/>
+    /// / <see cref="ClickHouseConnection"/> as transients without sync-over-async
+    /// at registration time.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Credential providers (JWT / SSH key / rotating password) are NOT
+    /// applied on this path.</b> They run only through the pool, on
+    /// <see cref="OpenConnectionAsync"/> / <see cref="OpenDbConnectionAsync"/>.
+    /// If your DataSource is configured with a credential provider, prefer
+    /// the pooled paths — the transient path will use the baseline credential
+    /// (whatever was on the original settings) and may handshake-fail.
+    /// </para>
+    /// </remarks>
+    public new ClickHouseConnection CreateConnection()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return new ClickHouseConnection(_options.Settings);
+    }
+
+    /// <summary>
+    /// <see cref="DbDataSource"/> hook backing the non-generic
+    /// <see cref="DbDataSource.CreateConnection"/>. Delegates to the typed
+    /// <see cref="CreateConnection"/> so both entry points share one path.
+    /// </summary>
+    protected override DbConnection CreateDbConnection() => CreateConnection();
 
     /// <summary>
     /// Non-throwing health probe: rents a connection, runs <c>SELECT 1</c>,
@@ -418,8 +487,25 @@ public sealed class ClickHouseDataSource : IAsyncDisposable
             TotalEvicted: Interlocked.Read(ref _totalEvicted));
     }
 
+    /// <summary>
+    /// Synchronous dispose (the <see cref="DbDataSource.Dispose()"/> path).
+    /// Bridges into <see cref="DisposeAsyncCore"/> via
+    /// <see cref="Task.Run(Func{Task})"/> so a captured single-threaded
+    /// <see cref="SynchronizationContext"/> (UI / classic ASP.NET, or the
+    /// generic-host shutdown path that DI's ServiceProvider sync-Dispose runs
+    /// on) cannot deadlock against the pool's async drain. The async
+    /// <see cref="DbDataSource.DisposeAsync"/> path reaches the same drain
+    /// directly via <see cref="DisposeAsyncCore"/> (no bridge), and the
+    /// <c>_disposed</c> latch makes the two idempotent against each other.
+    /// </summary>
+    protected override void Dispose(bool disposing)
+    {
+        if (!disposing) return;
+        Task.Run(async () => await DisposeAsyncCore().ConfigureAwait(false)).GetAwaiter().GetResult();
+    }
+
     /// <summary>Disposes all pooled connections and blocks further rents.</summary>
-    public async ValueTask DisposeAsync()
+    protected override async ValueTask DisposeAsyncCore()
     {
         if (_disposed) return;
         _disposed = true;

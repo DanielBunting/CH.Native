@@ -217,21 +217,22 @@ public sealed class ResilientConnection : IAsyncDisposable
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>An async enumerable of rows.</returns>
-    public async IAsyncEnumerable<ClickHouseRow> QueryAsync(
+    public async IAsyncEnumerable<ClickHouseRow> QueryStreamAsync(
         string sql,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
 
-        await foreach (var row in _currentConnection!.QueryAsync(sql, cancellationToken).ConfigureAwait(false))
+        await foreach (var row in _currentConnection!.QueryStreamAsync(sql, cancellationToken).ConfigureAwait(false))
         {
             yield return row;
         }
     }
 
     /// <summary>
-    /// Executes a query and returns an async enumerable of mapped objects.
+    /// Streams typed mapped objects. Renamed from <c>QueryAsync</c> in Phase 2
+    /// for naming parity with <see cref="Connection.ClickHouseConnection.QueryStreamAsync{T}(string, CancellationToken, string?)"/>.
     /// </summary>
     /// <remarks>
     /// Resilience features (retry, circuit breaker) are applied to connection establishment only.
@@ -241,14 +242,14 @@ public sealed class ResilientConnection : IAsyncDisposable
     /// <param name="sql">The SQL query to execute.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>An async enumerable of mapped objects.</returns>
-    public async IAsyncEnumerable<T> QueryAsync<T>(
+    public async IAsyncEnumerable<T> QueryStreamAsync<T>(
         string sql,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         await EnsureConnectedAsync(cancellationToken).ConfigureAwait(false);
 
-        await foreach (var item in _currentConnection!.QueryAsync<T>(sql, cancellationToken).ConfigureAwait(false))
+        await foreach (var item in _currentConnection!.QueryStreamAsync<T>(sql, cancellationToken).ConfigureAwait(false))
         {
             yield return item;
         }

@@ -23,7 +23,7 @@ public class GeoTypeTests
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
-        await foreach (var row in connection.QueryAsync(
+        await foreach (var row in connection.QueryStreamAsync(
             "SELECT toTypeName(CAST((1.0, 2.0) AS Point)) AS p, " +
             "toTypeName(CAST([(1.0,2.0)] AS Ring)) AS r, " +
             "toTypeName(CAST([(1.0,2.0)] AS LineString)) AS ls, " +
@@ -61,7 +61,7 @@ public class GeoTypeTests
             await inserter.CompleteAsync();
 
             var results = new List<Point>();
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT geom FROM {tableName} ORDER BY id"))
             {
                 results.Add(row.GetFieldValue<Point>("geom"));
@@ -103,7 +103,7 @@ public class GeoTypeTests
             await inserter.CompleteAsync();
 
             var results = new List<Point[]>();
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT geom FROM {tableName} ORDER BY id"))
             {
                 results.Add((Point[])row.GetFieldValue<object>("geom"));
@@ -146,7 +146,7 @@ public class GeoTypeTests
             await inserter.CompleteAsync();
 
             var results = new List<Point[]>();
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT geom FROM {tableName} ORDER BY id"))
             {
                 results.Add((Point[])row.GetFieldValue<object>("geom"));
@@ -190,7 +190,7 @@ public class GeoTypeTests
             await inserter.CompleteAsync();
 
             Point[][]? read = null;
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT geom FROM {tableName} WHERE id = 1"))
             {
                 read = (Point[][])row.GetFieldValue<object>("geom");
@@ -232,7 +232,7 @@ public class GeoTypeTests
             await inserter.CompleteAsync();
 
             Point[][]? read = null;
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT geom FROM {tableName} WHERE id = 1"))
             {
                 read = (Point[][])row.GetFieldValue<object>("geom");
@@ -280,7 +280,7 @@ public class GeoTypeTests
             await inserter.CompleteAsync();
 
             Point[][][]? read = null;
-            await foreach (var row in connection.QueryAsync(
+            await foreach (var row in connection.QueryStreamAsync(
                 $"SELECT geom FROM {tableName} WHERE id = 1"))
             {
                 read = (Point[][][])row.GetFieldValue<object>("geom");

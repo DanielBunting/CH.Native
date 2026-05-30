@@ -16,17 +16,45 @@ public static partial class SqlParameterRewriter
     [GeneratedRegex(@"(?<!@)@([a-zA-Z_][a-zA-Z0-9_]*)", RegexOptions.Compiled)]
     private static partial Regex ParameterPattern();
 
+    // ClickHouse 26.x's parser misinterprets {limit:Type} / {offset:Type} as
+    // the start of a LIMIT/OFFSET clause and rejects the rewritten SQL with
+    // CANNOT_PARSE_QUOTED_STRING ("expected opening quote ''', got '1'").
+    // Other SQL keywords (select, from, where, group, order, …) work fine as
+    // placeholder names; only the two tail-clause keywords that take a numeric
+    // argument trip the parser. Reject these names early so callers get a
+    // diagnostic pointing at the workaround instead of a cryptic server error.
+    // See: https://github.com/ClickHouse/ClickHouse/issues -- reserved tail-clause keywords.
+    private static readonly HashSet<string> s_unsafeParameterNames =
+        new(StringComparer.OrdinalIgnoreCase) { "limit", "offset" };
+
     /// <summary>
     /// Rewrites SQL from @param syntax to {param:Type} syntax.
     /// </summary>
     /// <param name="sql">The original SQL with @param placeholders.</param>
     /// <param name="parameters">The parameter collection.</param>
     /// <returns>The rewritten SQL with ClickHouse parameter syntax.</returns>
-    /// <exception cref="ArgumentException">Thrown when a referenced parameter is not provided.</exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when a referenced parameter is not provided, or when a parameter
+    /// is named <c>limit</c>/<c>offset</c> — ClickHouse's parser cannot accept
+    /// those as placeholder names.
+    /// </exception>
     public static string Rewrite(string sql, ClickHouseParameterCollection parameters)
     {
         if (parameters.Count == 0)
             return sql;
+
+        foreach (var p in parameters)
+        {
+            if (s_unsafeParameterNames.Contains(p.ParameterName))
+            {
+                throw new ArgumentException(
+                    $"Parameter name '{p.ParameterName}' collides with a ClickHouse tail-clause keyword. " +
+                    $"The server parser misinterprets `{{{p.ParameterName}:Type}}` as the start of a " +
+                    $"LIMIT/OFFSET clause and rejects the query with CANNOT_PARSE_QUOTED_STRING. " +
+                    $"Rename the parameter (e.g. '{p.ParameterName}_value' or 'max_{p.ParameterName}').",
+                    nameof(parameters));
+            }
+        }
 
         return ParameterPattern().Replace(sql, match =>
         {

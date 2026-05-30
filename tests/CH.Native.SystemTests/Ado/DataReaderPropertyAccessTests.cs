@@ -1,5 +1,8 @@
 using System.Diagnostics;
 using CH.Native.Ado;
+using CH.Native.Connection;
+using CH.Native.Commands;
+using CH.Native.Results;
 using CH.Native.SystemTests.Fixtures;
 using Xunit;
 
@@ -22,7 +25,7 @@ public class DataReaderPropertyAccessTests
     [Fact]
     public async Task FieldCount_RepeatedAccess_RemainsCheap()
     {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         using var cmd = conn.CreateCommand();
@@ -51,7 +54,7 @@ public class DataReaderPropertyAccessTests
     [Fact]
     public async Task FirstRowBuffered_PriorPropertyAccess_DoesNotConsumeIt()
     {
-        await using var conn = new ClickHouseDbConnection(_fx.ConnectionString);
+        await using var conn = new ClickHouseConnection(_fx.ConnectionString);
         await conn.OpenAsync();
 
         using var cmd = conn.CreateCommand();

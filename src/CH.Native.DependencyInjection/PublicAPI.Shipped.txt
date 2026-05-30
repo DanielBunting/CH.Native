@@ -76,6 +76,8 @@ CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithJwtProvider<TProv
 CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithPasswordProvider(System.Func<System.IServiceProvider!, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<string!>>!>! factory) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
 CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithPasswordProvider<TProvider>() -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
 CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithPool(System.Action<CH.Native.Connection.ClickHouseDataSourceOptions!>! configure) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithResilience(CH.Native.Resilience.ResilienceOptions! options) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
+CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithResilience(System.Action<CH.Native.Connection.ResilienceOptionsBuilder!>! configure) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
 CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithSshKeyProvider(System.Func<System.IServiceProvider!, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<CH.Native.DependencyInjection.SshKeyMaterial!>>!>! factory) -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
 CH.Native.DependencyInjection.IClickHouseDataSourceBuilder.WithSshKeyProvider<TProvider>() -> CH.Native.DependencyInjection.IClickHouseDataSourceBuilder!
 CH.Native.DependencyInjection.IClickHouseJwtProvider
