@@ -80,22 +80,6 @@ CH.Native.Commands.ClickHouseCommand.QueryId.set -> void
 CH.Native.Commands.ClickHouseCommand.QueryStreamAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Results.ClickHouseRow>!
 CH.Native.Commands.ClickHouseCommand.QueryStreamAsync<T>(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Collections.Generic.IAsyncEnumerable<T>!
 CH.Native.Commands.ClickHouseCommand.Roles.get -> System.Collections.Generic.IList<string!>!
-override CH.Native.Commands.ClickHouseCommand.Cancel() -> void
-override CH.Native.Commands.ClickHouseCommand.CommandText.get -> string!
-override CH.Native.Commands.ClickHouseCommand.CommandText.set -> void
-override CH.Native.Commands.ClickHouseCommand.CommandTimeout.get -> int
-override CH.Native.Commands.ClickHouseCommand.CommandTimeout.set -> void
-override CH.Native.Commands.ClickHouseCommand.CommandType.get -> System.Data.CommandType
-override CH.Native.Commands.ClickHouseCommand.CommandType.set -> void
-override CH.Native.Commands.ClickHouseCommand.DesignTimeVisible.get -> bool
-override CH.Native.Commands.ClickHouseCommand.DesignTimeVisible.set -> void
-override CH.Native.Commands.ClickHouseCommand.ExecuteNonQuery() -> int
-override CH.Native.Commands.ClickHouseCommand.ExecuteNonQueryAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<int>!
-override CH.Native.Commands.ClickHouseCommand.ExecuteScalar() -> object?
-override CH.Native.Commands.ClickHouseCommand.ExecuteScalarAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<object?>!
-override CH.Native.Commands.ClickHouseCommand.Prepare() -> void
-override CH.Native.Commands.ClickHouseCommand.UpdatedRowSource.get -> System.Data.UpdateRowSource
-override CH.Native.Commands.ClickHouseCommand.UpdatedRowSource.set -> void
 CH.Native.Commands.ClickHouseParameter
 CH.Native.Commands.ClickHouseParameter.ClickHouseParameter() -> void
 CH.Native.Commands.ClickHouseParameter.ClickHouseParameter(string! name, object? value) -> void
@@ -157,7 +141,6 @@ CH.Native.Connection.ClickHouseConnection.ChangeRolesAsync(System.Collections.Ge
 CH.Native.Connection.ClickHouseConnection.ClickHouseConnection() -> void
 CH.Native.Connection.ClickHouseConnection.ClickHouseConnection(CH.Native.Connection.ClickHouseConnectionSettings! settings) -> void
 CH.Native.Connection.ClickHouseConnection.ClickHouseConnection(string! connectionString) -> void
-override CH.Native.Connection.ClickHouseConnection.CloseAsync() -> System.Threading.Tasks.Task!
 CH.Native.Connection.ClickHouseConnection.CloseAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task!
 CH.Native.Connection.ClickHouseConnection.CreateBulkInserter(string! database, string! tableName, System.Collections.Generic.IReadOnlyList<string!>! columnNames, CH.Native.BulkInsert.BulkInsertOptions? options = null) -> CH.Native.BulkInsert.DynamicBulkInserter!
 CH.Native.Connection.ClickHouseConnection.CreateBulkInserter(string! tableName, System.Collections.Generic.IReadOnlyList<string!>! columnNames, CH.Native.BulkInsert.BulkInsertOptions? options = null) -> CH.Native.BulkInsert.DynamicBulkInserter!
@@ -166,7 +149,6 @@ CH.Native.Connection.ClickHouseConnection.CreateBulkInserter<T>(string! tableNam
 CH.Native.Connection.ClickHouseConnection.CreateCommand() -> CH.Native.Commands.ClickHouseCommand!
 CH.Native.Connection.ClickHouseConnection.CreateCommand(string! sql) -> CH.Native.Commands.ClickHouseCommand!
 CH.Native.Connection.ClickHouseConnection.CurrentQueryId.get -> string?
-override CH.Native.Connection.ClickHouseConnection.DisposeAsync() -> System.Threading.Tasks.ValueTask
 CH.Native.Connection.ClickHouseConnection.ExecuteNonQueryAsync(string! sql, System.IProgress<CH.Native.Data.QueryProgress>? progress = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Threading.Tasks.Task<long>!
 CH.Native.Connection.ClickHouseConnection.ExecuteReaderAsync(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Threading.Tasks.Task<CH.Native.Results.ClickHouseDataReader!>!
 CH.Native.Connection.ClickHouseConnection.ExecuteScalarAsync<T>(string! sql, System.IProgress<CH.Native.Data.QueryProgress>? progress = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Threading.Tasks.Task<T?>!
@@ -176,7 +158,6 @@ CH.Native.Connection.ClickHouseConnection.IsOpen.get -> bool
 CH.Native.Connection.ClickHouseConnection.KillQueryAsync(string! queryId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 CH.Native.Connection.ClickHouseConnection.LastQueryId.get -> string?
 CH.Native.Connection.ClickHouseConnection.NegotiatedProtocolVersion.get -> int
-override CH.Native.Connection.ClickHouseConnection.OpenAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 CH.Native.Connection.ClickHouseConnection.QueryStreamAsync(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Results.ClickHouseRow>!
 CH.Native.Connection.ClickHouseConnection.QueryStreamAsync<T>(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<T>!
 CH.Native.Connection.ClickHouseConnection.QueryTypedAsync<T>(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<T>!
@@ -264,11 +245,13 @@ CH.Native.Connection.ClickHouseDataSource.CreateBulkInserterAsync(string! databa
 CH.Native.Connection.ClickHouseDataSource.CreateBulkInserterAsync(string! tableName, System.Collections.Generic.IReadOnlyList<string!>! columnNames, CH.Native.BulkInsert.BulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.BulkInsert.DynamicBulkInserter!>
 CH.Native.Connection.ClickHouseDataSource.CreateBulkInserterAsync<T>(string! database, string! tableName, CH.Native.BulkInsert.BulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.BulkInsert.BulkInserter<T!>!>
 CH.Native.Connection.ClickHouseDataSource.CreateBulkInserterAsync<T>(string! tableName, CH.Native.BulkInsert.BulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.BulkInsert.BulkInserter<T!>!>
+CH.Native.Connection.ClickHouseDataSource.CreateConnection() -> CH.Native.Connection.ClickHouseConnection!
 CH.Native.Connection.ClickHouseDataSource.GetStatistics() -> CH.Native.Connection.DataSourceStatistics
 CH.Native.Connection.ClickHouseDataSource.OpenConnectionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.Connection.ClickHouseConnection!>
 CH.Native.Connection.ClickHouseDataSource.Options.get -> CH.Native.Connection.ClickHouseDataSourceOptions!
 CH.Native.Connection.ClickHouseDataSource.PingAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<bool>
 CH.Native.Connection.ClickHouseDataSource.PrewarmTask.get -> System.Threading.Tasks.Task!
+CH.Native.Connection.ClickHouseDataSource.Resilience.get -> CH.Native.Resilience.ResilienceOptions?
 CH.Native.Connection.ClickHouseDataSource.Settings.get -> CH.Native.Connection.ClickHouseConnectionSettings!
 CH.Native.Connection.ClickHouseDataSource.Table<T>() -> System.Linq.IQueryable<T>!
 CH.Native.Connection.ClickHouseDataSource.Table<T>(string! tableName) -> System.Linq.IQueryable<T>!
@@ -325,9 +308,6 @@ CH.Native.Data.AggregateState.ClickHouseAggregateState.ClickHouseAggregateState(
 CH.Native.Data.AggregateState.ClickHouseAggregateState.Equals(CH.Native.Data.AggregateState.ClickHouseAggregateState? other) -> bool
 CH.Native.Data.AggregateState.ClickHouseAggregateState.FunctionName.get -> string!
 CH.Native.Data.AggregateState.ClickHouseAggregateState.State.get -> byte[]!
-override CH.Native.Data.AggregateState.ClickHouseAggregateState.Equals(object? obj) -> bool
-override CH.Native.Data.AggregateState.ClickHouseAggregateState.GetHashCode() -> int
-static readonly CH.Native.Data.AggregateState.ClickHouseAggregateState.Empty -> CH.Native.Data.AggregateState.ClickHouseAggregateState!
 CH.Native.Data.Block
 CH.Native.Data.Block.Block() -> void
 CH.Native.Data.Block.BlockHeader
@@ -361,6 +341,14 @@ CH.Native.Data.BlockInfo.IsOverflows.get -> bool
 CH.Native.Data.BlockInfo.IsOverflows.init -> void
 CH.Native.Data.BlockInfo.Write(ref CH.Native.Protocol.ProtocolWriter writer) -> void
 CH.Native.Data.BlockSizeEstimator
+CH.Native.Data.ClickHouseInterval
+CH.Native.Data.ClickHouseInterval.ClickHouseInterval() -> void
+CH.Native.Data.ClickHouseInterval.ClickHouseInterval(long value, CH.Native.Data.IntervalUnit unit) -> void
+CH.Native.Data.ClickHouseInterval.Equals(CH.Native.Data.ClickHouseInterval other) -> bool
+CH.Native.Data.ClickHouseInterval.IsCalendarUnit.get -> bool
+CH.Native.Data.ClickHouseInterval.ToTimeSpan() -> System.TimeSpan
+CH.Native.Data.ClickHouseInterval.Unit.get -> CH.Native.Data.IntervalUnit
+CH.Native.Data.ClickHouseInterval.Value.get -> long
 CH.Native.Data.ClickHouseMap<TKey, TValue>
 CH.Native.Data.ClickHouseMap<TKey, TValue>.AsSpan() -> System.ReadOnlySpan<System.Collections.Generic.KeyValuePair<TKey, TValue>>
 CH.Native.Data.ClickHouseMap<TKey, TValue>.ClickHouseMap(System.Collections.Generic.IEnumerable<System.Collections.Generic.KeyValuePair<TKey, TValue>>! entries) -> void
@@ -370,12 +358,12 @@ CH.Native.Data.ClickHouseMap<TKey, TValue>.Count.get -> int
 CH.Native.Data.ClickHouseMap<TKey, TValue>.GetEnumerator() -> System.Collections.Generic.IEnumerator<System.Collections.Generic.KeyValuePair<TKey, TValue>>!
 CH.Native.Data.ClickHouseMap<TKey, TValue>.HasDuplicateKeys.get -> bool
 CH.Native.Data.ClickHouseMap<TKey, TValue>.Keys.get -> System.Collections.Generic.IEnumerable<TKey>!
-CH.Native.Data.ClickHouseMap<TKey, TValue>.this[int index].get -> System.Collections.Generic.KeyValuePair<TKey, TValue>
-CH.Native.Data.ClickHouseMap<TKey, TValue>.this[TKey key].get -> TValue
 CH.Native.Data.ClickHouseMap<TKey, TValue>.ToDictionary() -> System.Collections.Generic.Dictionary<TKey, TValue>!
 CH.Native.Data.ClickHouseMap<TKey, TValue>.ToLookup() -> System.Linq.ILookup<TKey, TValue>!
 CH.Native.Data.ClickHouseMap<TKey, TValue>.TryGetValue(TKey key, out TValue value) -> bool
 CH.Native.Data.ClickHouseMap<TKey, TValue>.Values.get -> System.Collections.Generic.IEnumerable<TValue>!
+CH.Native.Data.ClickHouseMap<TKey, TValue>.this[TKey key].get -> TValue
+CH.Native.Data.ClickHouseMap<TKey, TValue>.this[int index].get -> System.Collections.Generic.KeyValuePair<TKey, TValue>
 CH.Native.Data.ColumnReaderFactory
 CH.Native.Data.ColumnReaderFactory.ColumnReaderFactory(CH.Native.Data.ColumnReaderRegistry! registry) -> void
 CH.Native.Data.ColumnReaderFactory.CreateReader(string! typeName) -> CH.Native.Data.IColumnReader!
@@ -414,6 +402,16 @@ CH.Native.Data.ColumnWriterRegistryBuilder.Build() -> CH.Native.Data.ColumnWrite
 CH.Native.Data.ColumnWriterRegistryBuilder.ColumnWriterRegistryBuilder() -> void
 CH.Native.Data.ColumnWriterRegistryBuilder.Register(CH.Native.Data.IColumnWriter! writer) -> CH.Native.Data.ColumnWriterRegistryBuilder!
 CH.Native.Data.ColumnWriterRegistryBuilder.RegisterDefaults() -> CH.Native.Data.ColumnWriterRegistryBuilder!
+CH.Native.Data.Conversion.JaggedToRectangularConverter
+CH.Native.Data.Conversion.RectangularArrayConverter
+CH.Native.Data.DateTime64RawColumn
+CH.Native.Data.DateTime64RawColumn.Count.get -> int
+CH.Native.Data.DateTime64RawColumn.Dispose() -> void
+CH.Native.Data.DateTime64RawColumn.ElementType.get -> System.Type!
+CH.Native.Data.DateTime64RawColumn.GetRawValue(int index) -> long
+CH.Native.Data.DateTime64RawColumn.GetValue(int index) -> object?
+CH.Native.Data.DateTime64RawColumn.Precision.get -> int
+CH.Native.Data.DateTime64RawColumn.Timezone.get -> string?
 CH.Native.Data.DictionaryEncodedColumn<T>
 CH.Native.Data.DictionaryEncodedColumn<T>.Count.get -> int
 CH.Native.Data.DictionaryEncodedColumn<T>.Dictionary.get -> System.ReadOnlySpan<T>
@@ -424,8 +422,6 @@ CH.Native.Data.DictionaryEncodedColumn<T>.ElementType.get -> System.Type!
 CH.Native.Data.DictionaryEncodedColumn<T>.GetValue(int index) -> object?
 CH.Native.Data.DictionaryEncodedColumn<T>.Indices.get -> System.ReadOnlySpan<int>
 CH.Native.Data.DictionaryEncodedColumn<T>.this[int index].get -> T
-CH.Native.Data.Conversion.JaggedToRectangularConverter
-CH.Native.Data.Conversion.RectangularArrayConverter
 CH.Native.Data.Dynamic.ClickHouseDynamic
 CH.Native.Data.Dynamic.ClickHouseDynamic.ClickHouseDynamic() -> void
 CH.Native.Data.Dynamic.ClickHouseDynamic.ClickHouseDynamic(byte discriminator, object? value, string? declaredTypeName) -> void
@@ -506,11 +502,24 @@ CH.Native.Data.ITypedColumn.Count.get -> int
 CH.Native.Data.ITypedColumn.ElementType.get -> System.Type!
 CH.Native.Data.ITypedColumn.GetValue(int index) -> object?
 CH.Native.Data.ITypedColumn.IsNull(int index) -> bool
+CH.Native.Data.IntervalUnit
+CH.Native.Data.IntervalUnit.Day = 6 -> CH.Native.Data.IntervalUnit
+CH.Native.Data.IntervalUnit.Hour = 5 -> CH.Native.Data.IntervalUnit
+CH.Native.Data.IntervalUnit.Microsecond = 1 -> CH.Native.Data.IntervalUnit
+CH.Native.Data.IntervalUnit.Millisecond = 2 -> CH.Native.Data.IntervalUnit
+CH.Native.Data.IntervalUnit.Minute = 4 -> CH.Native.Data.IntervalUnit
+CH.Native.Data.IntervalUnit.Month = 8 -> CH.Native.Data.IntervalUnit
+CH.Native.Data.IntervalUnit.Nanosecond = 0 -> CH.Native.Data.IntervalUnit
+CH.Native.Data.IntervalUnit.Quarter = 9 -> CH.Native.Data.IntervalUnit
+CH.Native.Data.IntervalUnit.Second = 3 -> CH.Native.Data.IntervalUnit
+CH.Native.Data.IntervalUnit.Week = 7 -> CH.Native.Data.IntervalUnit
+CH.Native.Data.IntervalUnit.Year = 10 -> CH.Native.Data.IntervalUnit
 CH.Native.Data.Json.JsonBinaryDecoder
 CH.Native.Data.NullableRawStringColumn
 CH.Native.Data.NullableRawStringColumn.Count.get -> int
 CH.Native.Data.NullableRawStringColumn.Dispose() -> void
 CH.Native.Data.NullableRawStringColumn.ElementType.get -> System.Type!
+CH.Native.Data.NullableRawStringColumn.GetBytesCopy(int index) -> byte[]?
 CH.Native.Data.NullableRawStringColumn.GetValue(int index) -> object?
 CH.Native.Data.QueryProgress
 CH.Native.Data.QueryProgress.BytesRead.get -> ulong
@@ -530,6 +539,8 @@ CH.Native.Data.RawStringColumn
 CH.Native.Data.RawStringColumn.Count.get -> int
 CH.Native.Data.RawStringColumn.Dispose() -> void
 CH.Native.Data.RawStringColumn.ElementType.get -> System.Type!
+CH.Native.Data.RawStringColumn.GetBytesCopy(int index) -> byte[]!
+CH.Native.Data.RawStringColumn.GetRawBytes(int index) -> System.ReadOnlySpan<byte>
 CH.Native.Data.RawStringColumn.GetValue(int index) -> object?
 CH.Native.Data.StringMaterialization
 CH.Native.Data.StringMaterialization.Eager = 0 -> CH.Native.Data.StringMaterialization
@@ -1004,44 +1015,6 @@ CH.Native.Results.ClickHouseDataReader.GetFieldValue<T>(string! name) -> T
 CH.Native.Results.ClickHouseDataReader.GetTypeName(int ordinal) -> string!
 CH.Native.Results.ClickHouseDataReader.IsDBNull(string! name) -> bool
 CH.Native.Results.ClickHouseDataReader.QueryId.get -> string?
-override CH.Native.Results.ClickHouseDataReader.Close() -> void
-override CH.Native.Results.ClickHouseDataReader.CloseAsync() -> System.Threading.Tasks.Task!
-override CH.Native.Results.ClickHouseDataReader.Depth.get -> int
-override CH.Native.Results.ClickHouseDataReader.DisposeAsync() -> System.Threading.Tasks.ValueTask
-override CH.Native.Results.ClickHouseDataReader.FieldCount.get -> int
-override CH.Native.Results.ClickHouseDataReader.GetBoolean(int ordinal) -> bool
-override CH.Native.Results.ClickHouseDataReader.GetByte(int ordinal) -> byte
-override CH.Native.Results.ClickHouseDataReader.GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length) -> long
-override CH.Native.Results.ClickHouseDataReader.GetChar(int ordinal) -> char
-override CH.Native.Results.ClickHouseDataReader.GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length) -> long
-override CH.Native.Results.ClickHouseDataReader.GetDataTypeName(int ordinal) -> string!
-override CH.Native.Results.ClickHouseDataReader.GetDateTime(int ordinal) -> System.DateTime
-override CH.Native.Results.ClickHouseDataReader.GetDecimal(int ordinal) -> decimal
-override CH.Native.Results.ClickHouseDataReader.GetDouble(int ordinal) -> double
-override CH.Native.Results.ClickHouseDataReader.GetEnumerator() -> System.Collections.IEnumerator!
-override CH.Native.Results.ClickHouseDataReader.GetFieldType(int ordinal) -> System.Type!
-override CH.Native.Results.ClickHouseDataReader.GetFieldValue<T>(int ordinal) -> T
-override CH.Native.Results.ClickHouseDataReader.GetFloat(int ordinal) -> float
-override CH.Native.Results.ClickHouseDataReader.GetGuid(int ordinal) -> System.Guid
-override CH.Native.Results.ClickHouseDataReader.GetInt16(int ordinal) -> short
-override CH.Native.Results.ClickHouseDataReader.GetInt32(int ordinal) -> int
-override CH.Native.Results.ClickHouseDataReader.GetInt64(int ordinal) -> long
-override CH.Native.Results.ClickHouseDataReader.GetName(int ordinal) -> string!
-override CH.Native.Results.ClickHouseDataReader.GetOrdinal(string! name) -> int
-override CH.Native.Results.ClickHouseDataReader.GetSchemaTable() -> System.Data.DataTable!
-override CH.Native.Results.ClickHouseDataReader.GetString(int ordinal) -> string!
-override CH.Native.Results.ClickHouseDataReader.GetValue(int ordinal) -> object!
-override CH.Native.Results.ClickHouseDataReader.GetValues(object![]! values) -> int
-override CH.Native.Results.ClickHouseDataReader.HasRows.get -> bool
-override CH.Native.Results.ClickHouseDataReader.IsClosed.get -> bool
-override CH.Native.Results.ClickHouseDataReader.IsDBNull(int ordinal) -> bool
-override CH.Native.Results.ClickHouseDataReader.NextResult() -> bool
-override CH.Native.Results.ClickHouseDataReader.NextResultAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
-override CH.Native.Results.ClickHouseDataReader.Read() -> bool
-override CH.Native.Results.ClickHouseDataReader.ReadAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
-override CH.Native.Results.ClickHouseDataReader.RecordsAffected.get -> int
-override CH.Native.Results.ClickHouseDataReader.this[int ordinal].get -> object!
-override CH.Native.Results.ClickHouseDataReader.this[string! name].get -> object!
 CH.Native.Results.ClickHouseRow
 CH.Native.Results.ClickHouseRow.ClickHouseRow() -> void
 CH.Native.Results.ClickHouseRow.FieldCount.get -> int
@@ -1162,7 +1135,41 @@ override CH.Native.Ado.ClickHouseProviderFactory.CanCreateDataAdapter.get -> boo
 override CH.Native.Ado.ClickHouseProviderFactory.CreateCommand() -> System.Data.Common.DbCommand!
 override CH.Native.Ado.ClickHouseProviderFactory.CreateConnection() -> System.Data.Common.DbConnection!
 override CH.Native.Ado.ClickHouseProviderFactory.CreateParameter() -> System.Data.Common.DbParameter!
+override CH.Native.Commands.ClickHouseCommand.Cancel() -> void
+override CH.Native.Commands.ClickHouseCommand.CommandText.get -> string!
+override CH.Native.Commands.ClickHouseCommand.CommandText.set -> void
+override CH.Native.Commands.ClickHouseCommand.CommandTimeout.get -> int
+override CH.Native.Commands.ClickHouseCommand.CommandTimeout.set -> void
+override CH.Native.Commands.ClickHouseCommand.CommandType.get -> System.Data.CommandType
+override CH.Native.Commands.ClickHouseCommand.CommandType.set -> void
+override CH.Native.Commands.ClickHouseCommand.DesignTimeVisible.get -> bool
+override CH.Native.Commands.ClickHouseCommand.DesignTimeVisible.set -> void
+override CH.Native.Commands.ClickHouseCommand.ExecuteNonQuery() -> int
+override CH.Native.Commands.ClickHouseCommand.ExecuteNonQueryAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<int>!
+override CH.Native.Commands.ClickHouseCommand.ExecuteScalar() -> object?
+override CH.Native.Commands.ClickHouseCommand.ExecuteScalarAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<object?>!
+override CH.Native.Commands.ClickHouseCommand.Prepare() -> void
+override CH.Native.Commands.ClickHouseCommand.UpdatedRowSource.get -> System.Data.UpdateRowSource
+override CH.Native.Commands.ClickHouseCommand.UpdatedRowSource.set -> void
+override CH.Native.Connection.ClickHouseConnection.ChangeDatabase(string! databaseName) -> void
+override CH.Native.Connection.ClickHouseConnection.Close() -> void
+override CH.Native.Connection.ClickHouseConnection.CloseAsync() -> System.Threading.Tasks.Task!
+override CH.Native.Connection.ClickHouseConnection.ConnectionString.get -> string!
+override CH.Native.Connection.ClickHouseConnection.ConnectionString.set -> void
+override CH.Native.Connection.ClickHouseConnection.DataSource.get -> string!
+override CH.Native.Connection.ClickHouseConnection.Database.get -> string!
+override CH.Native.Connection.ClickHouseConnection.DisposeAsync() -> System.Threading.Tasks.ValueTask
+override CH.Native.Connection.ClickHouseConnection.Open() -> void
+override CH.Native.Connection.ClickHouseConnection.OpenAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+override CH.Native.Connection.ClickHouseConnection.ServerVersion.get -> string!
+override CH.Native.Connection.ClickHouseConnection.State.get -> System.Data.ConnectionState
 override CH.Native.Connection.ClickHouseConnectionSettings.ToString() -> string!
+override CH.Native.Connection.ClickHouseDataSource.ConnectionString.get -> string!
+override CH.Native.Data.AggregateState.ClickHouseAggregateState.Equals(object? obj) -> bool
+override CH.Native.Data.AggregateState.ClickHouseAggregateState.GetHashCode() -> int
+override CH.Native.Data.ClickHouseInterval.Equals(object? obj) -> bool
+override CH.Native.Data.ClickHouseInterval.GetHashCode() -> int
+override CH.Native.Data.ClickHouseInterval.ToString() -> string!
 override CH.Native.Data.Dynamic.ClickHouseDynamic.Equals(object? obj) -> bool
 override CH.Native.Data.Dynamic.ClickHouseDynamic.GetHashCode() -> int
 override CH.Native.Data.Dynamic.ClickHouseDynamic.ToString() -> string!
@@ -1177,6 +1184,44 @@ override CH.Native.Numerics.ClickHouseDecimal.GetHashCode() -> int
 override CH.Native.Numerics.ClickHouseDecimal.ToString() -> string!
 override CH.Native.Resilience.ServerAddress.ToString() -> string!
 override CH.Native.Resilience.ServerNode.ToString() -> string!
+override CH.Native.Results.ClickHouseDataReader.Close() -> void
+override CH.Native.Results.ClickHouseDataReader.CloseAsync() -> System.Threading.Tasks.Task!
+override CH.Native.Results.ClickHouseDataReader.Depth.get -> int
+override CH.Native.Results.ClickHouseDataReader.DisposeAsync() -> System.Threading.Tasks.ValueTask
+override CH.Native.Results.ClickHouseDataReader.FieldCount.get -> int
+override CH.Native.Results.ClickHouseDataReader.GetBoolean(int ordinal) -> bool
+override CH.Native.Results.ClickHouseDataReader.GetByte(int ordinal) -> byte
+override CH.Native.Results.ClickHouseDataReader.GetBytes(int ordinal, long dataOffset, byte[]? buffer, int bufferOffset, int length) -> long
+override CH.Native.Results.ClickHouseDataReader.GetChar(int ordinal) -> char
+override CH.Native.Results.ClickHouseDataReader.GetChars(int ordinal, long dataOffset, char[]? buffer, int bufferOffset, int length) -> long
+override CH.Native.Results.ClickHouseDataReader.GetDataTypeName(int ordinal) -> string!
+override CH.Native.Results.ClickHouseDataReader.GetDateTime(int ordinal) -> System.DateTime
+override CH.Native.Results.ClickHouseDataReader.GetDecimal(int ordinal) -> decimal
+override CH.Native.Results.ClickHouseDataReader.GetDouble(int ordinal) -> double
+override CH.Native.Results.ClickHouseDataReader.GetEnumerator() -> System.Collections.IEnumerator!
+override CH.Native.Results.ClickHouseDataReader.GetFieldType(int ordinal) -> System.Type!
+override CH.Native.Results.ClickHouseDataReader.GetFieldValue<T>(int ordinal) -> T
+override CH.Native.Results.ClickHouseDataReader.GetFloat(int ordinal) -> float
+override CH.Native.Results.ClickHouseDataReader.GetGuid(int ordinal) -> System.Guid
+override CH.Native.Results.ClickHouseDataReader.GetInt16(int ordinal) -> short
+override CH.Native.Results.ClickHouseDataReader.GetInt32(int ordinal) -> int
+override CH.Native.Results.ClickHouseDataReader.GetInt64(int ordinal) -> long
+override CH.Native.Results.ClickHouseDataReader.GetName(int ordinal) -> string!
+override CH.Native.Results.ClickHouseDataReader.GetOrdinal(string! name) -> int
+override CH.Native.Results.ClickHouseDataReader.GetSchemaTable() -> System.Data.DataTable!
+override CH.Native.Results.ClickHouseDataReader.GetString(int ordinal) -> string!
+override CH.Native.Results.ClickHouseDataReader.GetValue(int ordinal) -> object!
+override CH.Native.Results.ClickHouseDataReader.GetValues(object![]! values) -> int
+override CH.Native.Results.ClickHouseDataReader.HasRows.get -> bool
+override CH.Native.Results.ClickHouseDataReader.IsClosed.get -> bool
+override CH.Native.Results.ClickHouseDataReader.IsDBNull(int ordinal) -> bool
+override CH.Native.Results.ClickHouseDataReader.NextResult() -> bool
+override CH.Native.Results.ClickHouseDataReader.NextResultAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+override CH.Native.Results.ClickHouseDataReader.Read() -> bool
+override CH.Native.Results.ClickHouseDataReader.ReadAsync(System.Threading.CancellationToken cancellationToken) -> System.Threading.Tasks.Task<bool>!
+override CH.Native.Results.ClickHouseDataReader.RecordsAffected.get -> int
+override CH.Native.Results.ClickHouseDataReader.this[int ordinal].get -> object!
+override CH.Native.Results.ClickHouseDataReader.this[string! name].get -> object!
 readonly CH.Native.Protocol.PooledBytes.Memory -> System.ReadOnlyMemory<byte>
 static CH.Native.BulkInsert.BulkInsertOptions.Default.get -> CH.Native.BulkInsert.BulkInsertOptions!
 static CH.Native.BulkInsert.ColumnExtractorFactory.Create<TRow>(System.Reflection.PropertyInfo! property, string! columnName, string! clickHouseType) -> CH.Native.BulkInsert.IColumnExtractor<TRow>!
@@ -1204,6 +1249,8 @@ static CH.Native.Data.BlockInfo.Default.get -> CH.Native.Data.BlockInfo
 static CH.Native.Data.BlockInfo.Read(ref CH.Native.Protocol.ProtocolReader reader) -> CH.Native.Data.BlockInfo
 static CH.Native.Data.BlockInfo.TryRead(ref CH.Native.Protocol.ProtocolReader reader, out CH.Native.Data.BlockInfo info) -> bool
 static CH.Native.Data.BlockSizeEstimator.EstimateMinimumSize(string![]! columnTypes, int rowCount) -> long
+static CH.Native.Data.ClickHouseInterval.operator !=(CH.Native.Data.ClickHouseInterval left, CH.Native.Data.ClickHouseInterval right) -> bool
+static CH.Native.Data.ClickHouseInterval.operator ==(CH.Native.Data.ClickHouseInterval left, CH.Native.Data.ClickHouseInterval right) -> bool
 static CH.Native.Data.ColumnReaderRegistry.CreateBuilder() -> CH.Native.Data.ColumnReaderRegistryBuilder!
 static CH.Native.Data.ColumnReaderRegistry.Default.get -> CH.Native.Data.ColumnReaderRegistry!
 static CH.Native.Data.ColumnReaderRegistry.LazyStrings.get -> CH.Native.Data.ColumnReaderRegistry!
@@ -1336,6 +1383,7 @@ static CH.Native.Telemetry.ClickHouseMeter.SetCircuitBreakerState(string! server
 static CH.Native.Telemetry.SqlSanitizer.Sanitize(string! sql) -> string!
 static CH.Native.Telemetry.TelemetrySettings.Default.get -> CH.Native.Telemetry.TelemetrySettings!
 static readonly CH.Native.Ado.ClickHouseProviderFactory.Instance -> CH.Native.Ado.ClickHouseProviderFactory!
+static readonly CH.Native.Data.AggregateState.ClickHouseAggregateState.Empty -> CH.Native.Data.AggregateState.ClickHouseAggregateState!
 static readonly CH.Native.Data.Geo.Geometry.Null -> CH.Native.Data.Geo.Geometry
 static readonly CH.Native.Data.Geo.Point.Zero -> CH.Native.Data.Geo.Point
 static readonly CH.Native.Numerics.ClickHouseDecimal.One -> CH.Native.Numerics.ClickHouseDecimal
@@ -1358,15 +1406,3 @@ static readonly CH.Native.Telemetry.ClickHouseMeter.RetryAttemptsTotal -> System
 static readonly CH.Native.Telemetry.ClickHouseMeter.RetryDelaySeconds -> System.Diagnostics.Metrics.Histogram<double>!
 static readonly CH.Native.Telemetry.ClickHouseMeter.RowsReadTotal -> System.Diagnostics.Metrics.Counter<long>!
 static readonly CH.Native.Telemetry.ClickHouseMeter.RowsWrittenTotal -> System.Diagnostics.Metrics.Counter<long>!
-override CH.Native.Connection.ClickHouseConnection.ChangeDatabase(string! databaseName) -> void
-override CH.Native.Connection.ClickHouseConnection.Close() -> void
-override CH.Native.Connection.ClickHouseConnection.ConnectionString.get -> string!
-override CH.Native.Connection.ClickHouseConnection.ConnectionString.set -> void
-override CH.Native.Connection.ClickHouseConnection.Database.get -> string!
-override CH.Native.Connection.ClickHouseConnection.DataSource.get -> string!
-override CH.Native.Connection.ClickHouseConnection.Open() -> void
-override CH.Native.Connection.ClickHouseConnection.ServerVersion.get -> string!
-override CH.Native.Connection.ClickHouseConnection.State.get -> System.Data.ConnectionState
-CH.Native.Connection.ClickHouseDataSource.CreateConnection() -> CH.Native.Connection.ClickHouseConnection!
-CH.Native.Connection.ClickHouseDataSource.Resilience.get -> CH.Native.Resilience.ResilienceOptions?
-override CH.Native.Connection.ClickHouseDataSource.ConnectionString.get -> string!

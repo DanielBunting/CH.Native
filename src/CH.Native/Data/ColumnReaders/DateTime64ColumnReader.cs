@@ -81,8 +81,25 @@ internal sealed class DateTime64ColumnReader : IColumnReader<DateTime>
         return new TypedColumn<DateTime>(values, rowCount, pool);
     }
 
+    // For precision 8/9 the block path stores the raw Int64s so the sub-tick digits
+    // stay reachable via GetFieldValue<long> (DateTime64RawColumn); GetValue keeps the
+    // truncated-DateTime default. Precision <= 7 is tick-exact and keeps the
+    // TypedColumn<DateTime> storage (preserving the typed fast path in GetFieldValue).
+    // Note: the GENERIC ReadTypedColumn (used by wrapper readers like Nullable) still
+    // materializes DateTime — the raw escape hatch covers non-Nullable columns only.
     ITypedColumn IColumnReader.ReadTypedColumn(ref ProtocolReader reader, int rowCount)
     {
-        return ReadTypedColumn(ref reader, rowCount);
+        if (_precision <= 7)
+        {
+            return ReadTypedColumn(ref reader, rowCount);
+        }
+
+        var pool = ArrayPool<long>.Shared;
+        var values = pool.Rent(rowCount);
+        for (int i = 0; i < rowCount; i++)
+        {
+            values[i] = reader.ReadInt64();
+        }
+        return new DateTime64RawColumn(values, rowCount, _precision, _timezone);
     }
 }

@@ -48,6 +48,29 @@ internal sealed class BoolColumnSkipper : FixedSizeColumnSkipper
     public override string TypeName => "Bool";
 }
 
+internal sealed class NothingColumnSkipper : FixedSizeColumnSkipper
+{
+    public NothingColumnSkipper() : base(1) { }
+    /// <inheritdoc />
+    public override string TypeName => "Nothing";
+}
+
+/// <summary>
+/// Skipper for the eleven Interval* types — all Int64 (8 bytes) on the wire.
+/// </summary>
+internal sealed class IntervalColumnSkipper : FixedSizeColumnSkipper
+{
+    private readonly string _typeName;
+
+    public IntervalColumnSkipper(IntervalUnit unit) : base(8)
+    {
+        _typeName = $"Interval{unit}";
+    }
+
+    /// <inheritdoc />
+    public override string TypeName => _typeName;
+}
+
 // 2-byte types
 internal sealed class Int16ColumnSkipper : FixedSizeColumnSkipper
 {

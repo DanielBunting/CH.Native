@@ -40,6 +40,23 @@ public sealed class NullableRawStringColumn : ITypedColumn
         return _nullBitmap![index] != 0 ? null : _inner.GetValue(index);
     }
 
+    /// <summary>
+    /// Returns a copy of the raw, un-decoded bytes of the value at
+    /// <paramref name="index"/>, or <see langword="null"/> for a SQL null row.
+    /// Preserves bytes that are not valid UTF-8 (which <see cref="GetValue"/> would
+    /// replace with U+FFFD). The copy remains valid after the column is disposed.
+    /// </summary>
+    /// <param name="index">The zero-based row index.</param>
+    /// <returns>The raw value bytes, empty for an empty string, or null for SQL null.</returns>
+    public byte[]? GetBytesCopy(int index)
+    {
+        if ((uint)index >= (uint)_count)
+            throw new ArgumentOutOfRangeException(nameof(index));
+        ObjectDisposedException.ThrowIf(_nullBitmap is null, this);
+
+        return _nullBitmap[index] != 0 ? null : _inner.GetBytesCopy(index);
+    }
+
     /// <inheritdoc />
     public void Dispose()
     {

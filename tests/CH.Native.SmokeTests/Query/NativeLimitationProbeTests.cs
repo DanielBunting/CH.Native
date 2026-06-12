@@ -13,8 +13,8 @@ namespace CH.Native.SmokeTests.Query;
 // ClickHouse.Driver) as sources of truth. Each PINNED LIMITATION test asserts the
 // CURRENT limited behavior — if one starts failing, the limitation has changed:
 // promote the scenario into regular matrix coverage, delete the probe, and update
-// LIMITATIONS.md. The remaining tests pin behaviors that probing PROVED correct,
-// guarding against regression and against stale "known gap" folklore.
+// the Gotchas section in docs/data-types.md. The remaining tests pin behaviors that
+// probing PROVED correct, guarding against regression and stale "known gap" folklore.
 //
 // Probes that expect a reader throw each use their own connection: a column reader
 // failing mid-block leaves partial response bytes in the pipe and poisons the
@@ -61,14 +61,13 @@ public class NativeLimitationProbeTests
 
     #region Pinned limitations
 
-    // PINNED LIMITATION (LIMITATIONS.md #1): DateTime64(7..9) values are truncated to
-    // .NET's 100ns tick resolution on read. The server stores the full nanosecond value
-    // (the CLI canonical leg proves it); CH.Native materializes System.DateTime, which
-    // cannot represent the last two digits. If this fails because full precision
-    // survives, CH.Native has grown a higher-resolution representation: update
-    // LIMITATIONS.md and anchor the new type here.
+    // ESCAPE HATCH ADDED 2026-06-12: the DateTime view of DateTime64(8/9) is
+    // still truncated to .NET's 100ns tick resolution (pinned default — a CLR ceiling),
+    // but the exact wire value is now reachable via GetFieldValue<long> /
+    // ExecuteScalarAsync<long>. The CLI canonical leg proves the server kept all nine
+    // fractional digits.
     [Fact]
-    public async Task DateTime64_9_SubTickPrecision_TruncatedTo100ns()
+    public async Task DateTime64_9_DateTimeViewTruncates_RawLongExact()
     {
         var table = await CreateTableAsync("val DateTime64(9, 'UTC')");
         try
@@ -81,11 +80,19 @@ public class NativeLimitationProbeTests
                 $"SELECT toString(val) FROM {table}");
             Assert.Equal("2024-01-01 00:00:00.123456789", cli[0][0]);
 
-            // CH.Native: .123456789 collapses to .1234567 (100ns ticks).
+            // CH.Native DateTime view: .123456789 collapses to .1234567 (100ns ticks).
             var native = await QueryNativeAsync($"SELECT val FROM {table}");
             var dt = Assert.IsType<DateTime>(native[0][0]);
             var expected = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddTicks(1234567);
             Assert.Equal(expected, dt);
+
+            // Escape hatch: the raw Int64 wire value keeps the sub-tick digits.
+            await using var conn = new ClickHouseConnection(_fixture.NativeConnectionString);
+            await conn.OpenAsync();
+            await foreach (var row in conn.QueryStreamAsync($"SELECT val FROM {table}"))
+            {
+                Assert.Equal(1_704_067_200_123_456_789L, row.GetFieldValue<long>(0));
+            }
         }
         finally
         {
@@ -93,12 +100,12 @@ public class NativeLimitationProbeTests
         }
     }
 
-    // PINNED LIMITATION (LIMITATIONS.md #2): String columns holding invalid UTF-8 are
-    // materialized through UTF-8 decoding with U+FFFD replacement, so the original bytes
-    // are unrecoverable — under BOTH Eager and Lazy string materialization. The CLI hex
-    // read proves the server stored the bytes faithfully (0xFF 0x61).
+    // PARTIALLY FIXED 2026-06-12: the *string* view of invalid UTF-8 still
+    // applies U+FFFD replacement under both materialization modes (pinned default), but
+    // under Lazy materialization the exact bytes are now recoverable via
+    // GetFieldValue<byte[]>. The CLI hex read proves the server stored 0xFF 0x61.
     [Fact]
-    public async Task String_InvalidUtf8_ReplacedWithFffd()
+    public async Task String_InvalidUtf8_StringViewReplaces_LazyBytesRecover()
     {
         var table = await CreateTableAsync("val String");
         try
@@ -115,6 +122,13 @@ public class NativeLimitationProbeTests
                 var native = await QueryNativeAsync($"SELECT val FROM {table}", lazy);
                 Assert.Equal("�a", Assert.IsType<string>(native[0][0]));
             }
+
+            await using var conn = new ClickHouseConnection(_fixture.NativeLazyConnectionString);
+            await conn.OpenAsync();
+            await foreach (var row in conn.QueryStreamAsync($"SELECT val FROM {table}"))
+            {
+                Assert.Equal(new byte[] { 0xFF, 0x61 }, row.GetFieldValue<byte[]>(0));
+            }
         }
         finally
         {
@@ -122,62 +136,68 @@ public class NativeLimitationProbeTests
         }
     }
 
-    // PINNED LIMITATION (LIMITATIONS.md #3): Interval columns are not supported by the
-    // reader. The CLI handles them fine.
+    // FIXED 2026-06-12: Interval columns now decode to ClickHouseInterval
+    // (count + unit), matching the CLI's canonical rendering. Full unit coverage lives
+    // in tests/CH.Native.Tests/Integration/IntervalTypeTests.cs; this keeps the
+    // cross-client parity pinned.
     [Fact]
-    public async Task Interval_NotSupported()
+    public async Task Interval_Supported()
     {
         var cli = await CliQueryHelper.QueryCanonicalAsync(_fixture, "SELECT INTERVAL 3 DAY");
         Assert.Equal("3", cli[0][0]);
 
-        var ex = await Assert.ThrowsAsync<NotSupportedException>(
-            () => QueryNativeAsync("SELECT INTERVAL 3 DAY"));
-        Assert.Contains("IntervalDay", ex.Message);
+        var native = await QueryNativeAsync("SELECT INTERVAL 3 DAY");
+        Assert.Equal(
+            new CH.Native.Data.ClickHouseInterval(3, CH.Native.Data.IntervalUnit.Day),
+            native[0][0]);
     }
 
-    // PINNED LIMITATION (LIMITATIONS.md #4): the Nothing type — produced by a bare
-    // SELECT NULL (Nullable(Nothing)) or SELECT [] (Array(Nothing)) — is not supported
-    // by the reader. Both the CLI and the official driver answer these queries.
+    // FIXED 2026-06-12: the Nothing type — produced by a bare SELECT NULL
+    // (Nullable(Nothing)) or SELECT [] (Array(Nothing)) — is now read natively, matching
+    // the CLI and the official driver. Full coverage lives in
+    // tests/CH.Native.Tests/Integration/NothingTypeTests.cs; this keeps the cross-client
+    // parity pinned.
     [Fact]
-    public async Task SelectNull_NothingType_NotSupported()
+    public async Task SelectNull_NothingType_Supported()
     {
         var cli = await CliQueryHelper.QueryCanonicalAsync(_fixture, "SELECT NULL");
         Assert.Null(cli[0][0]);
 
-        var exNull = await Assert.ThrowsAsync<NotSupportedException>(
-            () => QueryNativeAsync("SELECT NULL"));
-        Assert.Contains("Nothing", exNull.Message);
+        var native = await QueryNativeAsync("SELECT NULL");
+        Assert.Null(Assert.Single(Assert.Single(native)));
 
-        var exArr = await Assert.ThrowsAsync<NotSupportedException>(
-            () => QueryNativeAsync("SELECT []"));
-        Assert.Contains("Nothing", exArr.Message);
+        var nativeArr = await QueryNativeAsync("SELECT []");
+        var arr = Assert.IsAssignableFrom<System.Collections.IEnumerable>(nativeArr[0][0]);
+        Assert.Empty(arr.Cast<object?>());
     }
 
-    // PINNED LIMITATION (LIMITATIONS.md #5): bulk-inserting into a BFloat16 column
-    // produces a malformed block on the wire — the server rejects it with error 261
-    // ("Unknown BlockInfo field number"). Reading BFloat16 works (returns float); the
-    // CLI insert leg proves the column itself is fine.
+    // FIXED 2026-06-12: the direct extractor used to write 4-byte Float32
+    // payloads into BFloat16 columns, desyncing the block stream (server error 261
+    // "Unknown BlockInfo field number"). It now writes the truncated 2-byte form; the
+    // CLI canonical read is the ground truth that the stored values are correct.
     [Fact]
-    public async Task BulkInsert_BFloat16_MalformedBlock_ServerRejects()
+    public async Task BulkInsert_BFloat16_RoundTrips()
     {
-        var table = await CreateTableAsync("val BFloat16");
+        var table = await CreateTableAsync("id Int32, val BFloat16");
         try
         {
-            await CliQueryHelper.ExecuteNonQueryAsync(_fixture,
-                $"INSERT INTO {table} VALUES (1.5)");
-            var read = await QueryNativeAsync($"SELECT val FROM {table}");
-            Assert.Equal(1.5f, Assert.IsType<float>(read[0][0]));
-
-            var ex = await Assert.ThrowsAsync<ClickHouseServerException>(async () =>
+            await using (var conn = new ClickHouseConnection(_fixture.NativeConnectionString))
             {
-                await using var conn = new ClickHouseConnection(_fixture.NativeConnectionString);
                 await conn.OpenAsync();
-                await using var ins = conn.CreateBulkInserter<FloatRow>(table);
+                await using var ins = conn.CreateBulkInserter<BFloat16Row>(table);
                 await ins.InitAsync();
-                await ins.AddAsync(new FloatRow { Val = 2.5f });
+                await ins.AddAsync(new BFloat16Row { Id = 0, Val = -0.5f });
+                await ins.AddAsync(new BFloat16Row { Id = 1, Val = 1.5f });
+                await ins.AddAsync(new BFloat16Row { Id = 2, Val = 2.5f });
                 await ins.CompleteAsync();
-            });
-            Assert.Contains("BlockInfo", ex.Message);
+            }
+
+            var cli = await CliQueryHelper.QueryCanonicalAsync(_fixture,
+                $"SELECT toString(val) FROM {table} ORDER BY id");
+            Assert.Equal(new[] { "-0.5", "1.5", "2.5" }, cli.Select(r => r[0]).ToArray());
+
+            var native = await QueryNativeAsync($"SELECT val FROM {table} ORDER BY id");
+            Assert.Equal(new[] { -0.5f, 1.5f, 2.5f }, native.Select(r => (float)r[0]!).ToArray());
         }
         finally
         {
@@ -309,7 +329,7 @@ public class NativeLimitationProbeTests
         try
         {
             // Negative member roundtrips; raw read is the numeric value (see
-            // LIMITATIONS.md representation notes).
+            // Gotchas section of docs/data-types.md).
             await CliQueryHelper.ExecuteNonQueryAsync(_fixture, $"INSERT INTO {table} VALUES ('neg')");
             var native = await QueryNativeAsync($"SELECT val FROM {table}");
             Assert.Equal((sbyte)-1, native[0][0]);
@@ -393,9 +413,10 @@ public class NativeLimitationProbeTests
 
     #endregion
 
-    private class FloatRow
+    private class BFloat16Row
     {
-        [ClickHouseColumn(Name = "val", Order = 0)] public float Val { get; set; }
+        [ClickHouseColumn(Name = "id", Order = 0)] public int Id { get; set; }
+        [ClickHouseColumn(Name = "val", Order = 1)] public float Val { get; set; }
     }
 
     private class BigIntegerRow

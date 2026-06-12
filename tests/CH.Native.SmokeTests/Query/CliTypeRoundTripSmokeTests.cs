@@ -374,6 +374,20 @@ public class CliTypeRoundTripSmokeTests
             BigInteger.Parse("115792089237316195423570985008687907853269984665640564039457584007913129639935"),
         });
 
+    // Values chosen to be exactly representable in bfloat16 (8-bit mantissa).
+    [Fact]
+    public Task BFloat16() => RunCliCrossTest(
+        "BFloat16",
+        "(0, -0.5),(1, 1.5),(2, 2.5)",
+        new string?[] { "-0.5", "1.5", "2.5" },
+        bulkRows: new[]
+        {
+            new Row<float> { Id = 0, Val = -0.5f },
+            new Row<float> { Id = 1, Val = 1.5f },
+            new Row<float> { Id = 2, Val = 2.5f },
+        },
+        expectedClr: new object?[] { -0.5f, 1.5f, 2.5f });
+
     [Fact]
     public Task Float32() => RunCliCrossTest(
         "Float32",

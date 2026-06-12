@@ -143,7 +143,7 @@ story.
 | [Authentication](docs/authentication.md) | Password, JWT, SSH key, mTLS, role activation |
 | [Connection Pooling](docs/connection-pooling.md) | `ClickHouseDataSource`, sizing, observability |
 | [Dependency Injection](docs/dependency-injection.md) | `AddClickHouse`, keyed services, providers, health checks |
-| [Data Types](docs/data-types.md) | ClickHouse to .NET type mapping reference |
+| [Data Types](docs/data-types.md) | ClickHouse to .NET type mapping reference, including [gotchas](docs/data-types.md#gotchas) |
 | [Resilience](docs/resilience.md) | Retry policies, circuit breakers, load balancing |
 | [Bulk Insert](docs/bulk-insert.md) | High-performance data loading |
 | [ADO.NET & Dapper](docs/ado-net-dapper.md) | Standard provider and ORM integration |

@@ -18,9 +18,9 @@ namespace CH.Native.SmokeTests.Query;
 // written. ResultComparer handles cross-CLR normalization (DateTimeOffset↔DateTime,
 // Guid↔string, IPAddress↔string, decimal↔ClickHouseDecimal, numeric widening).
 //
-// Coverage notes: Int256/UInt256 bulk insert works via BigInteger (covered in
-// CliTypeRoundTripSmokeTests); BFloat16 bulk insert is broken (pinned in
-// NativeLimitationProbeTests — see LIMITATIONS.md #5).
+// Coverage notes: Int256/UInt256 bulk insert works via BigInteger and BFloat16 bulk
+// insert works via float (both covered in CliTypeRoundTripSmokeTests; BFloat16 also
+// below — the extractor writes the truncated 2-byte form).
 [Collection("SmokeTest")]
 public class TypeBulkRoundTripSmokeTests
 {
@@ -211,6 +211,24 @@ public class TypeBulkRoundTripSmokeTests
         new Row<float> { Id = 0, Val = -1.5f },
         new Row<float> { Id = 1, Val = 0f },
         new Row<float> { Id = 2, Val = 1.5f },
+    });
+
+    // Values exactly representable in bfloat16 (8-bit mantissa) so the truncating
+    // 2-byte write round-trips bit-for-bit.
+    [Fact]
+    public Task BFloat16_() => RunAsync("BFloat16", new[]
+    {
+        new Row<float> { Id = 0, Val = -0.5f },
+        new Row<float> { Id = 1, Val = 0f },
+        new Row<float> { Id = 2, Val = 2.5f },
+    });
+
+    [Fact]
+    public Task NullableBFloat16() => RunAsync("Nullable(BFloat16)", new[]
+    {
+        new Row<float?> { Id = 0, Val = -0.5f },
+        new Row<float?> { Id = 1, Val = null },
+        new Row<float?> { Id = 2, Val = 2.5f },
     });
 
     [Fact]
