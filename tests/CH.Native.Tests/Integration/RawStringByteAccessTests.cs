@@ -95,6 +95,37 @@ public class RawStringByteAccessTests
             Assert.Null(results[1]);
         });
 
+    // Eager mode decodes to string during the block read, so there are no raw bytes to
+    // recover — the byte[] request falls through to the regular conversion path, which
+    // cannot cast a string to byte[].
+    [Fact]
+    public async Task EagerMode_GetFieldValueBytes_FallsThroughToConversionAndThrows()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await foreach (var row in connection.QueryStreamAsync("SELECT 'abc' AS val"))
+        {
+            Assert.Throws<InvalidCastException>(() => row.GetFieldValue<byte[]>(0));
+        }
+    }
+
+    // GetFieldValue<byte[]> itself maps a NULL row to null — no IsDBNull pre-check
+    // required.
+    [Fact]
+    public Task NullableString_GetFieldValueBytes_DirectOnNullRow_ReturnsNull() =>
+        RunWithTableAsync("Nullable(String)", "INSERT INTO {0} VALUES (NULL)", async (connection, table) =>
+        {
+            var rows = 0;
+            await foreach (var row in connection.QueryStreamAsync($"SELECT val FROM {table}"))
+            {
+                rows++;
+                Assert.Null(row.GetFieldValue<byte[]>(0));
+            }
+
+            Assert.Equal(1, rows);
+        });
+
     [Fact]
     public async Task AdoReader_GetFieldValueBytes_Works()
     {

@@ -145,10 +145,38 @@ public class ClickHouseIntervalTests
         var a = new ClickHouseInterval(3, IntervalUnit.Day);
         var b = new ClickHouseInterval(3, IntervalUnit.Day);
         var c = new ClickHouseInterval(3, IntervalUnit.Hour);
+        var d = new ClickHouseInterval(4, IntervalUnit.Day);
 
         Assert.True(a == b);
         Assert.True(a != c);
+        Assert.True(a != d);
+        Assert.False(a == d);
         Assert.Equal(a.GetHashCode(), b.GetHashCode());
         Assert.Equal("3 Day", a.ToString());
+    }
+
+    [Fact]
+    public void Equals_Object_RejectsNullAndOtherTypes()
+    {
+        var a = new ClickHouseInterval(3, IntervalUnit.Day);
+
+        Assert.False(a.Equals(null));
+        Assert.False(a.Equals("3 Day"));
+        Assert.False(a.Equals(3L));
+        Assert.True(a.Equals((object)new ClickHouseInterval(3, IntervalUnit.Day)));
+    }
+
+    [Theory]
+    [InlineData(IntervalUnit.Nanosecond)]
+    [InlineData(IntervalUnit.Microsecond)]
+    [InlineData(IntervalUnit.Millisecond)]
+    [InlineData(IntervalUnit.Second)]
+    [InlineData(IntervalUnit.Minute)]
+    [InlineData(IntervalUnit.Hour)]
+    [InlineData(IntervalUnit.Day)]
+    [InlineData(IntervalUnit.Week)]
+    public void IsCalendarUnit_FalseForTimeUnits(IntervalUnit unit)
+    {
+        Assert.False(new ClickHouseInterval(1, unit).IsCalendarUnit);
     }
 }

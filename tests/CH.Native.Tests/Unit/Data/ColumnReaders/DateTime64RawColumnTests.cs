@@ -107,6 +107,15 @@ public class DateTime64RawColumnTests
     }
 
     [Fact]
+    public void GetValue_OutOfRange_Throws()
+    {
+        using var column = (DateTime64RawColumn)ReadColumn(9, 1L);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => column.GetValue(1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => column.GetValue(-1));
+    }
+
+    [Fact]
     public void GetRawValue_AfterDispose_Throws()
     {
         var column = (DateTime64RawColumn)ReadColumn(9, 1L);
@@ -114,5 +123,33 @@ public class DateTime64RawColumnTests
 
         Assert.Throws<ObjectDisposedException>(() => column.GetRawValue(0));
         Assert.Throws<ObjectDisposedException>(() => column.GetValue(0));
+    }
+
+    [Fact]
+    public void Dispose_Twice_IsNoOp()
+    {
+        var column = (DateTime64RawColumn)ReadColumn(9, 1L);
+
+        column.Dispose();
+        column.Dispose();
+    }
+
+    [Fact]
+    public void ElementType_IsDateTime()
+    {
+        using var column = (DateTime64RawColumn)ReadColumn(9, 1L);
+
+        Assert.Equal(typeof(DateTime), column.ElementType);
+    }
+
+    [Fact]
+    public void Timezone_NullWhenUnspecified()
+    {
+        var bytes = new byte[8];
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+        IColumnReader columnReader = new DateTime64ColumnReader(9, null);
+        using var column = (DateTime64RawColumn)columnReader.ReadTypedColumn(ref reader, 1);
+
+        Assert.Null(column.Timezone);
     }
 }

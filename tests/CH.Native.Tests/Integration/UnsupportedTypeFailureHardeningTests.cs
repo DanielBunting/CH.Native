@@ -104,6 +104,35 @@ public class UnsupportedTypeFailureHardeningTests
         Assert.Equal(42, await fresh.ExecuteScalarAsync<int>("SELECT 42"));
     }
 
+    // Typed fast path: QueryTypedAsync<T> reads blocks through its own pump
+    // (ReadTypedBlocksAsync) rather than ReadServerMessagesAsync, and must carry the
+    // same enriched exception and eager-close semantics.
+    private class AnyRow
+    {
+        public object? Value { get; set; }
+    }
+
+    [Fact]
+    public async Task QueryTyped_FailureAlsoEnrichesAndClosesEagerly()
+    {
+        await using var conn = new ClickHouseConnection(_fixture.ConnectionString);
+        await conn.OpenAsync();
+
+        var ex = await Assert.ThrowsAsync<NotSupportedException>(async () =>
+        {
+            await foreach (var _ in conn.QueryTypedAsync<AnyRow>(
+                $"SELECT {UnsupportedProjection} AS value FROM numbers(10)")) { }
+        });
+
+        Assert.Contains("connection has been closed", ex.Message);
+        Assert.IsType<NotSupportedException>(ex.InnerException);
+        Assert.Equal(ConnectionState.Closed, conn.State);
+
+        var next = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Contains("Connection is broken", next.Message);
+    }
+
     // Streaming path: the failure surfaces through QueryStreamAsync's enumerator and
     // must carry the same eager-close semantics as the scalar path.
     [Fact]

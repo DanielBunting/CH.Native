@@ -9,6 +9,10 @@ public abstract class FixedSizeColumnSkipper : IColumnSkipper
 {
     private readonly int _byteSize;
 
+    /// <summary>
+    /// Creates a skipper for a type whose wire format is a fixed number of bytes per value.
+    /// </summary>
+    /// <param name="byteSize">The number of bytes each value occupies on the wire.</param>
     protected FixedSizeColumnSkipper(int byteSize)
     {
         _byteSize = byteSize;

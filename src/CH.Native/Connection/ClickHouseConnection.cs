@@ -29,7 +29,7 @@ namespace CH.Native.Connection;
 /// Also implements <see cref="DbConnection"/> so the same instance flows through
 /// ADO.NET-facing consumers (Dapper, EF Core's <see cref="IDbConnection"/>
 /// extension points, OpenTelemetry SqlClient instrumentation) without an
-/// intermediate wrapper. The native API (<see cref="ExecuteScalarAsync{T}(string,CancellationToken)"/>,
+/// intermediate wrapper. The native API (<see cref="ExecuteScalarAsync{T}(string, IProgress{QueryProgress}?, CancellationToken, string?)"/>,
 /// <see cref="QueryStreamAsync{T}(string,CancellationToken,string?)"/>, etc.) is unchanged.
 /// </summary>
 public sealed class ClickHouseConnection : DbConnection

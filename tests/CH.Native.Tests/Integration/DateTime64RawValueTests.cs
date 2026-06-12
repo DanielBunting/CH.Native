@@ -64,6 +64,19 @@ public class DateTime64RawValueTests
             Assert.Equal(Nanos, raw);
         });
 
+    // The parameterized scalar path (ClickHouseCommand.ExecuteScalarAsync<T> →
+    // ExecuteScalarWithParametersAsync) carries the same long escape hatch.
+    [Fact]
+    public Task Precision9_ParameterizedScalarLong_ReturnsExactNanoseconds() =>
+        RunWithValueAsync("DateTime64(9, 'UTC')", "2024-01-01 00:00:00.123456789", async (connection, table) =>
+        {
+            await using var command = connection.CreateCommand($"SELECT val FROM {table} WHERE 1 = @one");
+            command.Parameters.Add("one", 1);
+
+            var raw = await command.ExecuteScalarAsync<long>();
+            Assert.Equal(Nanos, raw);
+        });
+
     [Fact]
     public Task Precision8_GetFieldValueLong_ReturnsExactUnits() =>
         RunWithValueAsync("DateTime64(8, 'UTC')", "2024-01-01 00:00:00.12345678", async (connection, table) =>

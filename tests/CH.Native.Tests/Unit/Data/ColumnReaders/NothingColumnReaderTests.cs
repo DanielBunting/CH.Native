@@ -65,6 +65,21 @@ public class NothingColumnReaderTests
         Assert.Equal(Sentinel, reader.ReadByte());
     }
 
+    // Block reading dispatches through the non-generic IColumnReader interface.
+    [Fact]
+    public void ReadTypedColumn_ThroughNonGenericInterface_AllValuesNull()
+    {
+        IColumnReader reader = new NothingColumnReader();
+        var protocolReader = new ProtocolReader(new ReadOnlySequence<byte>(new byte[] { 0x00, 0x00, Sentinel }));
+
+        using var column = reader.ReadTypedColumn(ref protocolReader, 2);
+
+        Assert.Equal(2, column.Count);
+        Assert.Null(column.GetValue(0));
+        Assert.Null(column.GetValue(1));
+        Assert.Equal(Sentinel, protocolReader.ReadByte());
+    }
+
     [Fact]
     public void Registry_ResolvesNothingReader()
     {
