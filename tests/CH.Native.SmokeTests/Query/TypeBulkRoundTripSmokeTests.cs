@@ -18,9 +18,9 @@ namespace CH.Native.SmokeTests.Query;
 // written. ResultComparer handles cross-CLR normalization (DateTimeOffset↔DateTime,
 // Guid↔string, IPAddress↔string, decimal↔ClickHouseDecimal, numeric widening).
 //
-// Coverage excluded here (writer gaps or experimental — separate follow-ups):
-//   Int256/UInt256/BFloat16 (no extractor), JSON/Dynamic/Variant/Time/Time64
-//   (session SET flags), geospatial, Nested.
+// Coverage notes: Int256/UInt256 bulk insert works via BigInteger (covered in
+// CliTypeRoundTripSmokeTests); BFloat16 bulk insert is broken (pinned in
+// NativeLimitationProbeTests — see LIMITATIONS.md #5).
 [Collection("SmokeTest")]
 public class TypeBulkRoundTripSmokeTests
 {
