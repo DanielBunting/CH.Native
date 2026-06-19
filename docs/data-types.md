@@ -1,6 +1,6 @@
 # Data Types
 
-CH.Native provides full support for all ClickHouse data types with automatic mapping to .NET types.
+CH.Native provides comprehensive support for ClickHouse data types, with automatic mapping to .NET types.
 
 ## Contents
 
