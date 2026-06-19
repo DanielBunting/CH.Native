@@ -35,11 +35,11 @@ See the [Getting Started Guide](docs/quickstart.md) for more examples, or run
 - **Load Balancing** - Multi-server support with round-robin, random, or first-available strategies
 - **TLS/SSL** - Secure connections with certificate validation
 - **Telemetry** - OpenTelemetry-compatible tracing, metrics, and logging
-- **Type Safety** - Full support for all ClickHouse types with .NET mapping
+- **Type Safety** - Comprehensive ClickHouse type coverage with strongly-typed .NET mapping
 
 ## Supported ClickHouse Types
 
-CH.Native supports the full ClickHouse type system across read, write, and bulk-insert paths. See [Data Types](docs/data-types.md) for the complete CLR-mapping reference.
+CH.Native supports the ClickHouse type system across read, write, and bulk-insert paths. See [Data Types](docs/data-types.md) for the complete CLR-mapping reference and its edge cases.
 
 | Category | ClickHouse Types | .NET Mapping |
 |---|---|---|
@@ -56,7 +56,7 @@ CH.Native supports the full ClickHouse type system across read, write, and bulk-
 | **Geospatial** | `Point`, `Ring`, `LineString`, `Polygon`, `MultiLineString`, `MultiPolygon` | `Point`, `Point[]`, `Point[][]`, `Point[][][]` |
 | **Semi-structured** | `JSON`, `Dynamic`, `Variant(T0, T1, ...)` | `string` / `JsonDocument`, `ClickHouseDynamic`, `VariantValue<T0, T1>` (boxing-free 2-arm) or `ClickHouseVariant` (boxed N-arm) |
 
-All types round-trip through both the read path (`ExecuteReaderAsync`, `QueryStreamAsync<T>`) and the bulk-insert path (`CreateBulkInserter<T>`). `Nullable(...)` wraps any non-composite type. Composites compose freely (e.g. `Array(Nullable(LowCardinality(String)))`).
+These types round-trip through both the read path (`ExecuteReaderAsync`, `QueryStreamAsync<T>`) and the bulk-insert path (`CreateBulkInserter<T>`), give or take a few documented precision caveats (see [gotchas](docs/data-types.md#gotchas)). `Nullable(...)` wraps any non-composite type. Composites compose freely (e.g. `Array(Nullable(LowCardinality(String)))`).
 
 ## Installation
 
