@@ -11,6 +11,10 @@ public sealed class ColumnWriterFactory
 {
     private readonly ColumnWriterRegistry _registry;
 
+    /// <summary>
+    /// Initializes a new <see cref="ColumnWriterFactory"/>.
+    /// </summary>
+    /// <param name="registry">The registry consulted to resolve writers for simple, non-composite types.</param>
     public ColumnWriterFactory(ColumnWriterRegistry registry)
     {
         _registry = registry;

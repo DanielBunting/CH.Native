@@ -34,6 +34,11 @@ public readonly struct ClickHouseVariant : IEquatable<ClickHouseVariant>
     /// </summary>
     public object? Value { get; }
 
+    /// <summary>
+    /// Initializes a new <see cref="ClickHouseVariant"/>.
+    /// </summary>
+    /// <param name="discriminator">Zero-based index into the declared Variant arm list, or 255 (<see cref="NullDiscriminator"/>) for NULL.</param>
+    /// <param name="value">The inner value, boxed if a value type. Should be null when <paramref name="discriminator"/> is 255.</param>
     public ClickHouseVariant(byte discriminator, object? value)
     {
         Discriminator = discriminator;
@@ -86,7 +91,20 @@ public readonly struct ClickHouseVariant : IEquatable<ClickHouseVariant>
     /// <inheritdoc />
     public override int GetHashCode() => HashCode.Combine(Discriminator, Value);
 
+    /// <summary>
+    /// Determines whether two <see cref="ClickHouseVariant"/> values are equal.
+    /// </summary>
+    /// <param name="left">The left operand.</param>
+    /// <param name="right">The right operand.</param>
+    /// <returns><see langword="true"/> if the values are equal; otherwise <see langword="false"/>.</returns>
     public static bool operator ==(ClickHouseVariant left, ClickHouseVariant right) => left.Equals(right);
+
+    /// <summary>
+    /// Determines whether two <see cref="ClickHouseVariant"/> values are not equal.
+    /// </summary>
+    /// <param name="left">The left operand.</param>
+    /// <param name="right">The right operand.</param>
+    /// <returns><see langword="true"/> if the values are not equal; otherwise <see langword="false"/>.</returns>
     public static bool operator !=(ClickHouseVariant left, ClickHouseVariant right) => !left.Equals(right);
 
     /// <inheritdoc />

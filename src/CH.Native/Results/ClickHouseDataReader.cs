@@ -583,6 +583,12 @@ public sealed class ClickHouseDataReader : DbDataReader
         _connection?.ExitBusy();
     }
 
+    /// <summary>
+    /// Disposes the reader and drains any remaining server messages so the underlying
+    /// connection is left in a clean state. If the query hasn't completed, a Cancel
+    /// message is sent to stop the server-side query first. Idempotent.
+    /// </summary>
+    /// <returns>A task that completes once the reader has been disposed.</returns>
     public override async ValueTask DisposeAsync()
     {
         if (_disposed)

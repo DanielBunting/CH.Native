@@ -25,6 +25,15 @@ public sealed class VariantTypedColumn : ITypedColumn
     private readonly ArrayPool<byte>? _discriminatorPool;
     private readonly ArrayPool<int>? _offsetPool;
 
+    /// <summary>
+    /// Initializes a new <see cref="VariantTypedColumn"/> from its raw wire-level storage.
+    /// </summary>
+    /// <param name="discriminators">Per-row arm discriminator bytes; <see cref="ClickHouseVariant.NullDiscriminator"/> marks a NULL row.</param>
+    /// <param name="rowCount">The number of rows in the column.</param>
+    /// <param name="armColumns">The arm columns, one <see cref="ITypedColumn"/> per Variant arm (indexed by discriminator).</param>
+    /// <param name="rowToArmOffset">Maps each row index to its offset within the arm column selected by that row's discriminator.</param>
+    /// <param name="discriminatorPool">Optional pool the <paramref name="discriminators"/> array was rented from; returned to it on dispose.</param>
+    /// <param name="offsetPool">Optional pool the <paramref name="rowToArmOffset"/> array was rented from; returned to it on dispose.</param>
     public VariantTypedColumn(
         byte[] discriminators,
         int rowCount,

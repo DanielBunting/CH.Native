@@ -39,6 +39,12 @@ public readonly struct ClickHouseDynamic : IEquatable<ClickHouseDynamic>
     /// </summary>
     public string? DeclaredTypeName { get; }
 
+    /// <summary>
+    /// Initializes a new <see cref="ClickHouseDynamic"/>.
+    /// </summary>
+    /// <param name="discriminator">Block-local arm index, or 255 (<see cref="NullDiscriminator"/>) for NULL.</param>
+    /// <param name="value">The inner value, boxed if a value type. Should be null when <paramref name="discriminator"/> is 255.</param>
+    /// <param name="declaredTypeName">ClickHouse type name of the arm that produced this row, or <see langword="null"/> for NULL rows.</param>
     public ClickHouseDynamic(byte discriminator, object? value, string? declaredTypeName)
     {
         Discriminator = discriminator;
@@ -88,7 +94,20 @@ public readonly struct ClickHouseDynamic : IEquatable<ClickHouseDynamic>
     /// <inheritdoc />
     public override int GetHashCode() => HashCode.Combine(Discriminator, DeclaredTypeName, Value);
 
+    /// <summary>
+    /// Determines whether two <see cref="ClickHouseDynamic"/> values are equal.
+    /// </summary>
+    /// <param name="left">The left operand.</param>
+    /// <param name="right">The right operand.</param>
+    /// <returns><see langword="true"/> if the values are equal; otherwise <see langword="false"/>.</returns>
     public static bool operator ==(ClickHouseDynamic left, ClickHouseDynamic right) => left.Equals(right);
+
+    /// <summary>
+    /// Determines whether two <see cref="ClickHouseDynamic"/> values are not equal.
+    /// </summary>
+    /// <param name="left">The left operand.</param>
+    /// <param name="right">The right operand.</param>
+    /// <returns><see langword="true"/> if the values are not equal; otherwise <see langword="false"/>.</returns>
     public static bool operator !=(ClickHouseDynamic left, ClickHouseDynamic right) => !left.Equals(right);
 
     /// <inheritdoc />
