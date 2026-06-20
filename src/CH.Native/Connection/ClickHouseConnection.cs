@@ -2370,7 +2370,17 @@ public sealed class ClickHouseConnection : DbConnection
             // diagnostic message, and the pool refuses the connection either way.)
             if (_protocolFatal && _isOpen)
             {
-                await CloseInternalAsync();
+                // Runs in a finally, so swallow any close-time error: the original
+                // parse exception is the one the caller needs to see, and the
+                // connection is poisoned regardless of whether the close succeeds.
+                try
+                {
+                    await CloseInternalAsync();
+                }
+                catch
+                {
+                    // Intentionally ignored — see above.
+                }
             }
         }
     }
@@ -3336,7 +3346,17 @@ public sealed class ClickHouseConnection : DbConnection
             // diagnostic message, and the pool refuses the connection either way.)
             if (_protocolFatal && _isOpen)
             {
-                await CloseInternalAsync();
+                // Runs in a finally, so swallow any close-time error: the original
+                // parse exception is the one the caller needs to see, and the
+                // connection is poisoned regardless of whether the close succeeds.
+                try
+                {
+                    await CloseInternalAsync();
+                }
+                catch
+                {
+                    // Intentionally ignored — see above.
+                }
             }
         }
     }

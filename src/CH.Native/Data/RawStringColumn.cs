@@ -41,6 +41,7 @@ public sealed class RawStringColumn : ITypedColumn
     {
         if ((uint)index >= (uint)_count)
             throw new ArgumentOutOfRangeException(nameof(index));
+        ObjectDisposedException.ThrowIf(_rawData is null, this);
 
         var length = _lengths![index];
         if (length == 0)
