@@ -620,6 +620,15 @@ public sealed class ClickHouseConnection : DbConnection
         return new PopMapShapeHint(this, previous);
     }
 
+    // The pop runs through this instance method so the Interlocked ref-access lands on
+    // `this` rather than a sibling reference — that's what keeps CS0197 (ref to a field
+    // of a marshal-by-reference class) off the disposer below.
+    private void PopMapShapeHintCore(MapShapeHint? previous)
+    {
+        _currentMapShapeHint.Value = previous;
+        Interlocked.Decrement(ref _mapShapeHintPushCount);
+    }
+
     private sealed class PopMapShapeHint : IDisposable
     {
         private readonly ClickHouseConnection _connection;
@@ -629,11 +638,7 @@ public sealed class ClickHouseConnection : DbConnection
             _connection = connection;
             _previous = previous;
         }
-        public void Dispose()
-        {
-            _connection._currentMapShapeHint.Value = _previous;
-            Interlocked.Decrement(ref _connection._mapShapeHintPushCount);
-        }
+        public void Dispose() => _connection.PopMapShapeHintCore(_previous);
     }
 
     /// <summary>
