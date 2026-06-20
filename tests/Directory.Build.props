@@ -1,0 +1,14 @@
+<Project>
+  <!-- Chain to the repo-root props first: MSBuild auto-imports only the nearest
+       Directory.Build.props, so without this the test projects would lose
+       TargetFrameworks, Nullable, WarningsAsErrors, etc. -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <!-- Test projects inherit GenerateDocumentationFile=true from the root props
+         (it is needed so the packable src/ libraries ship XML docs). Public xUnit
+         test methods are never documented, so CS1591 ("missing XML comment") is
+         pure noise here while staying active for src/. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+</Project>
