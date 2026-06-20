@@ -1,6 +1,17 @@
 # Data Types
 
-CH.Native provides full support for all ClickHouse data types with automatic mapping to .NET types.
+CH.Native provides comprehensive support for ClickHouse data types, with automatic mapping to .NET types.
+
+## Contents
+
+- [Quick Reference](#quick-reference) — the full type table at a glance
+- [Numeric Types](#numeric-types)
+- [Date and Time Types](#date-and-time-types)
+- [String Types](#string-types)
+- [Special Types](#special-types) — UUID, IP, Enum
+- [Complex Types](#complex-types) — Nullable, Array, Map, Tuple, JSON, Dynamic/Variant, aggregates, geo
+- [Custom Type Mapping](#custom-type-mapping) — attribute-based POCO mapping
+- [Gotchas](#gotchas) — where the .NET and ClickHouse type systems don't line up one-to-one
 
 ## Type Mapping Overview
 
@@ -29,13 +40,15 @@ When reading data, CH.Native automatically converts ClickHouse types to their .N
 | Decimal32(S) | decimal | S = scale (decimal places) |
 | Decimal64(S) | decimal | |
 | Decimal128(S) | decimal | |
-| Decimal256(S) | decimal | |
+| Decimal256(S) | ClickHouseDecimal | 76 digits exceed .NET `decimal`'s 28-29 |
 | Date | DateOnly | Days since 1970-01-01 |
-| Date32 | DateOnly | Supports dates before 1970 |
+| Date32 | DateOnly | Supports dates before 1970 (full range to 2299-12-31) |
 | DateTime | DateTime | Unix timestamp (UTC) |
-| DateTime64(P) | DateTime | P = precision (0-9) |
+| DateTime('TZ') | DateTimeOffset | Instant preserved; offset reflects the column zone |
+| DateTime64(P) | DateTime | P = precision (0-9); P=8/9 also readable as `long` — see [DateTime Types](#datetime-types) |
 | Time | TimeOnly | Time-of-day; ClickHouse 25.10+ |
 | Time64(P) | TimeOnly | Sub-second time-of-day; ClickHouse 25.10+ |
+| IntervalSecond … IntervalYear | ClickHouseInterval | All 11 units; calendar units (Month/Quarter/Year) have no fixed duration |
 | String | string | UTF-8 encoded |
 | FixedString(N) | byte[] | Fixed N bytes |
 | UUID | Guid | |
@@ -58,6 +71,7 @@ When reading data, CH.Native automatically converts ClickHouse types to their .N
 | Ring, LineString | Point[] | |
 | Polygon, MultiLineString | Point[][] | |
 | MultiPolygon | Point[][][] | |
+| Nothing | null | Produced by bare `SELECT NULL` / `SELECT []` |
 
 ## Numeric Types
 
@@ -82,6 +96,9 @@ When reading data, CH.Native automatically converts ClickHouse types to their .N
 | UInt64 | ulong | 0 to 18.4E18 |
 | UInt128 | UInt128 | 128-bit unsigned |
 | UInt256 | BigInteger | 256-bit unsigned |
+
+`UInt64` values arrive as `ulong` with the logical value — map them to `ulong`
+properties, not `long`, or values above `long.MaxValue` will overflow.
 
 ### Floating Point
 
@@ -113,7 +130,14 @@ Decimal256(10) -- Up to 76 total digits
 Decimal(18, 4) -- P=precision, S=scale
 ```
 
-All decimal types map to .NET `decimal`.
+`Decimal32/64/128` map to .NET `decimal`. `Decimal256` maps to `ClickHouseDecimal`
+(`CH.Native.Numerics`) because its 76 significant digits exceed `decimal`'s 28–29; all
+digits are preserved. `ClickHouseDecimal` also works for bulk-inserting full-precision
+`Decimal128/256` values.
+
+Writing a value with more fractional digits than the column's scale **truncates toward
+zero** (no rounding, no error): `1.23456` into `Decimal64(4)` stores `1.2345`. Round in
+application code if that isn't what you want.
 
 ## Date and Time Types
 
@@ -126,14 +150,42 @@ All decimal types map to .NET `decimal`.
 
 ### DateTime Types
 
-| Type | .NET | Precision | Notes |
-|------|------|-----------|-------|
-| DateTime | DateTime | Seconds | Unix timestamp, returned as UTC |
-| DateTime('TZ') | DateTimeOffset | Seconds | With timezone |
-| DateTime64(0) | DateTime | Seconds | |
-| DateTime64(3) | DateTime | Milliseconds | |
-| DateTime64(6) | DateTime | Microseconds | |
-| DateTime64(9) | DateTime | Nanoseconds | |
+| Type | .NET | Precision | Range | Notes |
+|------|------|-----------|-------|-------|
+| DateTime | DateTime | Seconds | 1970-01-01 00:00:00 to 2106-02-07 06:28:15 | Unix timestamp (UInt32 seconds), returned as UTC |
+| DateTime('TZ') | DateTimeOffset | Seconds | 1970-01-01 00:00:00 to 2106-02-07 06:28:15 | With timezone |
+| DateTime64(0) | DateTime | Seconds | 1900-01-01 to 2299-12-31 | |
+| DateTime64(3) | DateTime | Milliseconds | 1900-01-01 to 2299-12-31 | |
+| DateTime64(6) | DateTime | Microseconds | 1900-01-01 to 2299-12-31 | |
+| DateTime64(9) | DateTime | Nanoseconds | 1900-01-01 to 2262-04-11 | DateTime view truncated to 100-ns ticks |
+
+Ranges are the server's: `DateTime` is a UInt32 Unix timestamp; `DateTime64(0–8)` spans
+1900-01-01 to 2299-12-31; `DateTime64(9)` tops out at 2262-04-11 23:47:16.854775807
+because the wire value is an Int64 count of nanoseconds since epoch.
+
+`System.DateTime` ticks are 100 ns, so the `DateTime` view of scales 8–9 truncates the
+last one or two fractional digits (`…00.123456789` reads as `…00.1234567`; scales 0–7
+are tick-exact). To read the exact value, ask for `long` instead — you get the raw unit
+count since epoch (for scale 9, identical to `toUnixTimestamp64Nano`):
+
+```csharp
+// Streaming row or ADO reader:
+long nanos = row.GetFieldValue<long>(0);
+
+// Scalar:
+long nanos = await connection.ExecuteScalarAsync<long>("SELECT ts FROM t");
+
+// Typed row mapping — declare the property as long:
+public class Row { public long Ts { get; set; } }
+```
+
+The `long` path is not wired for `Nullable(DateTime64(8/9))` — select
+`toUnixTimestamp64Nano(ts)` server-side there.
+
+Timezone-qualified columns (`DateTime('TZ')`, `DateTime64(P, 'TZ')`) read as
+`DateTimeOffset` with the column zone's offset, so the absolute instant is always
+preserved — including during DST transitions where two instants share a wall-clock
+time. Use `.UtcDateTime` for instant comparisons.
 
 **Example:**
 
@@ -164,16 +216,61 @@ Reads outside `[0, 86400)` (or `[0, 86400 × 10^P)` for `Time64`) throw `Overflo
 
 `Time` and `Time64(P)` are also supported for **bulk insert**: a `TimeOnly` property maps directly to either column (precision is read from the column definition). The same ClickHouse 25.10+ requirement applies on the server side.
 
+### Interval Types
+
+All eleven `Interval*` types (`IntervalNanosecond` … `IntervalYear`) map to the
+`ClickHouseInterval` struct — a signed count plus an `IntervalUnit`:
+
+```csharp
+using CH.Native.Data;
+
+var interval = await connection.ExecuteScalarAsync<ClickHouseInterval>("SELECT INTERVAL 3 DAY");
+// interval.Value == 3, interval.Unit == IntervalUnit.Day, ToString() == "3 Day"
+```
+
+Intervals are deliberately **not** mapped to `TimeSpan`: `Month`, `Quarter`, and `Year`
+are calendar units with no fixed duration (how long is "1 month"?). Convert explicitly:
+
+```csharp
+if (!interval.IsCalendarUnit)
+{
+    TimeSpan span = interval.ToTimeSpan();   // exact for Second…Week;
+                                             // Nanosecond truncates to 100-ns ticks
+}
+// ToTimeSpan() on Month/Quarter/Year throws NotSupportedException —
+// apply calendar units with date arithmetic (e.g. dt.AddMonths) instead.
+```
+
+Intervals appear in result sets when an expression yields one (e.g. `INTERVAL 1 DAY`,
+`toIntervalMonth(2)`, date subtraction helpers). They are not insertable table columns.
+
 ## String Types
 
 ### String
 
-Variable-length UTF-8 encoded strings:
+Variable-length strings, decoded as UTF-8:
 
 ```csharp
 // ClickHouse String -> .NET string
 var name = await connection.ExecuteScalarAsync<string>("SELECT 'Hello'");
 ```
+
+ClickHouse `String` is actually an **arbitrary byte sequence** — it is not required to
+be valid UTF-8. Embedded NUL bytes survive the string conversion fine, but bytes that
+are not valid UTF-8 are replaced with U+FFFD (`�`) in the `string` view. If a column
+holds binary data, read the exact bytes instead: open the connection with
+`StringMaterialization=Lazy` and ask for `byte[]`:
+
+```csharp
+// Connection string: "...;StringMaterialization=Lazy"
+await foreach (var row in connection.QueryStreamAsync("SELECT payload FROM blobs"))
+{
+    byte[] exact = row.GetFieldValue<byte[]>(0);   // raw bytes, no UTF-8 decoding
+}
+```
+
+This works on the streaming row, the ADO `DbDataReader`, and `Nullable(String)` columns
+(null rows surface as SQL null).
 
 ### FixedString(N)
 
@@ -183,6 +280,10 @@ Fixed-length binary data, padded with null bytes:
 // ClickHouse FixedString(16) -> .NET byte[]
 var data = await connection.ExecuteScalarAsync<byte[]>("SELECT toFixedString('test', 16)");
 // Returns 16 bytes: ['t', 'e', 's', 't', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+// For the trimmed text form, convert server-side — toString() drops the padding:
+var text = await connection.ExecuteScalarAsync<string>(
+    "SELECT toString(toFixedString('test', 16))");   // "test"
 ```
 
 ## Special Types
@@ -216,6 +317,9 @@ CREATE TABLE events (
 ```csharp
 // Read as the underlying integer type
 var status = await connection.ExecuteScalarAsync<sbyte>("SELECT status FROM events LIMIT 1");
+
+// For the member NAME, convert server-side:
+var name = await connection.ExecuteScalarAsync<string>("SELECT toString(status) FROM events LIMIT 1");
 ```
 
 ## Complex Types
@@ -467,6 +571,11 @@ await foreach (var row in connection.QueryStreamAsync(
 
 `IsNull`, `Discriminator`, `DeclaredTypeName`, and `TryGetAs<T>(out T)` cover the common access patterns. For bulk insert, construct `ClickHouseDynamic(discriminator, value, declaredTypeName)` directly.
 
+When checking null-ness, read the raw column and use `IsNull` rather than stringifying:
+a server-side quirk (identical in every client) makes `toString(NULL::Dynamic)` render
+as an empty string and `toString(NULL::Variant(...))` as the literal text `ᴺᵁᴸᴸ` —
+neither is SQL NULL.
+
 ### Variant
 
 `Variant(T0, T1, …)` is a closed set of alternatives chosen at write time per row. CH.Native exposes two shapes:
@@ -536,7 +645,12 @@ CH.Native ships first-class support for the following aggregate functions:
 | `count` | Any (or zero args — `countState()`) | VarUInt (1–10 bytes) |
 | `min`, `max`, `any`, `anyLast` | Int8/16/32/64, UInt8/16/32/64, Float32/64, Date, Date32, DateTime, DateTime64, UUID, Bool | 1-byte flag + N data bytes |
 
-Functions outside this set throw `NotSupportedException` with workaround guidance. Notable exclusions:
+Functions outside this set throw `NotSupportedException` — and because the failure
+happens mid-block (native-protocol column data is not length-prefixed), the rest of the
+response is unreadable and **the connection is closed**. The exception message says so,
+the close is immediate (`State == Closed`), and a pooled `ClickHouseDataSource` discards
+the connection rather than reusing it — the blast radius is exactly one query. Use the
+workarounds below to keep unsupported states off the wire. Notable exclusions:
 
 - `avg` — needs a `Float64 + VarUInt` composite format; coming in a follow-up.
 - Nullable inner types for any aggregate — state size varies between rows; deferred.
@@ -632,6 +746,104 @@ public class Event
     public string Data { get; set; } = "";
 }
 ```
+
+## Gotchas
+
+Places where the .NET and ClickHouse type systems don't line up one-to-one. Each of
+these is covered in detail on its type's entry above; this is the short list of what to
+watch for. Every entry is pinned by an active test in the cross-client smoke suite
+(`tests/CH.Native.SmokeTests`), which roundtrips values between CH.Native, the official
+`clickhouse-client` CLI, and the official `ClickHouse.Driver`.
+
+### DateTime resolution: 100 ns ticks vs nanoseconds
+
+`System.DateTime` cannot represent nanoseconds — its ticks are 100 ns. The `DateTime`
+view of `DateTime64(8)` loses the last fractional digit and `DateTime64(9)` the last
+two; scales 0–7 are exact. Read the column as `long` to get the full-precision wire
+value. See [DateTime Types](#datetime-types).
+
+### String is bytes, not text
+
+ClickHouse `String` is an arbitrary byte sequence with no encoding guarantee. The
+`string` view decodes as UTF-8 and replaces invalid sequences with U+FFFD (`�`);
+embedded NUL bytes survive fine. For binary-safe access, read the column as `byte[]`
+under `StringMaterialization=Lazy`. See [String](#string).
+
+### Enum values are numbers
+
+`Enum8`/`Enum16` surface as the underlying `sbyte`/`short`, not the member name —
+ClickHouse stores the number; the name only exists in the column definition. Select
+`toString(val)` when you want names. See [Enum8 / Enum16](#enum8--enum16).
+
+### FixedString keeps its padding
+
+`FixedString(N)` is always exactly N bytes, so short values carry trailing NUL padding
+into the `byte[]` you read. Select `toString(val)` for the trimmed text form. See
+[FixedString](#fixedstringn).
+
+### UInt64 doesn't fit in long
+
+The upper half of `UInt64`'s range exceeds `long.MaxValue`. Values arrive as `ulong`;
+mapping the column to a `long` property overflows for large values. See
+[Unsigned Integers](#unsigned-integers).
+
+### Wall clocks are ambiguous during DST
+
+In a timezone with DST, two distinct instants can share the same wall-clock time during
+the fall-back hour. Zoned columns therefore read as `DateTimeOffset` (instant + offset),
+not wall-clock `DateTime` — compare instants via `.UtcDateTime`. See
+[Date and Time Types](#date-and-time-types).
+
+### Calendar intervals have no fixed duration
+
+"1 month" is not a number of seconds, so `TimeSpan` cannot represent it. Interval
+expressions read as `ClickHouseInterval` (count + unit); `ToTimeSpan()` converts the
+time-based units and throws for `Month`/`Quarter`/`Year`. See
+[Interval Types](#interval-types).
+
+### Decimal256 exceeds .NET decimal
+
+`decimal` holds 28–29 significant digits; `Decimal256` holds up to 76. Those columns map
+to `ClickHouseDecimal` instead. See [Decimal](#decimal).
+
+### BFloat16 truncates on write
+
+`BFloat16` has a 7-bit mantissa. Writing a `float` keeps the high 16 bits (truncation,
+matching the server-side cast), so only values exactly representable in bfloat16
+round-trip bit-for-bit. See [Floating Point](#floating-point).
+
+### An unsupported column type closes the connection
+
+Native-protocol column data is not length-prefixed, so a response containing a column
+type the reader cannot decode (in practice: exotic `AggregateFunction` state formats)
+makes the rest of the response unparseable. The query fails with a `NotSupportedException`
+explaining that the connection was closed; pooled connections are discarded rather than
+reused. Workaround: convert in the projection (`finalizeAggregation(...)`,
+`toString(...)`) so the wire carries a supported type. See
+[AggregateFunction](#aggregatefunctionfn-t).
+
+### Query parameters travel as text
+
+`{name:Type}` parameter binding serializes values to text (in CH.Native *and* the
+official driver), so the server's default fast float parser applies: the minimum
+denormal `double.Epsilon` flushes to `0`. Everything else round-trips exactly —
+including NaN, `0.1+0.2`, `UInt64.MaxValue`, and strings with quotes, newlines, NULs,
+and emoji. If exact float bits matter, use the bulk inserter (binary, bit-exact) or
+`SETTINGS precise_float_parsing=1`.
+
+### Decimal writes truncate excess scale silently
+
+Bulk-inserting a `decimal` with more fractional digits than the column's scale
+truncates toward zero — `1.23456` into `Decimal64(4)` stores `1.2345`. No rounding, no
+exception, and the official driver behaves identically. Round in application code if
+banker's rounding (or any rounding) is expected. See [Decimal](#decimal).
+
+### toString(NULL) inside Dynamic/Variant
+
+A server-side quirk affecting all clients: `toString(NULL::Dynamic)` renders as an empty
+string and `toString(NULL::Variant(...))` as the literal text `ᴺᵁᴸᴸ` — neither is SQL
+NULL. Read the raw column (typed `ClickHouseDynamic`/`ClickHouseVariant` with real
+nulls) when null-ness matters. See [Dynamic](#dynamic).
 
 ## See Also
 

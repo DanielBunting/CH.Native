@@ -9,6 +9,10 @@ public abstract class FixedSizeColumnSkipper : IColumnSkipper
 {
     private readonly int _byteSize;
 
+    /// <summary>
+    /// Creates a skipper for a type whose wire format is a fixed number of bytes per value.
+    /// </summary>
+    /// <param name="byteSize">The number of bytes each value occupies on the wire.</param>
     protected FixedSizeColumnSkipper(int byteSize)
     {
         _byteSize = byteSize;
@@ -46,6 +50,29 @@ internal sealed class BoolColumnSkipper : FixedSizeColumnSkipper
     public BoolColumnSkipper() : base(1) { }
     /// <inheritdoc />
     public override string TypeName => "Bool";
+}
+
+internal sealed class NothingColumnSkipper : FixedSizeColumnSkipper
+{
+    public NothingColumnSkipper() : base(1) { }
+    /// <inheritdoc />
+    public override string TypeName => "Nothing";
+}
+
+/// <summary>
+/// Skipper for the eleven Interval* types — all Int64 (8 bytes) on the wire.
+/// </summary>
+internal sealed class IntervalColumnSkipper : FixedSizeColumnSkipper
+{
+    private readonly string _typeName;
+
+    public IntervalColumnSkipper(IntervalUnit unit) : base(8)
+    {
+        _typeName = $"Interval{unit}";
+    }
+
+    /// <inheritdoc />
+    public override string TypeName => _typeName;
 }
 
 // 2-byte types

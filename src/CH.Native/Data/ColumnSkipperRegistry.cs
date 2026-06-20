@@ -224,6 +224,13 @@ public sealed class ColumnSkipperRegistryBuilder
         Register(new Int8ColumnSkipper());
         Register(new UInt8ColumnSkipper());
         Register(new BoolColumnSkipper());
+        Register(new NothingColumnSkipper());
+
+        // Interval types (8-byte Int64 wire format)
+        foreach (var unit in Enum.GetValues<IntervalUnit>())
+        {
+            Register(new IntervalColumnSkipper(unit));
+        }
 
         // 2-byte types
         Register(new Int16ColumnSkipper());

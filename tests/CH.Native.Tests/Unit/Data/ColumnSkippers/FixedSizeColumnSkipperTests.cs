@@ -16,10 +16,13 @@ public class FixedSizeColumnSkipperTests
 {
     public static IEnumerable<object[]> AllFixedSizeTypes() => new[]
     {
-        new object[] { "Int8", 1 }, new object[] { "UInt8", 1 }, new object[] { "Bool", 1 }, new object[] { "Enum8", 1 },
+        new object[] { "Int8", 1 }, new object[] { "UInt8", 1 }, new object[] { "Bool", 1 }, new object[] { "Enum8", 1 }, new object[] { "Nothing", 1 },
         new object[] { "Int16", 2 }, new object[] { "UInt16", 2 }, new object[] { "Date", 2 }, new object[] { "BFloat16", 2 }, new object[] { "Enum16", 2 },
         new object[] { "Int32", 4 }, new object[] { "UInt32", 4 }, new object[] { "Float32", 4 }, new object[] { "DateTime", 4 }, new object[] { "Date32", 4 }, new object[] { "IPv4", 4 }, new object[] { "Decimal32", 4 },
         new object[] { "Int64", 8 }, new object[] { "UInt64", 8 }, new object[] { "Float64", 8 }, new object[] { "DateTime64", 8 }, new object[] { "Decimal64", 8 },
+        new object[] { "IntervalNanosecond", 8 }, new object[] { "IntervalMicrosecond", 8 }, new object[] { "IntervalMillisecond", 8 }, new object[] { "IntervalSecond", 8 },
+        new object[] { "IntervalMinute", 8 }, new object[] { "IntervalHour", 8 }, new object[] { "IntervalDay", 8 }, new object[] { "IntervalWeek", 8 },
+        new object[] { "IntervalMonth", 8 }, new object[] { "IntervalQuarter", 8 }, new object[] { "IntervalYear", 8 },
         new object[] { "Int128", 16 }, new object[] { "UInt128", 16 }, new object[] { "UUID", 16 }, new object[] { "IPv6", 16 }, new object[] { "Decimal128", 16 },
         new object[] { "Int256", 32 }, new object[] { "UInt256", 32 }, new object[] { "Decimal256", 32 },
     };

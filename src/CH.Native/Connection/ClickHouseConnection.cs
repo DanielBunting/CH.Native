@@ -29,7 +29,7 @@ namespace CH.Native.Connection;
 /// Also implements <see cref="DbConnection"/> so the same instance flows through
 /// ADO.NET-facing consumers (Dapper, EF Core's <see cref="IDbConnection"/>
 /// extension points, OpenTelemetry SqlClient instrumentation) without an
-/// intermediate wrapper. The native API (<see cref="ExecuteScalarAsync{T}(string,CancellationToken)"/>,
+/// intermediate wrapper. The native API (<see cref="ExecuteScalarAsync{T}(string, IProgress{QueryProgress}?, CancellationToken, string?)"/>,
 /// <see cref="QueryStreamAsync{T}(string,CancellationToken,string?)"/>, etc.) is unchanged.
 /// </summary>
 public sealed class ClickHouseConnection : DbConnection
@@ -246,6 +246,19 @@ public sealed class ClickHouseConnection : DbConnection
     /// recovery path has been disabled by <c>_completeStarted</c>.
     /// </summary>
     internal void MarkProtocolFatal() => _protocolFatal = true;
+
+    /// <summary>
+    /// Throws the not-open guard failure. When the connection was closed because a
+    /// response could not be fully read (<see cref="_protocolFatal"/>), says so —
+    /// "Connection is not open" on a connection the caller never closed would
+    /// misattribute the failure.
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+    private void ThrowNotOpen() =>
+        throw new InvalidOperationException(_protocolFatal
+            ? "Connection is broken: a previous response could not be fully read and the connection has been closed. " +
+              "Open a new ClickHouseConnection to continue."
+            : "Connection is not open.");
 
     /// <summary>
     /// Clears <see cref="_currentQueryId"/> if it still matches the given id.
@@ -515,7 +528,7 @@ public sealed class ClickHouseConnection : DbConnection
     public override void ChangeDatabase(string databaseName)
     {
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
         if (string.IsNullOrWhiteSpace(databaseName))
             throw new ArgumentException("Database name cannot be empty.", nameof(databaseName));
         if (databaseName.Length > 255)
@@ -1155,7 +1168,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         // Defensive copy so callers can't mutate the pinned reference after pinning.
         IReadOnlyList<string>? toPin = roles is null ? null : roles.ToArray();
@@ -1547,7 +1560,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         return new BulkInserter<T>(this, tableName, options);
     }
@@ -1567,7 +1580,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         return new BulkInserter<T>(this, database, tableName, options);
     }
@@ -1591,7 +1604,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         return new DynamicBulkInserter(this, tableName, columnNames, options);
     }
@@ -1610,7 +1623,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         return new DynamicBulkInserter(this, database, tableName, columnNames, options);
     }
@@ -1859,7 +1872,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         var effectiveQueryId = ResolveQueryId(queryId);
         EnterBusy(effectiveQueryId);
@@ -1909,7 +1922,12 @@ public sealed class ClickHouseConnection : DbConnection
                     case DataMessage dataMessage:
                         if (!hasResult && dataMessage.Block.RowCount > 0 && dataMessage.Block.ColumnCount > 0)
                         {
-                            result = dataMessage.Block.GetValue(0, 0);
+                            // DateTime64(8/9) raw escape hatch: ExecuteScalarAsync<long>
+                            // returns the exact wire value (sub-tick digits intact).
+                            result = typeof(T) == typeof(long)
+                                && dataMessage.Block.Columns[0] is DateTime64RawColumn rawDt64
+                                    ? rawDt64.GetRawValue(0)
+                                    : dataMessage.Block.GetValue(0, 0);
                             hasResult = true;
                         }
                         dataMessage.Block.Dispose();
@@ -1964,7 +1982,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         var effectiveQueryId = ResolveQueryId(queryId);
         EnterBusy(effectiveQueryId);
@@ -2068,7 +2086,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         var effectiveQueryId = ResolveQueryId(queryId);
         EnterBusy(effectiveQueryId);
@@ -2223,7 +2241,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         using var mapHintScope = PushMapShapeHintFor(typeof(T));
         var effectiveQueryId = ResolveQueryId(queryId);
@@ -2343,6 +2361,26 @@ public sealed class ClickHouseConnection : DbConnection
             lock (_queryLock)
             {
                 _currentQueryId = null;
+            }
+
+            // A parse failure mid-block leaves unread response bytes in the pipe.
+            // Close eagerly so the server releases the session now and callers see
+            // State == Closed immediately, instead of the dead connection lingering
+            // until its next use. (_protocolFatal stays set: ThrowNotOpen keeps the
+            // diagnostic message, and the pool refuses the connection either way.)
+            if (_protocolFatal && _isOpen)
+            {
+                // Runs in a finally, so swallow any close-time error: the original
+                // parse exception is the one the caller needs to see, and the
+                // connection is poisoned regardless of whether the close succeeds.
+                try
+                {
+                    await CloseInternalAsync();
+                }
+                catch
+                {
+                    // Intentionally ignored — see above.
+                }
             }
         }
     }
@@ -2549,14 +2587,27 @@ public sealed class ClickHouseConnection : DbConnection
             // Not enough data yet
             return false;
         }
+        catch (NotSupportedException ex)
+        {
+            // The reader factory rejected an unsupported column type mid-block:
+            // wire bytes were partially consumed at an indeterminate offset, so
+            // the connection is poisoned and eagerly closed by the message-pump
+            // finally. Rethrow the same exception type with the consequence
+            // appended so the ORIGINAL failure carries the full diagnosis,
+            // rather than the user discovering a dead connection one query later.
+            _protocolFatal = true;
+            throw new NotSupportedException(
+                $"{ex.Message} The connection has been closed because the response could not be fully read; " +
+                "open a new connection (or take a fresh one from the pool) to continue.",
+                ex);
+        }
         catch (Exception)
         {
-            // Any other exception (reader factory rejected an unsupported
-            // column type, type-arg list malformed, value decode overflowed,
-            // …) means wire bytes were partially consumed at an indeterminate
-            // offset. Poison the connection so EnterBusy surfaces a clean
-            // "Connection is broken" on the next call instead of silently
-            // re-parsing stale bytes.
+            // Any other exception (type-arg list malformed, value decode
+            // overflowed, …) means wire bytes were partially consumed at an
+            // indeterminate offset. Poison the connection so the pool discards
+            // it and the next call surfaces a clean "Connection is broken"
+            // instead of silently re-parsing stale bytes.
             _protocolFatal = true;
             throw;
         }
@@ -2693,7 +2744,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         var effectiveQueryId = ResolveQueryId(queryId);
         EnterBusy(effectiveQueryId);
@@ -2729,7 +2780,11 @@ public sealed class ClickHouseConnection : DbConnection
                         case DataMessage dataMessage:
                             if (!hasResult && dataMessage.Block.RowCount > 0 && dataMessage.Block.ColumnCount > 0)
                             {
-                                result = dataMessage.Block.GetValue(0, 0);
+                                // DateTime64(8/9) raw escape hatch — see ExecuteScalarCoreAsync.
+                                result = typeof(T) == typeof(long)
+                                    && dataMessage.Block.Columns[0] is DateTime64RawColumn rawDt64
+                                        ? rawDt64.GetRawValue(0)
+                                        : dataMessage.Block.GetValue(0, 0);
                                 hasResult = true;
                             }
                             dataMessage.Block.Dispose();
@@ -2786,7 +2841,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         var effectiveQueryId = ResolveQueryId(queryId);
         EnterBusy(effectiveQueryId);
@@ -2870,7 +2925,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         var effectiveQueryId = ResolveQueryId(queryId);
         EnterBusy(effectiveQueryId);
@@ -3283,6 +3338,26 @@ public sealed class ClickHouseConnection : DbConnection
             {
                 _currentQueryId = null;
             }
+
+            // A parse failure mid-block leaves unread response bytes in the pipe.
+            // Close eagerly so the server releases the session now and callers see
+            // State == Closed immediately, instead of the dead connection lingering
+            // until its next use. (_protocolFatal stays set: ThrowNotOpen keeps the
+            // diagnostic message, and the pool refuses the connection either way.)
+            if (_protocolFatal && _isOpen)
+            {
+                // Runs in a finally, so swallow any close-time error: the original
+                // parse exception is the one the caller needs to see, and the
+                // connection is poisoned regardless of whether the close succeeds.
+                try
+                {
+                    await CloseInternalAsync();
+                }
+                catch
+                {
+                    // Intentionally ignored — see above.
+                }
+            }
         }
     }
 
@@ -3542,14 +3617,27 @@ public sealed class ClickHouseConnection : DbConnection
             // Not enough data yet
             return false;
         }
+        catch (NotSupportedException ex)
+        {
+            // The reader factory rejected an unsupported column type mid-block:
+            // wire bytes were partially consumed at an indeterminate offset, so
+            // the connection is poisoned and eagerly closed by the message-pump
+            // finally. Rethrow the same exception type with the consequence
+            // appended so the ORIGINAL failure carries the full diagnosis,
+            // rather than the user discovering a dead connection one query later.
+            _protocolFatal = true;
+            throw new NotSupportedException(
+                $"{ex.Message} The connection has been closed because the response could not be fully read; " +
+                "open a new connection (or take a fresh one from the pool) to continue.",
+                ex);
+        }
         catch (Exception)
         {
-            // Any other exception (reader factory rejected an unsupported
-            // column type, type-arg list malformed, value decode overflowed,
-            // …) means wire bytes were partially consumed at an indeterminate
-            // offset. Poison the connection so EnterBusy surfaces a clean
-            // "Connection is broken" on the next call instead of silently
-            // re-parsing stale bytes.
+            // Any other exception (type-arg list malformed, value decode
+            // overflowed, …) means wire bytes were partially consumed at an
+            // indeterminate offset. Poison the connection so the pool discards
+            // it and the next call surfaces a clean "Connection is broken"
+            // instead of silently re-parsing stale bytes.
             _protocolFatal = true;
             throw;
         }
@@ -3837,7 +3925,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         // Bulk insert bypasses SendQueryAsync, so apply role sync ourselves.
         if (!_inRoleSync)
@@ -4009,7 +4097,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         var writerRegistry = ColumnWriterRegistry.Default;
         var bufferWriter = new ArrayBufferWriter<byte>();
@@ -4066,7 +4154,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         var bufferWriter = new ArrayBufferWriter<byte>();
         var writer = new ProtocolWriter(bufferWriter);
@@ -4109,7 +4197,7 @@ public sealed class ClickHouseConnection : DbConnection
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_isOpen)
-            throw new InvalidOperationException("Connection is not open.");
+            ThrowNotOpen();
 
         // Estimate buffer size to avoid resize allocations during serialization
         // Heuristic: ~32 bytes per column per row + 1KB for protocol overhead

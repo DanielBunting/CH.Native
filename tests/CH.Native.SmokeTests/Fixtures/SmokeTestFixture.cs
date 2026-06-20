@@ -1,4 +1,5 @@
 using DotNet.Testcontainers.Builders;
+using DotNet.Testcontainers.Containers;
 using Testcontainers.ClickHouse;
 using Xunit;
 
@@ -37,6 +38,34 @@ public class SmokeTestFixture : IAsyncLifetime
 
     public string NativeLazyConnectionString =>
         $"Host={Host};Port={NativePort};Username={Username};Password={Password};StringMaterialization=Lazy";
+
+    /// <summary>
+    /// Executes clickhouse-client inside the server container (connects to localhost:9000).
+    /// argv-style exec: no shell, no quoting concerns, no stdin support in Testcontainers 4.x —
+    /// inserts must inline VALUES in the query. Per-query settings go via
+    /// <paramref name="extraArgs"/> (e.g. "--enable_time_time64_type=1") since each exec is a
+    /// fresh session.
+    /// </summary>
+    public async Task<ExecResult> ExecClickHouseClientAsync(
+        string query,
+        string format = "TabSeparated",
+        IEnumerable<string>? extraArgs = null)
+    {
+        var argv = new List<string>
+        {
+            "clickhouse-client",
+            "--user", Username,
+            "--password", Password,
+            "--format", format,
+        };
+        if (extraArgs is not null)
+        {
+            argv.AddRange(extraArgs);
+        }
+        argv.Add("--query");
+        argv.Add(query);
+        return await _container.ExecAsync(argv);
+    }
 
     public async Task InitializeAsync()
     {

@@ -41,6 +41,36 @@ and this project follows [Semantic Versioning](https://semver.org/).
   with a JIT-folded short-circuit (`return false` for non-nullable value
   types), eliminating the boxing previously paid by
   `IsDBNull → GetValue is null`.
+- **`Nothing` type support** — bare `SELECT NULL` (`Nullable(Nothing)`) and
+  `SELECT []` (`Array(Nothing)`) now read as `null` / empty array, matching
+  the CLI and the official driver. Previously these threw
+  `NotSupportedException` *and* poisoned the connection — notable because
+  ORMs and health checks emit bare `SELECT NULL` probes.
+- **Interval type support** — all eleven `Interval*` types
+  (`IntervalNanosecond` … `IntervalYear`, the server's full set per
+  `system.data_type_families`) decode to the new public
+  `CH.Native.Data.ClickHouseInterval` struct (count + `IntervalUnit`).
+  Deliberately not mapped to `TimeSpan`: Month/Quarter/Year are calendar
+  units with no fixed duration — `ToTimeSpan()` converts the time-based
+  units exactly (nanoseconds truncate to 100-ns ticks) and throws for
+  calendar units; check `IsCalendarUnit` first. Previously threw
+  `NotSupportedException` and poisoned the connection.
+- **Raw byte access for `String` columns** — ClickHouse `String` is an
+  arbitrary byte sequence; bytes that aren't valid UTF-8 are replaced with
+  U+FFFD in the `string` view (unchanged default). Under
+  `StringMaterialization=Lazy` the exact stored bytes are now recoverable:
+  `GetFieldValue<byte[]>(ordinal)` on the streaming row and ADO reader,
+  backed by new public `RawStringColumn.GetRawBytes(int)` /
+  `GetBytesCopy(int)` and `NullableRawStringColumn.GetBytesCopy(int)`
+  (null rows surface as SQL null).
+- **Full-precision access for `DateTime64(8/9)`** — the `DateTime` view
+  truncates to 100-ns ticks (a CLR ceiling; scales 0–7 are exact). Block
+  reads of scales 8–9 now retain the raw Int64 wire value (new public
+  `CH.Native.Data.DateTime64RawColumn`), reachable via
+  `GetFieldValue<long>(ordinal)`, `ExecuteScalarAsync<long>(...)`, and
+  `long` properties in typed row mapping — for scale 9 the value equals
+  `toUnixTimestamp64Nano`. Not wired for `Nullable(DateTime64(8/9))`;
+  use `toUnixTimestamp64Nano(col)` server-side there.
 
 ### Changed
 
@@ -70,6 +100,11 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - `ClickHouseDbDataReader.ReadAsync()` adds a cached `Task<bool>` fast path
   for synchronously-completing reads — avoids the async-state-machine
   allocation per row when the inner reader returns from a buffered block.
+- `DateTime64(8/9)` columns materialise as `DateTime64RawColumn` instead of
+  `TypedColumn<DateTime>` (to retain the raw Int64 — see Added). Row values
+  and `GetValue` still return the truncated `DateTime`; only code that
+  introspects `ITypedColumn` storage types observes the difference. Scales
+  0–7 are unchanged.
 
 ### Fixed
 
@@ -78,6 +113,25 @@ and this project follows [Semantic Versioning](https://semver.org/).
   non-nullable `DateTime` property via `QueryStreamAsync<T>`. The typed
   accessor path now correctly converts `DateTimeOffset → DateTime.UtcDateTime`,
   matching the documented behaviour of `GetFieldValue<DateTime>`.
+- **Bulk insert into `BFloat16` columns wrote a malformed block.** The direct
+  column extractor dispatched on CLR type only, so a `float` property wrote
+  4-byte `Float32` payloads into the 2-byte column — desyncing the block
+  stream and producing a misleading server error 261 (`Unknown BlockInfo
+  field number`). The `float` extractor now branches on the column type and
+  writes the truncated 2-byte bfloat16 form (matching the server-side cast),
+  including `Nullable(BFloat16)`.
+- **Unsupported-column-type failures now fail clean instead of leaving a
+  poisoned connection.** Column data on the wire is not length-prefixed, so
+  a response containing an undecodable column type (in practice: exotic
+  `AggregateFunction` state formats) still costs the connection — but now:
+  the original `NotSupportedException` states that the connection has been
+  closed (inner exception preserved); the close is eager (`State == Closed`,
+  `StateChange` fires, server session released); the next use reports
+  `"Connection is broken: a previous response could not be fully read…"`
+  instead of a generic not-open error; and a pooled `ClickHouseDataSource`
+  discards the connection rather than re-renting it. Previously the
+  connection lingered open-but-broken until its next use, which failed with
+  a message that didn't name the cause.
 
 ### Performance
 
@@ -94,6 +148,28 @@ and this project follows [Semantic Versioning](https://semver.org/).
 - Bulk-insert path untouched — pre-existing dominance preserved
   (`BulkInserter<T>` 1M rows: 99 ms / 405 KB, vs `ClickHouse.Driver`
   929 ms / 97 MB).
+
+### Internal / CI
+
+- Cross-client smoke suites
+  `CrossClient*IT` pattern: a full-type-matrix roundtrip through the
+  `clickhouse-client` CLI (exec'd inside the test container) in both insert
+  directions, an official-`ClickHouse.Driver`-writes / CH.Native-reads
+  suite (incl. timezone/DST scenarios), and three-way behavior-comparison
+  tests pinning where the clients differ. All comparisons assert against
+  anchored expected values, so a failure identifies which client deviates.
+- Insert×read parity suite: each type written three ways (CLI / CH.Native
+  bulk / driver bulk) into one table, read back through BOTH .NET clients
+  against the same anchors — proving values are insert-source-independent.
+  Comparison coverage extended with parameter-binding fidelity (the text
+  path flushes `double.Epsilon` to zero in both clients; binary bulk insert
+  is exact), `DateTime.Kind` write semantics (Unspecified is taken as UTC
+  in both clients; Local converts), silent decimal scale truncation on
+  write (both clients), and representation pins for Int128/UInt128, Time,
+  geo, decimals, and negative Enum16 members.
+- New "Gotchas" section and per-type detail (escape hatches, ranges,
+  `Decimal256` → `ClickHouseDecimal` correction) in `docs/data-types.md`,
+  with a contents index.
 
 ## [1.1.1] - 2026-05-09
 

@@ -302,6 +302,39 @@ public sealed class ClickHouseDataReader : DbDataReader
             return typedColumn[_currentRowIndex];
         }
 
+        // DateTime64(8/9) columns keep their raw Int64 wire values — surface them for
+        // callers that need the sub-tick digits a DateTime cannot represent. The value
+        // is the unit count since epoch (toUnixTimestamp64Nano for precision 9).
+        if (typeof(T) == typeof(long) && _currentBlock is not null
+            && (uint)ordinal < (uint)_currentBlock.ColumnCount
+            && _currentBlock.Columns[ordinal] is DateTime64RawColumn rawDateTime64)
+        {
+            EnsureCanRead();
+            return (T)(object)rawDateTime64.GetRawValue(_currentRowIndex);
+        }
+
+        // Lazy-materialized String columns keep the raw, un-decoded bytes — surface them
+        // for callers that need invalid-UTF-8-safe access. (Eager mode decodes during the
+        // block read, so byte recovery requires StringMaterialization=Lazy.)
+        if (typeof(T) == typeof(byte[]) && _currentBlock is not null
+            && (uint)ordinal < (uint)_currentBlock.ColumnCount)
+        {
+            if (_currentBlock.Columns[ordinal] is RawStringColumn rawStrings)
+            {
+                EnsureCanRead();
+                return (T)(object)rawStrings.GetBytesCopy(_currentRowIndex);
+            }
+
+            if (_currentBlock.Columns[ordinal] is NullableRawStringColumn nullableRawStrings)
+            {
+                EnsureCanRead();
+                var bytes = nullableRawStrings.GetBytesCopy(_currentRowIndex);
+                if (bytes is null)
+                    return default!;
+                return (T)(object)bytes;
+            }
+        }
+
         var value = GetValueInternal(ordinal);
 
         if (value is null)

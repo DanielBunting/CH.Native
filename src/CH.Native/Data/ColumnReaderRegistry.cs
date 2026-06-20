@@ -184,6 +184,16 @@ public sealed class ColumnReaderRegistryBuilder
         // Boolean type
         Register(new ColumnReaders.BoolColumnReader());
 
+        // Nothing type (Nullable(Nothing) = bare SELECT NULL; Array(Nothing) = SELECT [])
+        Register(new ColumnReaders.NothingColumnReader());
+
+        // Interval types — Int64 on the wire, one reader per unit (IntervalNanosecond …
+        // IntervalYear, the server's full set per system.data_type_families)
+        foreach (var unit in Enum.GetValues<IntervalUnit>())
+        {
+            Register(new ColumnReaders.IntervalColumnReader(unit));
+        }
+
         // String type
         Register(new ColumnReaders.StringColumnReader());
 

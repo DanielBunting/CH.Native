@@ -41,12 +41,45 @@ public sealed class RawStringColumn : ITypedColumn
     {
         if ((uint)index >= (uint)_count)
             throw new ArgumentOutOfRangeException(nameof(index));
+        ObjectDisposedException.ThrowIf(_rawData is null, this);
 
         var length = _lengths![index];
         if (length == 0)
             return string.Empty;
 
         return Encoding.UTF8.GetString(_rawData!, _offsets![index], length);
+    }
+
+    /// <summary>
+    /// Returns the raw bytes of the value at <paramref name="index"/> without UTF-8
+    /// decoding. ClickHouse String values are arbitrary byte sequences; this accessor
+    /// preserves bytes that are not valid UTF-8 (which <see cref="GetValue"/> would
+    /// replace with U+FFFD).
+    /// </summary>
+    /// <remarks>
+    /// The span aliases this column's pooled buffer and is only valid until the column
+    /// is disposed — copy it (or use <see cref="GetBytesCopy"/>) to retain the data.
+    /// </remarks>
+    /// <param name="index">The zero-based row index.</param>
+    /// <returns>The raw value bytes; empty for an empty string.</returns>
+    public ReadOnlySpan<byte> GetRawBytes(int index)
+    {
+        if ((uint)index >= (uint)_count)
+            throw new ArgumentOutOfRangeException(nameof(index));
+        ObjectDisposedException.ThrowIf(_rawData is null, this);
+
+        return _rawData.AsSpan(_offsets![index], _lengths![index]);
+    }
+
+    /// <summary>
+    /// Returns a copy of the raw bytes of the value at <paramref name="index"/> that
+    /// remains valid after the column is disposed. See <see cref="GetRawBytes"/>.
+    /// </summary>
+    /// <param name="index">The zero-based row index.</param>
+    /// <returns>The raw value bytes; empty for an empty string.</returns>
+    public byte[] GetBytesCopy(int index)
+    {
+        return GetRawBytes(index).ToArray();
     }
 
     /// <inheritdoc />

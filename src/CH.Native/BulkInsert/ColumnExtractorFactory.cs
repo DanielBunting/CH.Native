@@ -72,9 +72,17 @@ public static class ColumnExtractorFactory
             Type t when t == typeof(UInt128) => CreateNumericExtractor<TRow, UInt128>(property, columnName, clickHouseType, isNullable, isClickHouseNullable,
                 static (ref ProtocolWriter w, UInt128 v) => w.WriteUInt128(v)),
 
-            // Floating point
-            Type t when t == typeof(float) => CreateNumericExtractor<TRow, float>(property, columnName, clickHouseType, isNullable, isClickHouseNullable,
-                static (ref ProtocolWriter w, float v) => w.WriteFloat32(v)),
+            // Floating point. The wire width must follow the COLUMN type, not the CLR
+            // type: a float property bound to a BFloat16 column writes 2 bytes per value
+            // (truncated, matching BFloat16ColumnWriter and the server-side cast) — a
+            // 4-byte Float32 payload here desyncs the block stream and the server fails
+            // with a misleading "Unknown BlockInfo field number" error.
+            Type t when t == typeof(float) =>
+                clickHouseType is "BFloat16" or "Nullable(BFloat16)"
+                    ? CreateNumericExtractor<TRow, float>(property, columnName, clickHouseType, isNullable, isClickHouseNullable,
+                        static (ref ProtocolWriter w, float v) => w.WriteUInt16((ushort)(BitConverter.SingleToUInt32Bits(v) >> 16)))
+                    : CreateNumericExtractor<TRow, float>(property, columnName, clickHouseType, isNullable, isClickHouseNullable,
+                        static (ref ProtocolWriter w, float v) => w.WriteFloat32(v)),
             Type t when t == typeof(double) => CreateNumericExtractor<TRow, double>(property, columnName, clickHouseType, isNullable, isClickHouseNullable,
                 static (ref ProtocolWriter w, double v) => w.WriteFloat64(v)),
 
