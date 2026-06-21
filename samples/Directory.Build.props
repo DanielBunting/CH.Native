@@ -1,0 +1,15 @@
+<Project>
+  <!-- Chain to the repo-root props first: MSBuild auto-imports only the nearest
+       Directory.Build.props, so without this the sample projects would lose
+       TargetFrameworks, Nullable, WarningsAsErrors, etc. -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+
+  <PropertyGroup>
+    <!-- Samples are runnable reference apps, never packed, so they don't need an XML
+         doc file. The root props turns GenerateDocumentationFile on only so the
+         packable src/ libraries ship XML docs; turning it back off here suppresses
+         doc-comment warnings (e.g. CS1574 crefs in the illustrative XML comments)
+         while keeping them active for src/. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+</Project>

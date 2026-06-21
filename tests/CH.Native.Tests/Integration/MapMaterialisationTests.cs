@@ -350,7 +350,7 @@ public class MapMaterialisationTests
         Assert.Equal(new KeyValuePair<string, int>("a", 2), inner1[1]);
 
         var inner2 = map[1].Value;
-        Assert.Equal(1, inner2.Count);
+        Assert.Single(inner2);
         Assert.Equal(new KeyValuePair<string, int>("b", 3), inner2[0]);
     }
 

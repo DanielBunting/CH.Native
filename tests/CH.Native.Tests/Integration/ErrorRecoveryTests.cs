@@ -318,7 +318,6 @@ public class ErrorRecoveryTests
     [Fact]
     public async Task ResilientConnection_NonTransientError_NoRetry()
     {
-        var retryCount = 0;
         var settings = ClickHouseConnectionSettings.CreateBuilder()
             .WithHost(_fixture.Host)
             .WithPort(_fixture.Port)

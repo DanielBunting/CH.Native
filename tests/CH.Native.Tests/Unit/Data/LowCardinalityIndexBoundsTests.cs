@@ -99,6 +99,10 @@ public class LowCardinalityIndexBoundsTests
         BinaryPrimitives.WriteUInt64LittleEndian(u64, (ulong)indices.Length);
         ms.Write(u64);
 
+        // Hoisted out of the loop so each iteration reuses the same stack buffers
+        // (stackalloc inside the loop would re-reserve stack space every pass — CA2014).
+        Span<byte> u16 = stackalloc byte[2];
+        Span<byte> u32 = stackalloc byte[4];
         foreach (var idx in indices)
         {
             switch (indexType)
@@ -107,12 +111,10 @@ public class LowCardinalityIndexBoundsTests
                     ms.WriteByte((byte)idx);
                     break;
                 case 1:
-                    Span<byte> u16 = stackalloc byte[2];
                     BinaryPrimitives.WriteUInt16LittleEndian(u16, (ushort)idx);
                     ms.Write(u16);
                     break;
                 case 2:
-                    Span<byte> u32 = stackalloc byte[4];
                     BinaryPrimitives.WriteUInt32LittleEndian(u32, (uint)idx);
                     ms.Write(u32);
                     break;

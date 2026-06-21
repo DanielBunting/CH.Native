@@ -54,7 +54,7 @@ public class DataSourcePrewarmFailureTests
         // Construction must not block on prewarm; the prewarm task runs in the
         // background. Await the captured task so the test has a deterministic
         // join point.
-        await ds.PrewarmTask.ConfigureAwait(false);
+        await ds.PrewarmTask;
 
         // The failure ends up in the sink — either as PrewarmFailed (preferred)
         // or any Warning/Error mentioning prewarm.

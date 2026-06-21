@@ -73,7 +73,7 @@ public class SingleConnectionContentionTests
         // likely); no protocol corruption; connection stays poolable.
         Assert.True(successes > 0, "No queries completed.");
         Assert.True(busyThrows > 0, "No producer was rejected by the busy gate — gate may be a no-op.");
-        Assert.Empty(failures.Where(f => f is ClickHouseProtocolException));
+        Assert.DoesNotContain(failures, f => f is ClickHouseProtocolException);
         Assert.False(GetPrivate<bool>(connection, "_protocolFatal"));
         Assert.True((bool)connection.GetType()
             .GetProperty("CanBePooled", BindingFlags.Instance | BindingFlags.NonPublic)!
@@ -151,7 +151,7 @@ public class SingleConnectionContentionTests
         // that the connection might end up unpoolable, but we MUST NOT see
         // ClickHouseProtocolException, which only fires when the read path
         // observes corrupt bytes.
-        Assert.Empty(failures.Where(f => f is ClickHouseProtocolException));
+        Assert.DoesNotContain(failures, f => f is ClickHouseProtocolException);
         Assert.True(completed > 0, "No queries completed despite 60s of producers.");
     }
 
@@ -240,7 +240,7 @@ public class SingleConnectionContentionTests
 
             _output.WriteLine($"inserted={totalInserted}, producer-successes={producerSuccesses}, busy-throws={busyThrows}, failures={failures.Count}");
 
-            Assert.Empty(failures.Where(f => f is ClickHouseProtocolException));
+            Assert.DoesNotContain(failures, f => f is ClickHouseProtocolException);
             Assert.True(busyThrows > 0, "Inserter never blocked any producer — gate is broken.");
             Assert.False(GetPrivate<bool>(connection, "_protocolFatal"));
 

@@ -1,6 +1,7 @@
 using CH.Native.BulkInsert;
 using CH.Native.Connection;
 using CH.Native.Exceptions;
+using CH.Native.Mapping;
 using CH.Native.Tests.Fixtures;
 using Xunit;
 
@@ -1181,10 +1182,10 @@ public class BulkInsertTests
 
     private class MappedRow
     {
-        [Column(Name = "user_id")]
+        [ClickHouseColumn(Name = "user_id")]
         public int Id { get; set; }
 
-        [Column(Name = "user_name")]
+        [ClickHouseColumn(Name = "user_name")]
         public string Name { get; set; } = string.Empty;
     }
 
@@ -1193,7 +1194,7 @@ public class BulkInsertTests
         public int Id { get; set; }
         public string Name { get; set; } = string.Empty;
 
-        [Column(Ignore = true)]
+        [ClickHouseColumn(Ignore = true)]
         public string Ignored { get; set; } = string.Empty;
     }
 

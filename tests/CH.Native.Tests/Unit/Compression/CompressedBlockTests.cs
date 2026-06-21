@@ -1,6 +1,10 @@
 using CH.Native.Compression;
 using Xunit;
 
+// These tests deliberately exercise the obsolete CompressedBlock.Compress overload
+// (superseded by CompressPooled) to keep the legacy path covered until it is removed.
+#pragma warning disable CS0618
+
 namespace CH.Native.Tests.Unit.Compression;
 
 public class CompressedBlockTests

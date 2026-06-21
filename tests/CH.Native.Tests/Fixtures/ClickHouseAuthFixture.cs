@@ -8,6 +8,7 @@ using DotNet.Testcontainers.Containers;
 using Xunit;
 
 namespace CH.Native.Tests.Fixtures;
+#pragma warning disable SYSLIB0057 // legacy X509Certificate2 ctors in test cert setup; X509CertificateLoader is net9+ only and these projects also target net8.0
 
 /// <summary>
 /// Testcontainers-backed ClickHouse server with three authentication users provisioned:

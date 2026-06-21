@@ -4,6 +4,7 @@ using CH.Native.Connection;
 using Xunit;
 
 namespace CH.Native.Tests.Unit.Connection;
+#pragma warning disable SYSLIB0057 // legacy X509Certificate2 ctors in test cert setup; X509CertificateLoader is net9+ only and these projects also target net8.0
 
 /// <summary>
 /// Pre-fix <see cref="ClickHouseConnectionSettingsBuilder.WithTlsClientCertificate(X509Certificate2)"/>

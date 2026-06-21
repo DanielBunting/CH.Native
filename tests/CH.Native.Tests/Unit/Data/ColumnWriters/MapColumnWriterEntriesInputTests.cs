@@ -252,7 +252,7 @@ public class MapColumnWriterEntriesInputTests
         Assert.Contains(col[0], kv => kv.Key == "h1" && kv.Value == 100);
         Assert.Contains(col[0], kv => kv.Key == "h2" && kv.Value == 200);
 
-        Assert.Equal(1, col[1].Count);
+        Assert.Single(col[1]);
         Assert.Equal(new KeyValuePair<string, int>("d", 1), col[1][0]);
 
         Assert.Equal(2, col[2].Count);
@@ -260,7 +260,7 @@ public class MapColumnWriterEntriesInputTests
         Assert.Equal(new KeyValuePair<string, int>("c", 7), col[2][0]);
         Assert.Equal(new KeyValuePair<string, int>("c", 8), col[2][1]);
 
-        Assert.Equal(1, col[3].Count);
+        Assert.Single(col[3]);
         Assert.Equal(new KeyValuePair<string, int>("a", 42), col[3][0]);
     }
 
@@ -288,7 +288,7 @@ public class MapColumnWriterEntriesInputTests
         // (Dictionary, ClickHouseMap, KVP[], IReadOnlyList, IEnumerable) so a
         // refactor of the dispatch doesn't silently drop a supported shape.
         var fromDict = ReadSingleValue(WriteValueViaInterface(new Dictionary<string, int> { ["a"] = 1 }));
-        Assert.Equal(1, fromDict.Count);
+        Assert.Single(fromDict);
         Assert.Equal(new KeyValuePair<string, int>("a", 1), fromDict[0]);
 
         var fromCmap = ReadSingleValue(WriteValueViaInterface(new ClickHouseMap<string, int>(new[]
@@ -300,7 +300,7 @@ public class MapColumnWriterEntriesInputTests
         Assert.True(fromCmap.HasDuplicateKeys);
 
         var fromArr = ReadSingleValue(WriteValueViaInterface(new[] { new KeyValuePair<string, int>("k", 7) }));
-        Assert.Equal(1, fromArr.Count);
+        Assert.Single(fromArr);
         Assert.Equal(new KeyValuePair<string, int>("k", 7), fromArr[0]);
 
         IReadOnlyList<KeyValuePair<string, int>> rolist = new List<KeyValuePair<string, int>>
@@ -311,7 +311,7 @@ public class MapColumnWriterEntriesInputTests
         Assert.Equal(2, fromRoList.Count);
 
         var fromEnumerable = ReadSingleValue(WriteValueViaInterface(KvpEnumerableSource()));
-        Assert.Equal(1, fromEnumerable.Count);
+        Assert.Single(fromEnumerable);
         Assert.Equal(new KeyValuePair<string, int>("e", 9), fromEnumerable[0]);
     }
 

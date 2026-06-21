@@ -44,6 +44,10 @@ public class TupleColumnSkipperTests
         // Tuple(String, Nullable(Int32)) — String + bitmap+values. (Skipping Array(String)
         // here because TupleColumnWriter.WriteColumn for nested arrays takes the
         // object[][] codepath, which doesn't compose cleanly with our skipper assertions.)
+        // The (int?)null entries are deliberate — they box to a null reference inside
+        // the object[] tuple rows to exercise the Nullable(Int32) arm. The array stays
+        // object[][] so it matches IColumnWriter.WriteColumn's loosely-typed parameter.
+#pragma warning disable CS8625
         var rows = new object[][]
         {
             new object[] { "alpha", (int?)1 },
@@ -51,6 +55,7 @@ public class TupleColumnSkipperTests
             new object[] { "longer string", (int?)42 },
             new object[] { "x", (int?)null },
         };
+#pragma warning restore CS8625
 
         var writer = new TupleColumnWriter(new IColumnWriter[]
         {

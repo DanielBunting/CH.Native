@@ -5,10 +5,12 @@
   <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
 
   <PropertyGroup>
-    <!-- Test projects inherit GenerateDocumentationFile=true from the root props
-         (it is needed so the packable src/ libraries ship XML docs). Public xUnit
-         test methods are never documented, so CS1591 ("missing XML comment") is
-         pure noise here while staying active for src/. -->
-    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <!-- Test projects are never packed, so they don't need an XML doc file. The root
+         props turns GenerateDocumentationFile on only so the packable src/ libraries
+         ship XML docs; turning it back off here suppresses every doc-comment warning
+         (CS1591 missing-comment, plus CS1574/CS1573/CS0419/CS1734 cref/param errors
+         that come from xUnit test docs referencing sibling test types) while keeping
+         all of them active for src/. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 </Project>
