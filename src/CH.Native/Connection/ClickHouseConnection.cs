@@ -1066,7 +1066,7 @@ public sealed class ClickHouseConnection : DbConnection
 
     private async Task SendClientHelloAsync(CancellationToken cancellationToken)
     {
-        var (wireUsername, wirePassword) = BuildHandshakeCredentials(_settings);
+        var (wireUsername, wirePassword) = BuildHandshakeCredentials(Settings);
         var clientHello = ClientHello.Create(
             Settings.ClientName,
             Settings.Database,
@@ -1329,7 +1329,7 @@ public sealed class ClickHouseConnection : DbConnection
         if (!Guid.TryParse(queryId, out _))
             throw new ArgumentException("Invalid query ID format. Expected a GUID.", nameof(queryId));
 
-        await using var killConnection = new ClickHouseConnection(_settings);
+        await using var killConnection = new ClickHouseConnection(Settings);
         await killConnection.OpenAsync(cancellationToken);
 
         await killConnection.ExecuteNonQueryAsync(

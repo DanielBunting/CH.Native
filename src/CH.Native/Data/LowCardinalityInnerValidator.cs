@@ -14,7 +14,7 @@ namespace CH.Native.Data;
 /// previously only blocked Dynamic and Variant inners; this validator covers the rest.
 ///
 /// Probed against ClickHouse 26.2.15.4. The list mirrors the server's restriction;
-/// see <see cref="CH.Native.Tests.Integration.BulkInsertCompositeTypeTests"/> for the
+/// see <c>BulkInsertCompositeTypeTests</c> for the
 /// schema-level guard tests that cross-check this behaviour.
 /// </remarks>
 internal static class LowCardinalityInnerValidator

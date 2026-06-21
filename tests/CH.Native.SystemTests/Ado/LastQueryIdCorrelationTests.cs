@@ -3,7 +3,6 @@ using CH.Native.Connection;
 using CH.Native.Commands;
 using CH.Native.Results;
 using CH.Native.BulkInsert;
-using CH.Native.Connection;
 using CH.Native.Linq;
 using CH.Native.Mapping;
 using CH.Native.SystemTests.BulkInsertFailures.Helpers;

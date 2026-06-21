@@ -5,7 +5,6 @@ using CH.Native.Ado;
 using CH.Native.Connection;
 using CH.Native.Commands;
 using CH.Native.Results;
-using CH.Native.Connection;
 // CH.Native.Dapper intentionally NOT imported — `using Dapper;` below brings
 // Dapper's IDbConnection extensions into scope, and importing CH.Native.Dapper
 // here would create ambiguity with our IDbConnectionDapperExtensions. The only

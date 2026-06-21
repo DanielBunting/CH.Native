@@ -185,7 +185,7 @@ public class JsonColumnReaderNestedTests
 
         var profile = doc.RootElement.GetProperty("user").GetProperty("profile");
         Assert.Equal(JsonValueKind.Object, profile.ValueKind);
-        Assert.Equal(0, profile.EnumerateObject().Count());
+        Assert.Empty(profile.EnumerateObject());
 
         var items = doc.RootElement.GetProperty("items");
         Assert.Equal(JsonValueKind.Array, items.ValueKind);

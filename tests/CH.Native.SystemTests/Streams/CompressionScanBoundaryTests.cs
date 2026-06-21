@@ -164,7 +164,6 @@ public class CompressionScanBoundaryTests
         // The compressed payload is an empty Data block (table name "" + BlockInfo
         // + 0 columns + 0 rows) — the smallest valid uncompressed payload to
         // wrap in compression.
-        var revision = MockClickHouseServer.PinnedProtocolRevision;
 
         // Build the uncompressed inner block bytes (excluding the outer table name
         // — that goes outside the compressed envelope).

@@ -12,7 +12,7 @@ namespace CH.Native.Data.ColumnWriters;
 /// wire. <see cref="IPAddress.GetAddressBytes()"/> returns bytes in
 /// <em>network order</em> (big-endian), so the writer reverses them before
 /// emitting. <c>1.2.3.4</c> goes out on the wire as
-/// <c>[0x04, 0x03, 0x02, 0x01]</c> — symmetric with <see cref="IPv4ColumnReader"/>.
+/// <c>[0x04, 0x03, 0x02, 0x01]</c> — symmetric with <see cref="ColumnReaders.IPv4ColumnReader"/>.
 /// </remarks>
 internal sealed class IPv4ColumnWriter : IColumnWriter<IPAddress>
 {

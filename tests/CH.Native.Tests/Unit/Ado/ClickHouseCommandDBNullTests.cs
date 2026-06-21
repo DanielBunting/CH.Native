@@ -36,7 +36,7 @@ public class ClickHouseCommandDBNullTests
         ((DbCommand)cmd).Parameters.Add(p);
 
         var native = InvokeBuildNativeParameters(cmd);
-        Assert.Equal(1, native.Count);
+        Assert.Single(native);
         Assert.Null(native[0].Value);
     }
 

@@ -154,7 +154,7 @@ public sealed class ClickHouseConnectionSettings
     /// this connection. When <c>null</c>, the server's login-time default roles
     /// remain in effect. When an empty list, all roles are stripped (equivalent to
     /// <c>SET ROLE NONE</c>). Individual commands may override this via
-    /// <see cref="Ado.ClickHouseDbCommand.Roles"/> or
+    /// <see cref="Commands.ClickHouseCommand.Roles"/> or
     /// <see cref="BulkInsert.BulkInsertOptions.Roles"/>.
     /// </summary>
     public IReadOnlyList<string>? Roles { get; }

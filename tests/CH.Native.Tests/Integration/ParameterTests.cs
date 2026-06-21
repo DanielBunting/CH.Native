@@ -198,7 +198,7 @@ public class ParameterTests
         var results = new List<(ulong Number, long Doubled)>();
         await foreach (var row in command.QueryStreamAsync())
         {
-            results.Add(((ulong)row["number"], Convert.ToInt64(row["doubled"])));
+            results.Add((Convert.ToUInt64(row["number"]), Convert.ToInt64(row["doubled"])));
         }
 
         Assert.Equal(3, results.Count);

@@ -6,6 +6,7 @@ using CH.Native.Tests.Fixtures;
 using Xunit;
 
 namespace CH.Native.Tests.Integration;
+#pragma warning disable SYSLIB0057 // legacy X509Certificate2 ctors in test cert setup; X509CertificateLoader is net9+ only and these projects also target net8.0
 
 [Collection("ClickHouseAuth")]
 [Trait("Category", "Integration")]

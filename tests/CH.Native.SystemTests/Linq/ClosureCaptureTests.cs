@@ -43,7 +43,7 @@ public class ClosureCaptureTests : IAsyncLifetime
 
         Assert.DoesNotContain(" 5", sql);
         Assert.Contains("{", sql, StringComparison.Ordinal);
-        Assert.Equal(1, parameters.Count);
+        Assert.Single(parameters);
         Assert.Equal(5, parameters[0].Value);
 
         // And it must still execute correctly.

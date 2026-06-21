@@ -430,11 +430,15 @@ public class ClientBehaviorComparisonTests
             using (var conn = new DriverConnection(_fixture.DriverConnectionString))
             {
                 await conn.OpenAsync();
+                // ClickHouse.Driver's ClickHouseBulkCopy is obsolete in that library, but
+                // it is the documented bulk path we compare CH.Native against here.
+#pragma warning disable CS0618
                 using var bulk = new ClickHouse.Driver.Copy.ClickHouseBulkCopy(conn)
                 {
                     DestinationTableName = table,
                     ColumnNames = new[] { "id", "val" },
                 };
+#pragma warning restore CS0618
                 await bulk.WriteToServerAsync(new List<object?[]> { new object?[] { 1, 1.23456m } });
             }
 

@@ -17,7 +17,7 @@ namespace CH.Native.Resilience;
 /// endpoint via the <see cref="LoadBalancer"/>; on a transient failure the
 /// retry path may select a different server for the next attempt. This is
 /// fine for read-only SQL — <see cref="ExecuteScalarAsync{T}"/> and
-/// <see cref="QueryAsync"/> are idempotent — and for write SQL the Round-3
+/// <see cref="QueryStreamAsync{T}"/> are idempotent — and for write SQL the Round-3
 /// fix in <see cref="ExecuteNonQueryAsync"/> short-circuits retry entirely,
 /// so an INSERT cannot accidentally be replayed against a different replica.
 /// Callers that genuinely need session-scoped state (temporary tables,

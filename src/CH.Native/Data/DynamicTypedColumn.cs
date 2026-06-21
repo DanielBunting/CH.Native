@@ -23,6 +23,16 @@ public sealed class DynamicTypedColumn : ITypedColumn
     private readonly ArrayPool<int>? _indexPool;
     private readonly ArrayPool<int>? _offsetPool;
 
+    /// <summary>
+    /// Initializes a new <see cref="DynamicTypedColumn"/> from its flattened wire-level storage.
+    /// </summary>
+    /// <param name="indexes">Per-row type index into <paramref name="armColumns"/>; the value <c>armColumns.Length</c> marks a NULL row.</param>
+    /// <param name="rowCount">The number of rows in the column.</param>
+    /// <param name="armColumns">The per-type arm columns, one <see cref="ITypedColumn"/> per concrete type present in the block.</param>
+    /// <param name="armTypeNames">The ClickHouse type name for each arm, parallel to <paramref name="armColumns"/>.</param>
+    /// <param name="rowToArmOffset">Maps each row index to its offset within the arm column selected by that row's type index.</param>
+    /// <param name="indexPool">Optional pool the <paramref name="indexes"/> array was rented from; returned to it on dispose.</param>
+    /// <param name="offsetPool">Optional pool the <paramref name="rowToArmOffset"/> array was rented from; returned to it on dispose.</param>
     public DynamicTypedColumn(
         int[] indexes,
         int rowCount,

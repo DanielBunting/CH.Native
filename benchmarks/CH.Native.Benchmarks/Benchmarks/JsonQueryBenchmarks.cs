@@ -69,7 +69,7 @@ public class JsonQueryBenchmarks
 
         var result = await _nativeConnection.ExecuteScalarAsync<JsonDocument>(
             "SELECT '{\"name\":\"test\",\"value\":42}'::JSON SETTINGS output_format_native_write_json_as_string=1");
-        var name = result.RootElement.GetProperty("name").GetString();
+        var name = result!.RootElement.GetProperty("name").GetString();
         result.Dispose();
         return name;
     }

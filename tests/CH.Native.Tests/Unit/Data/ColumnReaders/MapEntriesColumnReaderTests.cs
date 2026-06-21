@@ -78,7 +78,7 @@ public class MapEntriesColumnReaderTests
         var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
         var map = reader.ReadValue(ref pr);
 
-        Assert.Equal(0, map.Count);
+        Assert.Empty(map);
         Assert.False(map.HasDuplicateKeys);
     }
 
@@ -107,12 +107,12 @@ public class MapEntriesColumnReaderTests
         using var column = reader.ReadTypedColumn(ref pr, 3);
 
         Assert.Equal(3, column.Count);
-        Assert.Equal(0, column[0].Count);
+        Assert.Empty(column[0]);
         Assert.Equal(2, column[1].Count);
         Assert.Equal(new KeyValuePair<string, int>("k", 10), column[1][0]);
         Assert.Equal(new KeyValuePair<string, int>("k", 20), column[1][1]);
         Assert.True(column[1].HasDuplicateKeys);
-        Assert.Equal(1, column[2].Count);
+        Assert.Single(column[2]);
         Assert.Equal(new KeyValuePair<string, int>("z", 99), column[2][0]);
     }
 
@@ -148,7 +148,7 @@ public class MapEntriesColumnReaderTests
         Assert.Equal(3, column.Count);
         for (int i = 0; i < 3; i++)
         {
-            Assert.Equal(0, column[i].Count);
+            Assert.Empty(column[i]);
         }
     }
 

@@ -53,7 +53,11 @@ public class TypedColumnDisposeClearsArrayTests
 
     private struct HoldsReference
     {
+        // Never assigned: the test only needs a struct that carries a reference-typed
+        // field so it can assert the pooled array is cleared on dispose.
+#pragma warning disable CS0649
         public string? Value;
+#pragma warning restore CS0649
     }
 
     private sealed class RecordingPool<T> : ArrayPool<T>

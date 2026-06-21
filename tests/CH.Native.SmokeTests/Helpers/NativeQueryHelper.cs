@@ -35,6 +35,6 @@ public static class NativeQueryHelper
     {
         await using var connection = new ClickHouseConnection(connectionString);
         await connection.OpenAsync();
-        return await connection.ExecuteScalarAsync<T>(sql)!;
+        return (await connection.ExecuteScalarAsync<T>(sql))!;
     }
 }

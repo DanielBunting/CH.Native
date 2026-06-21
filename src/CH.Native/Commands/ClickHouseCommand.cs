@@ -29,7 +29,7 @@ namespace CH.Native.Commands;
 /// </para>
 /// <para>
 /// Native execute methods (typed <see cref="ExecuteScalarAsync{T}"/>,
-/// <see cref="ExecuteNonQueryAsync"/> with <see cref="IProgress{T}"/>,
+/// <see cref="ExecuteNonQueryAsync(System.IProgress{CH.Native.Data.QueryProgress},System.Threading.CancellationToken)"/> with <see cref="IProgress{T}"/>,
 /// <see cref="ExecuteReaderAsync"/>, <see cref="QueryStreamAsync"/>) are unaffected
 /// by the DbCommand base and pass <see cref="Parameters"/> directly.
 /// </para>

@@ -2,7 +2,6 @@ using CH.Native.Ado;
 using CH.Native.Connection;
 using CH.Native.Commands;
 using CH.Native.Results;
-using CH.Native.Connection;
 // CH.Native.Dapper not imported to avoid IDbConnection extension ambiguity with Dapper namespace; qualify Register() calls below.
 using CH.Native.Mapping;
 using CH.Native.SystemTests.Fixtures;

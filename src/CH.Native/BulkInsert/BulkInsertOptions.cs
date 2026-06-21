@@ -42,7 +42,7 @@ public sealed class BulkInsertOptions
     /// <see cref="Connection.ClickHouseConnectionSettings.UseSchemaCache"/>. Set to <c>true</c>
     /// or <c>false</c> to override the connection default per call.
     /// A stale cache after a server-side ALTER TABLE can produce an error at CompleteAsync time;
-    /// call <see cref="Connection.ClickHouseConnection.InvalidateSchemaCache"/> after ALTERs, or
+    /// call <see cref="Connection.ClickHouseConnection.InvalidateSchemaCache(string?)"/> after ALTERs, or
     /// catch the <see cref="Exceptions.ClickHouseServerException"/> and retry with a fresh
     /// inserter (the cache entry is evicted automatically on schema-drift errors).
     /// </remarks>

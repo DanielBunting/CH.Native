@@ -11,6 +11,10 @@ public sealed class ColumnSkipperFactory
 {
     private readonly ColumnSkipperRegistry _registry;
 
+    /// <summary>
+    /// Initializes a new <see cref="ColumnSkipperFactory"/>.
+    /// </summary>
+    /// <param name="registry">The registry consulted to resolve skippers for simple, non-composite types.</param>
     public ColumnSkipperFactory(ColumnSkipperRegistry registry)
     {
         _registry = registry;

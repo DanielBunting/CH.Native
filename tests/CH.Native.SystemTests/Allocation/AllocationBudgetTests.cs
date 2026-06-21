@@ -7,9 +7,7 @@ using CH.Native.Mapping;
 using CH.Native.Results;
 using CH.Native.SystemTests.Fixtures;
 using CH.Native.Ado;
-using CH.Native.Connection;
 using CH.Native.Commands;
-using CH.Native.Results;
 using Dapper;
 using Xunit;
 

@@ -52,6 +52,14 @@ public sealed class ClickHouseType
     /// </summary>
     public IReadOnlyList<string> AggregateFunctionParameters { get; }
 
+    /// <summary>
+    /// Initializes a new <see cref="ClickHouseType"/>.
+    /// </summary>
+    /// <param name="baseName">The base type name (e.g., "Nullable", "Array", "Int32").</param>
+    /// <param name="typeArguments">Nested type arguments for composite types (e.g., the Int32 in Nullable(Int32)). Null is treated as an empty list.</param>
+    /// <param name="parameters">Non-type parameters such as scale, precision, or enum definitions. Null is treated as an empty list.</param>
+    /// <param name="originalTypeName">The original type name string as received from ClickHouse. Defaults to <paramref name="baseName"/> when null.</param>
+    /// <param name="fieldNames">Field names for named tuples and nested types. Null is treated as an empty list.</param>
     public ClickHouseType(
         string baseName,
         IReadOnlyList<ClickHouseType>? typeArguments = null,
@@ -191,6 +199,11 @@ public sealed class ClickHouseType
         return 32;
     }
 
+    /// <summary>
+    /// Reconstructs the canonical ClickHouse type-name string from the parsed components,
+    /// including type arguments, named-tuple field names, parameters, and any aggregate-function descriptor.
+    /// </summary>
+    /// <returns>The ClickHouse type-name representation of this instance.</returns>
     public override string ToString()
     {
         // AggregateFunction(name, T...) / SimpleAggregateFunction(name, T): the function

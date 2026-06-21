@@ -188,7 +188,7 @@ public class JsonTypeTests
         using (doc)
         {
             Assert.Equal(JsonValueKind.Object, doc.RootElement.ValueKind);
-            Assert.Equal(0, doc.RootElement.EnumerateObject().Count());
+            Assert.Empty(doc.RootElement.EnumerateObject());
         }
     }
 

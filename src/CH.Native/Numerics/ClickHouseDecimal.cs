@@ -118,12 +118,25 @@ public readonly struct ClickHouseDecimal
     //  Implicit conversions FROM primitive types
     // -------------------------------------------------------------------
 
+    /// <summary>
+    /// Implicitly converts a 32-bit signed integer to a <see cref="ClickHouseDecimal"/> with a scale of zero.
+    /// </summary>
+    /// <param name="value">The integer value to convert.</param>
     public static implicit operator ClickHouseDecimal(int value) =>
         new(new BigInteger(value), 0);
 
+    /// <summary>
+    /// Implicitly converts a 64-bit signed integer to a <see cref="ClickHouseDecimal"/> with a scale of zero.
+    /// </summary>
+    /// <param name="value">The integer value to convert.</param>
     public static implicit operator ClickHouseDecimal(long value) =>
         new(new BigInteger(value), 0);
 
+    /// <summary>
+    /// Implicitly converts a .NET <see cref="decimal"/> to a <see cref="ClickHouseDecimal"/>,
+    /// preserving its mantissa and scale exactly.
+    /// </summary>
+    /// <param name="value">The decimal value to convert.</param>
     public static implicit operator ClickHouseDecimal(decimal value)
     {
         var bits = decimal.GetBits(value);
@@ -141,6 +154,14 @@ public readonly struct ClickHouseDecimal
         return new ClickHouseDecimal(isNegative ? -magnitude : magnitude, scale);
     }
 
+    /// <summary>
+    /// Implicitly converts a <see cref="double"/> to a <see cref="ClickHouseDecimal"/>. Values within
+    /// .NET <see cref="decimal"/> range are routed through <see cref="decimal"/>; values outside that range
+    /// are converted via the round-trippable ("R") string representation, so the result is limited to the
+    /// precision of the source <see cref="double"/>.
+    /// </summary>
+    /// <param name="value">The double value to convert.</param>
+    /// <returns>A <see cref="ClickHouseDecimal"/> equal to <paramref name="value"/>.</returns>
     public static implicit operator ClickHouseDecimal(double value)
     {
         // Use decimal as intermediate when within range
@@ -205,6 +226,12 @@ public readonly struct ClickHouseDecimal
         return isNegative ? -result : result;
     }
 
+    /// <summary>
+    /// Converts to a <see cref="double"/>. Because <see cref="double"/> has limited precision,
+    /// the result may lose precision and very large magnitudes may evaluate to infinity.
+    /// </summary>
+    /// <param name="value">The value to convert.</param>
+    /// <returns>The closest <see cref="double"/> representation of <paramref name="value"/>.</returns>
     public static explicit operator double(ClickHouseDecimal value)
     {
         // For small values, go through decimal for precision
@@ -216,15 +243,39 @@ public readonly struct ClickHouseDecimal
         return double.Parse(value.ToString(null, CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// Converts to a <see cref="float"/> via <see cref="double"/>. Because <see cref="float"/> has limited
+    /// precision, the result may lose precision and very large magnitudes may evaluate to infinity.
+    /// </summary>
+    /// <param name="value">The value to convert.</param>
+    /// <returns>The closest <see cref="float"/> representation of <paramref name="value"/>.</returns>
     public static explicit operator float(ClickHouseDecimal value) =>
         (float)(double)value;
 
+    /// <summary>
+    /// Converts to a 32-bit signed integer by truncating any fractional digits.
+    /// The integer part is cast to <see cref="int"/> and wraps (overflows) if it does not fit.
+    /// </summary>
+    /// <param name="value">The value to convert.</param>
+    /// <returns>The truncated integer part as an <see cref="int"/>.</returns>
     public static explicit operator int(ClickHouseDecimal value) =>
         (int)value.Truncate().Mantissa;
 
+    /// <summary>
+    /// Converts to a 64-bit signed integer by truncating any fractional digits.
+    /// The integer part is cast to <see cref="long"/> and wraps (overflows) if it does not fit.
+    /// </summary>
+    /// <param name="value">The value to convert.</param>
+    /// <returns>The truncated integer part as a <see cref="long"/>.</returns>
     public static explicit operator long(ClickHouseDecimal value) =>
         (long)value.Truncate().Mantissa;
 
+    /// <summary>
+    /// Converts to a <see cref="BigInteger"/> by truncating any fractional digits.
+    /// The full integer part is preserved without loss of precision.
+    /// </summary>
+    /// <param name="value">The value to convert.</param>
+    /// <returns>The truncated integer part as a <see cref="BigInteger"/>.</returns>
     public static explicit operator BigInteger(ClickHouseDecimal value) =>
         value.Truncate().Mantissa;
 
@@ -232,24 +283,55 @@ public readonly struct ClickHouseDecimal
     //  Arithmetic operators
     // -------------------------------------------------------------------
 
+    /// <summary>
+    /// Adds two <see cref="ClickHouseDecimal"/> values, aligning their scales so no precision is lost.
+    /// </summary>
+    /// <param name="a">The first value.</param>
+    /// <param name="b">The second value.</param>
+    /// <returns>The sum of <paramref name="a"/> and <paramref name="b"/>.</returns>
     public static ClickHouseDecimal operator +(ClickHouseDecimal a, ClickHouseDecimal b)
     {
         var (left, right, scale) = AlignScales(a, b);
         return new ClickHouseDecimal(left + right, scale);
     }
 
+    /// <summary>
+    /// Subtracts one <see cref="ClickHouseDecimal"/> from another, aligning their scales so no precision is lost.
+    /// </summary>
+    /// <param name="a">The minuend.</param>
+    /// <param name="b">The subtrahend.</param>
+    /// <returns>The result of <paramref name="a"/> minus <paramref name="b"/>.</returns>
     public static ClickHouseDecimal operator -(ClickHouseDecimal a, ClickHouseDecimal b)
     {
         var (left, right, scale) = AlignScales(a, b);
         return new ClickHouseDecimal(left - right, scale);
     }
 
+    /// <summary>
+    /// Negates a <see cref="ClickHouseDecimal"/> value.
+    /// </summary>
+    /// <param name="value">The value to negate.</param>
+    /// <returns>The arithmetic negation of <paramref name="value"/>.</returns>
     public static ClickHouseDecimal operator -(ClickHouseDecimal value) =>
         new(-value.Mantissa, value.Scale);
 
+    /// <summary>
+    /// Multiplies two <see cref="ClickHouseDecimal"/> values. The result scale is the sum of the operand scales.
+    /// </summary>
+    /// <param name="a">The first value.</param>
+    /// <param name="b">The second value.</param>
+    /// <returns>The product of <paramref name="a"/> and <paramref name="b"/>.</returns>
     public static ClickHouseDecimal operator *(ClickHouseDecimal a, ClickHouseDecimal b) =>
         new(a.Mantissa * b.Mantissa, a.Scale + b.Scale);
 
+    /// <summary>
+    /// Divides one <see cref="ClickHouseDecimal"/> by another, computing the quotient with extra precision
+    /// (38 additional fractional digits) and truncating any remainder beyond that precision.
+    /// </summary>
+    /// <param name="a">The dividend.</param>
+    /// <param name="b">The divisor.</param>
+    /// <returns>The quotient of <paramref name="a"/> divided by <paramref name="b"/>.</returns>
+    /// <exception cref="DivideByZeroException">Thrown when <paramref name="b"/> is zero.</exception>
     public static ClickHouseDecimal operator /(ClickHouseDecimal a, ClickHouseDecimal b)
     {
         if (b.Mantissa.IsZero)
@@ -262,6 +344,13 @@ public readonly struct ClickHouseDecimal
         return new ClickHouseDecimal(resultMantissa, a.Scale - b.Scale + extraPrecision);
     }
 
+    /// <summary>
+    /// Computes the remainder of dividing one <see cref="ClickHouseDecimal"/> by another,
+    /// aligning their scales before the operation.
+    /// </summary>
+    /// <param name="a">The dividend.</param>
+    /// <param name="b">The divisor.</param>
+    /// <returns>The remainder of <paramref name="a"/> divided by <paramref name="b"/>.</returns>
     public static ClickHouseDecimal operator %(ClickHouseDecimal a, ClickHouseDecimal b)
     {
         var (left, right, scale) = AlignScales(a, b);
@@ -272,25 +361,86 @@ public readonly struct ClickHouseDecimal
     //  Comparison operators
     // -------------------------------------------------------------------
 
+    /// <summary>
+    /// Determines whether two <see cref="ClickHouseDecimal"/> values are numerically equal (ignoring scale).
+    /// </summary>
+    /// <param name="a">The first value.</param>
+    /// <param name="b">The second value.</param>
+    /// <returns><see langword="true"/> if the values are equal; otherwise, <see langword="false"/>.</returns>
     public static bool operator ==(ClickHouseDecimal a, ClickHouseDecimal b) => a.CompareTo(b) == 0;
+
+    /// <summary>
+    /// Determines whether two <see cref="ClickHouseDecimal"/> values are not numerically equal (ignoring scale).
+    /// </summary>
+    /// <param name="a">The first value.</param>
+    /// <param name="b">The second value.</param>
+    /// <returns><see langword="true"/> if the values are not equal; otherwise, <see langword="false"/>.</returns>
     public static bool operator !=(ClickHouseDecimal a, ClickHouseDecimal b) => a.CompareTo(b) != 0;
+
+    /// <summary>
+    /// Determines whether one <see cref="ClickHouseDecimal"/> is less than another.
+    /// </summary>
+    /// <param name="a">The first value.</param>
+    /// <param name="b">The second value.</param>
+    /// <returns><see langword="true"/> if <paramref name="a"/> is less than <paramref name="b"/>; otherwise, <see langword="false"/>.</returns>
     public static bool operator <(ClickHouseDecimal a, ClickHouseDecimal b) => a.CompareTo(b) < 0;
+
+    /// <summary>
+    /// Determines whether one <see cref="ClickHouseDecimal"/> is greater than another.
+    /// </summary>
+    /// <param name="a">The first value.</param>
+    /// <param name="b">The second value.</param>
+    /// <returns><see langword="true"/> if <paramref name="a"/> is greater than <paramref name="b"/>; otherwise, <see langword="false"/>.</returns>
     public static bool operator >(ClickHouseDecimal a, ClickHouseDecimal b) => a.CompareTo(b) > 0;
+
+    /// <summary>
+    /// Determines whether one <see cref="ClickHouseDecimal"/> is less than or equal to another.
+    /// </summary>
+    /// <param name="a">The first value.</param>
+    /// <param name="b">The second value.</param>
+    /// <returns><see langword="true"/> if <paramref name="a"/> is less than or equal to <paramref name="b"/>; otherwise, <see langword="false"/>.</returns>
     public static bool operator <=(ClickHouseDecimal a, ClickHouseDecimal b) => a.CompareTo(b) <= 0;
+
+    /// <summary>
+    /// Determines whether one <see cref="ClickHouseDecimal"/> is greater than or equal to another.
+    /// </summary>
+    /// <param name="a">The first value.</param>
+    /// <param name="b">The second value.</param>
+    /// <returns><see langword="true"/> if <paramref name="a"/> is greater than or equal to <paramref name="b"/>; otherwise, <see langword="false"/>.</returns>
     public static bool operator >=(ClickHouseDecimal a, ClickHouseDecimal b) => a.CompareTo(b) >= 0;
 
     // -------------------------------------------------------------------
     //  IComparable / IEquatable
     // -------------------------------------------------------------------
 
+    /// <summary>
+    /// Compares this value with another <see cref="ClickHouseDecimal"/>, aligning their scales before comparing.
+    /// </summary>
+    /// <param name="other">The value to compare against.</param>
+    /// <returns>A negative number, zero, or a positive number indicating whether this value is less than,
+    /// equal to, or greater than <paramref name="other"/>.</returns>
     public int CompareTo(ClickHouseDecimal other)
     {
         var (left, right, _) = AlignScales(this, other);
         return left.CompareTo(right);
     }
 
+    /// <summary>
+    /// Compares this value with a .NET <see cref="decimal"/>.
+    /// </summary>
+    /// <param name="other">The value to compare against.</param>
+    /// <returns>A negative number, zero, or a positive number indicating whether this value is less than,
+    /// equal to, or greater than <paramref name="other"/>.</returns>
     public int CompareTo(decimal other) => CompareTo((ClickHouseDecimal)other);
 
+    /// <summary>
+    /// Compares this value with another object, which must be a <see cref="ClickHouseDecimal"/> or <see cref="decimal"/>.
+    /// </summary>
+    /// <param name="obj">The object to compare against, or <see langword="null"/>.</param>
+    /// <returns>A negative number, zero, or a positive number indicating relative order. A <see langword="null"/>
+    /// <paramref name="obj"/> is considered less than this value (returns a positive number).</returns>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="obj"/> is not a
+    /// <see cref="ClickHouseDecimal"/> or <see cref="decimal"/>.</exception>
     public int CompareTo(object? obj) => obj switch
     {
         null => 1,
@@ -299,10 +449,26 @@ public readonly struct ClickHouseDecimal
         _ => throw new ArgumentException($"Object must be of type {nameof(ClickHouseDecimal)}.", nameof(obj)),
     };
 
+    /// <summary>
+    /// Determines whether this value is numerically equal to another <see cref="ClickHouseDecimal"/> (ignoring scale).
+    /// </summary>
+    /// <param name="other">The value to compare against.</param>
+    /// <returns><see langword="true"/> if the values are equal; otherwise, <see langword="false"/>.</returns>
     public bool Equals(ClickHouseDecimal other) => CompareTo(other) == 0;
 
+    /// <summary>
+    /// Determines whether this value is equal to the specified object.
+    /// </summary>
+    /// <param name="obj">The object to compare against.</param>
+    /// <returns><see langword="true"/> if <paramref name="obj"/> is a <see cref="ClickHouseDecimal"/> that is
+    /// numerically equal to this value; otherwise, <see langword="false"/>.</returns>
     public override bool Equals(object? obj) => obj is ClickHouseDecimal other && Equals(other);
 
+    /// <summary>
+    /// Returns a hash code that is consistent with numeric equality by hashing the normalized
+    /// (trailing-zero-stripped) mantissa and scale.
+    /// </summary>
+    /// <returns>A hash code for this value.</returns>
     public override int GetHashCode()
     {
         var normalized = Normalize();
@@ -313,8 +479,20 @@ public readonly struct ClickHouseDecimal
     //  ToString / Parse
     // -------------------------------------------------------------------
 
+    /// <summary>
+    /// Returns the full-precision decimal string representation of this value using the invariant culture.
+    /// </summary>
+    /// <returns>The string representation of this value.</returns>
     public override string ToString() => ToString(null, CultureInfo.InvariantCulture);
 
+    /// <summary>
+    /// Returns the decimal string representation of this value. The <paramref name="format"/> and
+    /// <paramref name="formatProvider"/> are applied to the integer (mantissa) portion only; fractional
+    /// digits are always rendered with full precision after a <c>'.'</c> separator.
+    /// </summary>
+    /// <param name="format">A numeric format string applied to the integer portion, or <see langword="null"/>.</param>
+    /// <param name="formatProvider">A format provider for the integer portion, or <see langword="null"/>.</param>
+    /// <returns>The formatted string representation of this value.</returns>
     public string ToString(string? format, IFormatProvider? formatProvider)
     {
         if (Scale == 0) return Mantissa.ToString(format, formatProvider);
