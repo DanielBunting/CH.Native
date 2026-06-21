@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/).
 
-## [1.1.2]
+## [1.2.0] - 2026-06-21
 
 ### Added
 
@@ -72,15 +72,18 @@ and this project follows [Semantic Versioning](https://semver.org/).
   `toUnixTimestamp64Nano`. Not wired for `Nullable(DateTime64(8/9))`;
   use `toUnixTimestamp64Nano(col)` server-side there.
 
-### Changed
+### Breaking
 
 - **Renamed** `ClickHouseConnection.QueryAsync<T>` and the matching
   parameterised extensions on `ClickHouseConnectionExtensions` to
   `QueryStreamAsync<T>` (and the untyped `QueryAsync` → `QueryStreamAsync`).
-  Frees the `QueryAsync<T>` name for the new Dapper-shaped extension on
-  `ClickHouseDbConnection`. **Breaking change for direct native-API users**
-  — migrate via a one-token rename. The ADO.NET surface
-  (`ClickHouseDbCommand.ExecuteReaderAsync` etc.) is unaffected.
+  This frees the `QueryAsync<T>` name for the new Dapper-shaped extension on
+  `ClickHouseDbConnection`. Direct native-API users migrate via a one-token
+  rename; the ADO.NET surface (`ClickHouseDbCommand.ExecuteReaderAsync` etc.)
+  is unaffected.
+
+### Changed
+
 - `TypeMapper<T>` rewritten to compile per-property
   `Expression<Action<T, ClickHouseDataReader>>` delegates that call
   `reader.GetFieldValue<TProp>(ordinal)` directly. For well-known primitive
