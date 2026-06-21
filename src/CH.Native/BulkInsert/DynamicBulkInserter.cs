@@ -51,7 +51,6 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
     private bool _slotClaimed;
     private int _totalRowsInserted;
     private bool _usedCachedSchema;
-    private bool _usedSuppliedColumnTypes;
     private SchemaKey _schemaCacheKey;
     private string? _effectiveQueryId;
 
@@ -252,7 +251,6 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
             if (hasSuppliedTypes)
             {
                 _columnTypes = suppliedTypes!;
-                _usedSuppliedColumnTypes = true;
                 _connection.Logger.BulkInsertSchemaFetched(_tableName, _columnNames.Length, fromCache: false);
             }
             else if (useCache && _connection.SchemaCache.TryGet(_schemaCacheKey, out var cachedSchema))

@@ -23,7 +23,7 @@ namespace CH.Native.Data;
 /// This validator matches the server's actual behaviour as probed.
 ///
 /// Probed against ClickHouse 26.2.15.4. See
-/// <see cref="CH.Native.Tests.Integration.BulkInsertCompositeTypeTests"/> for the
+/// <c>BulkInsertCompositeTypeTests</c> for the
 /// schema-level guard tests that cross-check this behaviour.
 /// </remarks>
 internal static class VariantArmValidator

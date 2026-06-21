@@ -7,7 +7,7 @@ namespace CH.Native.Data;
 internal enum MapShape
 {
     /// <summary>
-    /// Use the connection-level default (see <see cref="MapShapeHint.ConnectionDefault"/>).
+    /// Use the connection-level default (see <see cref="MapShapeHint.Default"/>).
     /// </summary>
     Default,
 

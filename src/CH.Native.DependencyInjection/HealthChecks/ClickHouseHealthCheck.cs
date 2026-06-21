@@ -6,7 +6,7 @@ namespace CH.Native.DependencyInjection.HealthChecks;
 /// <summary>
 /// <see cref="IHealthCheck"/> adapter over <see cref="ClickHouseDataSource.PingAsync"/>.
 /// Returns <c>Healthy</c> when the ping succeeds, <c>Unhealthy</c> otherwise.
-/// Register via <see cref="ClickHouseHealthCheckBuilderExtensions.AddClickHouse(IHealthChecksBuilder,string,object?,TimeSpan?,IEnumerable{string}?)"/>.
+/// Register via <see cref="ClickHouseHealthCheckBuilderExtensions.AddClickHouse"/>.
 /// </summary>
 public sealed class ClickHouseHealthCheck : IHealthCheck
 {

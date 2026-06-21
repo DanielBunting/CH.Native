@@ -54,7 +54,7 @@ public sealed partial class ClickHouseLogger
     public partial void ConnectionFailed(string host, int port, string errorMessage);
 
     /// <summary>
-    /// Logs that <see cref="ClickHouseDataSource"/> prewarm could not seed the pool
+    /// Logs that <see cref="CH.Native.Connection.ClickHouseDataSource"/> prewarm could not seed the pool
     /// to <c>MinPoolSize</c>. The first real rent will surface the underlying
     /// failure; this log gives operators a same-cause signal at startup.
     /// </summary>
@@ -66,7 +66,7 @@ public sealed partial class ClickHouseLogger
 
     /// <summary>
     /// Logs that a user-supplied <see cref="System.IProgress{T}"/> handler
-    /// threw during <see cref="ClickHouseConnection"/>'s message-loop dispatch.
+    /// threw during <see cref="CH.Native.Connection.ClickHouseConnection"/>'s message-loop dispatch.
     /// The exception is swallowed to keep the wire well-defined; the original
     /// query continues. Operators see the message; callers don't lose
     /// connection state to a buggy observer.
@@ -81,7 +81,7 @@ public sealed partial class ClickHouseLogger
     /// Logs that <c>AllowInsecureTls</c> is enabled on a connection that just opened.
     /// Defence-in-depth audit warning: the flag silently disables certificate
     /// validation, which is fine for development but a production footgun.
-    /// Emitted once per <see cref="ClickHouseConnection"/> on successful open
+    /// Emitted once per <see cref="CH.Native.Connection.ClickHouseConnection"/> on successful open
     /// (a fresh instance can open at most once, so the call site is naturally
     /// single-shot per connection).
     /// </summary>
