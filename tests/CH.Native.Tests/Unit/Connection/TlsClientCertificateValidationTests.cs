@@ -60,4 +60,62 @@ public class TlsClientCertificateValidationTests
             .WithTlsClientCertificate(withKey);
         Assert.NotNull(builder);
     }
+
+    /// <summary>
+    /// The DI rotating-credential path supplies the client certificate per
+    /// physical connection via an <c>IClickHouseCertificateProvider</c>, but the
+    /// DataSource still builds a metadata-only "baseline" settings object up front
+    /// — before any provider runs. <see cref="ClickHouseConnectionSettingsBuilder.DeferClientCertificateValidation"/>
+    /// lets that baseline build succeed with the cert absent, mirroring how JWT and
+    /// SSH auth already defer their credential-presence checks.
+    /// </summary>
+    [Fact]
+    public void Build_CertAuthMethod_NoCert_WithDeferral_Succeeds()
+    {
+        var settings = ClickHouseConnectionSettings.CreateBuilder()
+            .WithHost("localhost")
+            .WithTls()
+            .WithUsername("cert_user")
+            .WithAuthMethod(ClickHouseAuthMethod.TlsClientCertificate)
+            .DeferClientCertificateValidation()
+            .Build();
+
+        Assert.Equal(ClickHouseAuthMethod.TlsClientCertificate, settings.AuthMethod);
+        Assert.Null(settings.TlsClientCertificate); // provider fills it in at connection-open time
+    }
+
+    /// <summary>
+    /// Deferral is opt-in. A direct builder that selects cert auth but never
+    /// attaches a cert (and never opts into deferral) must still fail fast — this
+    /// pins the contract covered by the system-level MtlsMissingCertTests.
+    /// </summary>
+    [Fact]
+    public void Build_CertAuthMethod_NoCert_WithoutDeferral_StillThrows()
+    {
+        var builder = ClickHouseConnectionSettings.CreateBuilder()
+            .WithHost("localhost")
+            .WithTls()
+            .WithUsername("cert_user")
+            .WithAuthMethod(ClickHouseAuthMethod.TlsClientCertificate);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => builder.Build());
+        Assert.Contains("client certificate", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Deferral relaxes only the certificate-presence check, not the TLS
+    /// requirement — mTLS without TLS is still a misconfiguration.
+    /// </summary>
+    [Fact]
+    public void Build_CertAuthMethod_NoTls_WithDeferral_StillThrows()
+    {
+        var builder = ClickHouseConnectionSettings.CreateBuilder()
+            .WithHost("localhost")
+            .WithUsername("cert_user")
+            .WithAuthMethod(ClickHouseAuthMethod.TlsClientCertificate)
+            .DeferClientCertificateValidation();
+
+        var ex = Assert.Throws<InvalidOperationException>(() => builder.Build());
+        Assert.Contains("TLS", ex.Message);
+    }
 }

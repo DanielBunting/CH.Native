@@ -19,7 +19,8 @@ namespace CH.Native.SystemTests.DependencyInjection;
 ///   <item>keyed health checks correctly isolate failure: one broken keyed
 ///   data source reports unhealthy while another stays healthy.</item>
 /// </list>
-/// Certificate / mTLS provider tests are deferred until a TLS-enabled fixture exists.
+/// Certificate / mTLS provider coverage lives in <see cref="CertificateProviderPathTests"/>
+/// (it needs the TLS-enabled <see cref="ClickHouseAuthFixture"/>).
 /// </summary>
 [Collection("SingleNode")]
 [Trait(Categories.Name, Categories.DependencyInjection)]

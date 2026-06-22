@@ -12,6 +12,7 @@
     <InternalsVisibleTo Include="CH.Native.Tests" />
     <InternalsVisibleTo Include="CH.Native.SystemTests" />
     <InternalsVisibleTo Include="CH.Native.Benchmarks" />
+    <InternalsVisibleTo Include="CH.Native.DependencyInjection" />
   </ItemGroup>
 
   <ItemGroup>

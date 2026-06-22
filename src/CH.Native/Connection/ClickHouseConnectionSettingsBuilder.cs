@@ -32,6 +32,7 @@ public sealed class ClickHouseConnectionSettingsBuilder
     private bool _allowInsecureTls = false;
     private string? _tlsCaCertificatePath;
     private X509Certificate2? _tlsClientCertificate;
+    private bool _deferClientCertificate;
     private TelemetrySettings? _telemetry;
     private StringMaterialization _stringMaterialization = StringMaterialization.Eager;
     private bool _useSchemaCache = false;
@@ -394,6 +395,22 @@ public sealed class ClickHouseConnectionSettingsBuilder
     }
 
     /// <summary>
+    /// Allows <see cref="Build"/> to succeed with
+    /// <see cref="ClickHouseAuthMethod.TlsClientCertificate"/> selected but no
+    /// client certificate attached. Used by the DI layer's metadata-only baseline
+    /// build when an <c>IClickHouseCertificateProvider</c> will supply the
+    /// certificate per physical connection — mirroring how JWT and SSH auth already
+    /// defer their credential-presence checks. The TLS requirement is unaffected.
+    /// Not intended for direct use; the public builder path should attach the
+    /// certificate via <see cref="WithTlsClientCertificate(X509Certificate2)"/>.
+    /// </summary>
+    internal ClickHouseConnectionSettingsBuilder DeferClientCertificateValidation()
+    {
+        _deferClientCertificate = true;
+        return this;
+    }
+
+    /// <summary>
     /// Explicitly selects the authentication method. Normally set implicitly by
     /// calling <see cref="WithPassword"/>, <see cref="WithJwt"/>, <see cref="WithSshKey(byte[],string)"/>,
     /// or pairing <see cref="WithTls"/> with <see cref="WithTlsClientCertificate(X509Certificate2)"/>.
@@ -630,7 +647,7 @@ public sealed class ClickHouseConnectionSettingsBuilder
             if (!_useTls)
                 throw new InvalidOperationException(
                     "AuthMethod.TlsClientCertificate requires TLS. Call WithTls() before building.");
-            if (_tlsClientCertificate is null)
+            if (_tlsClientCertificate is null && !_deferClientCertificate)
                 throw new InvalidOperationException(
                     "AuthMethod.TlsClientCertificate requires a client certificate. " +
                     "Call WithTlsClientCertificate() before building.");
