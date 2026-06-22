@@ -34,11 +34,12 @@ await connection.ExecuteNonQueryAsync("""
 try
 {
     // 3. Bulk-insert three rows
+    var now = DateTime.UtcNow;
     var seed = new List<User>
     {
-        new() { Id = 1, Name = "Alice" },
-        new() { Id = 2, Name = "Bob" },
-        new() { Id = 3, Name = "Charlie" },
+        new() { Id = 1, Name = "Alice", Created = now },
+        new() { Id = 2, Name = "Bob", Created = now },
+        new() { Id = 3, Name = "Charlie", Created = now },
     };
 
     await using (var inserter = connection.CreateBulkInserter<User>("quickstart_users"))

@@ -21,9 +21,12 @@ internal static class DataEndpoints
         app.MapGet("/events/count", async (ClickHouseDataSource ds, CancellationToken ct) =>
         {
             await using var conn = await ds.OpenConnectionAsync(ct);
-            // system.numbers is unbounded, so the inner LIMIT is required.
+            // numbers(N) is the bounded table *function* — unlike the system.numbers
+            // table it needs no SELECT grant, so the default DataSource's demo_user
+            // (default role NONE — see the RBAC notes in README) can read it without
+            // activating a role.
             var count = await conn.ExecuteScalarAsync<ulong>(
-                "SELECT count() FROM (SELECT * FROM system.numbers LIMIT 10)",
+                "SELECT count() FROM numbers(10)",
                 cancellationToken: ct);
             return Http.Ok(new { count });
         });
@@ -37,7 +40,7 @@ internal static class DataEndpoints
         {
             await using var conn = await ds.OpenConnectionAsync(ct);
             var n = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
-                "SELECT count() FROM (SELECT * FROM system.numbers LIMIT 10)",
+                "SELECT count() FROM numbers(10)",
                 cancellationToken: ct));
             return Http.Ok(new { count = n, via = "dapper" });
         });
@@ -75,14 +78,19 @@ internal static class DataEndpoints
             List<EventRow> rows,
             CancellationToken ct) =>
         {
-            await using (var setup = await ds.OpenConnectionAsync(ct))
-            {
-                await setup.ExecuteNonQueryAsync(
-                    "CREATE TABLE IF NOT EXISTS sample_events (event_id UUID, ts DateTime, payload String) ENGINE = Memory",
-                    cancellationToken: ct);
-            }
+            // CREATE TABLE + INSERT need privileges demo_user only holds via admin_role,
+            // which is default-role NONE (see the RBAC notes in README). Activate it for
+            // this request and run both the DDL and the bulk insert on that same
+            // connection. ChangeRolesAsync pins a sticky role override, so the pool
+            // discards this connection on return — the documented cost of per-request RBAC.
+            await using var conn = await ds.OpenConnectionAsync(ct);
+            await conn.ChangeRolesAsync(new[] { "admin_role" }, ct);
 
-            await using var inserter = await ds.CreateBulkInserterAsync<EventRow>("sample_events", cancellationToken: ct);
+            await conn.ExecuteNonQueryAsync(
+                "CREATE TABLE IF NOT EXISTS sample_events (event_id UUID, ts DateTime, payload String) ENGINE = Memory",
+                cancellationToken: ct);
+
+            await using var inserter = conn.CreateBulkInserter<EventRow>("sample_events");
             await inserter.InitAsync(ct);
             var total = 0;
             foreach (var row in rows)
@@ -98,7 +106,12 @@ internal static class DataEndpoints
 
         app.MapGet("/ping/{key}", async (string key, IServiceProvider sp, CancellationToken ct) =>
         {
-            var ds = sp.GetRequiredKeyedService<ClickHouseDataSource>(key);
+            // The default AddClickHouse(...) registers a non-keyed DataSource, so the
+            // "default" key resolves through GetRequiredService; named registrations
+            // (primary/replica/mtls/ssh/adhoc) resolve through the keyed container.
+            var ds = key is "default"
+                ? sp.GetRequiredService<ClickHouseDataSource>()
+                : sp.GetRequiredKeyedService<ClickHouseDataSource>(key);
             return Http.Ok(new { key, healthy = await ds.PingAsync(ct) });
         });
 
