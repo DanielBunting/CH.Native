@@ -57,9 +57,18 @@ public class ConcurrentQueriesOnSingleConnectionTests
         var tableName = await SetupTableAsync(connection, rowCount: 1000);
         try
         {
-            // Both tasks attempt ExecuteScalarAsync on the same connection.
-            // Exactly one wins; the other throws ClickHouseConnectionBusyException.
-            var t1 = connection.ExecuteScalarAsync<long>($"SELECT sum(A) FROM {tableName}");
+            // t1 deliberately holds the wire (server-side per-row sleep, ~2s) so it
+            // is reliably in-flight — and thus owns the busy slot — by the time t2
+            // is issued. Without the sleep this race is non-deterministic: against a
+            // fast local server t1's entire round-trip can complete synchronously
+            // (buffered loopback I/O, all awaits already-completed) inside the call
+            // that constructs it, releasing the busy slot before t2 ever reaches
+            // EnterBusy — so BOTH queries succeed and the test flakes. The contract
+            // under test is "two overlapping ops -> exactly one
+            // ClickHouseConnectionBusyException, connection stays clean", which the
+            // holder makes deterministic without weakening the assertions.
+            var t1 = connection.ExecuteScalarAsync<long>(
+                $"SELECT sum(A) FROM {tableName} WHERE sleepEachRow(0.002) = 0");
             var t2 = connection.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}");
 
             var results = await Task.WhenAll(

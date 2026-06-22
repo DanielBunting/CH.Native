@@ -78,11 +78,12 @@ var activeUsers = await connection.QueryStreamAsync<User>(
 using CH.Native.Connection;
 using CH.Native.BulkInsert;
 
+var now = DateTime.UtcNow;
 var users = new List<User>
 {
-    new() { Id = 1, Name = "Alice" },
-    new() { Id = 2, Name = "Bob" },
-    new() { Id = 3, Name = "Charlie" }
+    new() { Id = 1, Name = "Alice", Created = now },
+    new() { Id = 2, Name = "Bob", Created = now },
+    new() { Id = 3, Name = "Charlie", Created = now }
 };
 
 await using var connection = new ClickHouseConnection("Host=localhost;Port=9000");
