@@ -213,7 +213,14 @@ public static class ClickHouseServiceCollectionExtensions
 
         // Baseline once to capture any settings the builder produces deterministically
         // (host, port, TLS, compression, etc.). Used for ClickHouseDataSourceOptions.Settings.
-        var baseline = NewSettingsBuilder().Build();
+        // When a certificate provider is registered, the cert arrives per-connection via
+        // the factory below, so the baseline has none yet — tell the builder to defer the
+        // cert-presence check (JWT/SSH already defer theirs). The real connection still
+        // attaches the cert before its handshake.
+        var baselineBuilder = NewSettingsBuilder();
+        if (cert is not null)
+            baselineBuilder.DeferClientCertificateValidation();
+        var baseline = baselineBuilder.Build();
 
         // ConnectionFactory: rebuild from scratch on every creation, layering provider
         // outputs on top. This is the rotating-credential path.
