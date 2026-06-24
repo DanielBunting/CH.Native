@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Benchmark methodology: the bulk-insert comparison
+  (`BulkInsertComparisonBenchmarks`) now configures CH.Native and
+  `ClickHouse.Driver` with a matched batch size equal to the row count
+  (a single batch per run), so the two clients are compared on identical
+  batching instead of their differing defaults (CH.Native 10K, Driver 100K).
+  Updated matched-batch bulk-insert numbers (1M rows): CH.Native
+  **132 ms / 7.7 MB**, `ClickHouse.Driver` 193 ms / 92 MB,
+  `Octonica.ClickHouseClient` 1,530 ms / 28 MB. Allocations for CH.Native are
+  higher than its pooled-small-batch default by design — a single 1M-row batch
+  buffers every column at once. See `docs/performance-comparison.md`.
+
 ## [1.2.0] - 2026-06-21
 
 ### Added

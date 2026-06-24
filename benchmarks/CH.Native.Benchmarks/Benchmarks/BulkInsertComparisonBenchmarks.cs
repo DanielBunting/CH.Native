@@ -61,7 +61,7 @@ public class BulkInsertComparisonBenchmarks
         await connection.BulkInsertAsync(
             TestDataGenerator.InsertTable,
             _testData,
-            new BulkInsertOptions { BatchSize = 10_000 });
+            new BulkInsertOptions { BatchSize = RowCount });
     }
 
     // --- Driver Bulk Insert (ClickHouse.Driver InsertBinaryAsync) ---
@@ -73,7 +73,11 @@ public class BulkInsertComparisonBenchmarks
 
         var columns = new[] { "id", "name", "value" };
         var rows = _testData.Select(r => new object[] { r.Id, r.Name, r.Value });
-        await client.InsertBinaryAsync(TestDataGenerator.InsertTable, columns, rows);
+        await client.InsertBinaryAsync(
+            TestDataGenerator.InsertTable,
+            columns,
+            rows,
+            new ClickHouse.Driver.InsertOptions { BatchSize = RowCount });
     }
 
     // --- Octonica Bulk Insert (columnar API) ---

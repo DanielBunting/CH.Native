@@ -198,9 +198,11 @@ CH.Native ships an opt-in `StringMaterialization=Lazy` mode that defers UTF-8 st
 
 ### Bulk insert — 1M rows
 
+All three clients insert the run as a **single batch** (matched batch size), so the comparison isolates per-batch serialization and transfer cost rather than batching strategy.
+
 | Workload | CH.Native | ClickHouse.Driver | Octonica |
 |---|---|---|---|
-| Bulk insert 1M rows | **99 ms / 0.4 MB** | 929 ms / 97 MB | n/a (errored) |
+| Bulk insert 1M rows | **132 ms / 7.7 MB** | 193 ms / 92 MB | 1,530 ms / 28 MB |
 
 ### Test conditions
 

@@ -80,11 +80,13 @@ Reference — legacy Dapper-on-CH.Native (without `CH.Native.Dapper` fast path):
 
 ## Bulk insert (`insert`)
 
+All clients insert each run as a **single batch equal to the row count** (matched batch size), so the comparison isolates per-batch serialization and transfer cost rather than batching strategy. CH.Native's production default uses smaller pooled batches (see [bulk-insert.md](bulk-insert.md)), which allocate far less than the single-batch figures below.
+
 | Rows | CH.Native | ClickHouse.Driver | Octonica |
 |---|---|---|---|
-| 10K | **65 ms / 139 KB** | 67 ms / 1.8 MB | (errored) |
-| 100K | **75 ms / 161 KB** | 88 ms / 10 MB | (errored) |
-| 1M | **99 ms / 405 KB** | 929 ms / 97 MB | (errored) |
+| 10K | **66 ms / 140 KB** | 68 ms / 1.8 MB | 83 ms / 672 KB |
+| 100K | **77 ms / 845 KB** | 88 ms / 10 MB | 195 ms / 3.1 MB |
+| 1M | **132 ms / 7.7 MB** | 193 ms / 92 MB | 1,530 ms / 28 MB |
 
 ## Complex queries (`complex`)
 
