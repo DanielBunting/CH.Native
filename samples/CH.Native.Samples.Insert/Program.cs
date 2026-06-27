@@ -22,6 +22,7 @@ Func<string, Task>? runner = sampleName switch
     "long-lived"  => LongLivedBulkInserterSample.RunAsync,
     "dynamic"     => DynamicBulkInsertSample.RunAsync,
     "pooled"      => DataSourcePooledSample.RunAsync,
+    "parallel"    => ParallelBulkInsertSample.RunAsync,
     "cross-db"    => CrossDatabaseSample.RunAsync,
     "sql"         => PlainSqlInsertSample.RunAsync,
     "map"         => MapColumnSample.RunAsync,
@@ -55,6 +56,7 @@ static void PrintUsage()
             long-lived   connection.CreateBulkInserter<T>(...) — Init/Add/Complete
             dynamic      DynamicBulkInserter — POCO-less, object?[] rows
             pooled       dataSource.Table<T>(name).InsertAsync(rows)
+            parallel     dataSource.BulkInsertAsync(...) / ParallelBulkInserter<T> — fan out across N pipes
             cross-db     qualified database.table inserts on a single connection
             sql          plain SQL INSERT via ClickHouseCommand
             map          bulk insert with Map(K, V) columns — Dictionary vs ClickHouseMap (preserves duplicates)

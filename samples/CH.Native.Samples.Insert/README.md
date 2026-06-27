@@ -34,12 +34,13 @@ docker run -d --rm -p 9000:9000 --name ch-sample \
 | `long-lived` | Hot-path log ingestion — 10 batches × 5k entries | `BulkInserter<T>` (Init / Add / Complete); amortised handshake, per-batch timing |
 | `dynamic` | ETL pipeline — three flavors of POCO-less insert | `DynamicBulkInserter` one-shot, granular streaming, and pre-supplied `ColumnTypes` (skips schema probe) |
 | `pooled` | Service-code metric ingest — 8 concurrent workers × 5k rows | `dataSource.Table<T>(name).InsertAsync(rows)`; pool stats after fan-out |
+| `parallel` | Bulk backfill — one 500k-row import fanned across 4 pipes | `dataSource.BulkInsertAsync(...)` one-shot and `ParallelBulkInserter<T>` streaming; `RowsWritten`, pool stats |
 | `cross-db` | Orders + inventory across two databases on one connection | Qualified `db.table` inserts — typed via `Table<T>("db.table")`, dynamic via `(database, tableName)` overload |
 | `sql` | One-off admin / backfill flows | `ClickHouseCommand` — parameterised single-row, multi-row inline VALUES, and `INSERT ... SELECT` table copy |
 
 ## Picking a path
 
-For most writes, **`collection`** or **`oneshot`** is the right answer — they're the same lifecycle exposed through two equally-fine API shapes. Reach for **`long-lived`** when rows arrive over time and you want to amortise the INSERT handshake. Reach for **`pooled`** when you're in service code and don't want to manage connection lifetime. Reach for **`dynamic`** when the row shape isn't a static POCO. Reach for **`cross-db`** when one connection writes to multiple databases. Reach for **`single`** sparingly — it's correct but pays per-row overhead. Reach for **`sql`** only for non-bulk admin paths or `INSERT ... SELECT`.
+For most writes, **`collection`** or **`oneshot`** is the right answer — they're the same lifecycle exposed through two equally-fine API shapes. Reach for **`long-lived`** when rows arrive over time and you want to amortise the INSERT handshake. Reach for **`pooled`** when you're in service code issuing many *independent* concurrent inserts. Reach for **`parallel`** when you want to speed up a *single large* insert by fanning it across several connections (and one stream isn't saturating throughput). Reach for **`dynamic`** when the row shape isn't a static POCO. Reach for **`cross-db`** when one connection writes to multiple databases. Reach for **`single`** sparingly — it's correct but pays per-row overhead. Reach for **`sql`** only for non-bulk admin paths or `INSERT ... SELECT`.
 
 ## Layout
 
@@ -54,6 +55,7 @@ samples/CH.Native.Samples.Insert/
 ├── LongLivedBulkInserterSample.cs
 ├── DynamicBulkInsertSample.cs
 ├── DataSourcePooledSample.cs
+├── ParallelBulkInsertSample.cs
 ├── CrossDatabaseSample.cs
 └── PlainSqlInsertSample.cs
 ```
