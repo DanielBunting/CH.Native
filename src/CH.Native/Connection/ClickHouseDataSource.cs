@@ -454,8 +454,8 @@ public sealed class ClickHouseDataSource : DbDataSource
         where T : class
     {
         options ??= ParallelBulkInsertOptions.Default;
-        options.Validate(_options.MaxPoolSize);
-        var inserter = new ParallelBulkInserter<T>(this, database: null, tableName, options);
+        int degreeOfParallelism = options.Resolve(_options.MaxPoolSize);
+        var inserter = new ParallelBulkInserter<T>(this, database: null, tableName, options, degreeOfParallelism);
         await inserter.StartAsync(cancellationToken).ConfigureAwait(false);
         return inserter;
     }
@@ -473,8 +473,8 @@ public sealed class ClickHouseDataSource : DbDataSource
         where T : class
     {
         options ??= ParallelBulkInsertOptions.Default;
-        options.Validate(_options.MaxPoolSize);
-        var inserter = new ParallelBulkInserter<T>(this, database, tableName, options);
+        int degreeOfParallelism = options.Resolve(_options.MaxPoolSize);
+        var inserter = new ParallelBulkInserter<T>(this, database, tableName, options, degreeOfParallelism);
         await inserter.StartAsync(cancellationToken).ConfigureAwait(false);
         return inserter;
     }

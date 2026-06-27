@@ -5,10 +5,10 @@ namespace CH.Native.Tests.Unit.BulkInsert;
 
 /// <summary>
 /// Pins the <see cref="ParallelBulkInsertOptions"/> contract: defaults, the
-/// pool-size validation that guards against deadlock, channel-capacity defaulting,
+/// pool-size resolution/validation that guards against deadlock without making
+/// the default unusable on small pools, overflow-safe channel-capacity defaulting,
 /// and the deliberate absence of a deduplication token on the worker options the
-/// fan-out builds. The no-token guard is a regression test — re-adding a token to
-/// the parallel path is unsafe under work-stealing (see the type remarks).
+/// fan-out builds.
 /// </summary>
 public class ParallelBulkInsertOptionsTests
 {
@@ -16,7 +16,8 @@ public class ParallelBulkInsertOptionsTests
     public void Defaults_AreSensible()
     {
         var options = new ParallelBulkInsertOptions();
-        Assert.Equal(4, options.DegreeOfParallelism);
+        // null DegreeOfParallelism => resolved per-pool (min(4, MaxPoolSize)).
+        Assert.Null(options.DegreeOfParallelism);
         Assert.Equal(10_000, options.BatchSize);
         Assert.Null(options.ChannelCapacity);
         Assert.Null(options.Roles);
@@ -34,57 +35,94 @@ public class ParallelBulkInsertOptionsTests
         Assert.Empty(member);
     }
 
+    // --- Resolve: degree-of-parallelism ---
+
+    [Fact]
+    public void Resolve_DefaultOptions_OnSmallPool_DoesNotThrowAndClamps()
+    {
+        // Regression for finding #8: the default (unset) DegreeOfParallelism must
+        // not throw just because MaxPoolSize is below the nominal default of 4.
+        var options = new ParallelBulkInsertOptions();
+        Assert.Equal(2, options.Resolve(maxPoolSize: 2));
+    }
+
+    [Fact]
+    public void Resolve_DefaultOptions_OnLargePool_UsesNominalDefault()
+    {
+        Assert.Equal(4, new ParallelBulkInsertOptions().Resolve(maxPoolSize: 100));
+    }
+
+    [Fact]
+    public void Resolve_ExplicitDegree_ReturnedAsIs()
+    {
+        var options = new ParallelBulkInsertOptions { DegreeOfParallelism = 3 };
+        Assert.Equal(3, options.Resolve(maxPoolSize: 100));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Resolve_ExplicitDegreeBelowOne_Throws(int degree)
+    {
+        var options = new ParallelBulkInsertOptions { DegreeOfParallelism = degree };
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Resolve(maxPoolSize: 100));
+    }
+
+    [Fact]
+    public void Resolve_ExplicitDegreeExceedsMaxPoolSize_Throws()
+    {
+        var options = new ParallelBulkInsertOptions { DegreeOfParallelism = 12 };
+        var ex = Assert.Throws<ArgumentException>(() => options.Resolve(maxPoolSize: 8));
+        Assert.Contains("MaxPoolSize", ex.Message);
+    }
+
+    [Fact]
+    public void Resolve_ExplicitDegreeEqualToMaxPoolSize_Ok()
+    {
+        var options = new ParallelBulkInsertOptions { DegreeOfParallelism = 8 };
+        Assert.Equal(8, options.Resolve(maxPoolSize: 8));
+    }
+
+    [Fact]
+    public void Resolve_BatchSizeBelowOne_Throws()
+    {
+        var options = new ParallelBulkInsertOptions { BatchSize = 0 };
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Resolve(maxPoolSize: 100));
+    }
+
+    [Fact]
+    public void Resolve_ExplicitChannelCapacityBelowOne_Throws()
+    {
+        var options = new ParallelBulkInsertOptions { ChannelCapacity = 0 };
+        Assert.Throws<ArgumentOutOfRangeException>(() => options.Resolve(maxPoolSize: 100));
+    }
+
+    // --- ResolveChannelCapacity ---
+
     [Fact]
     public void ResolveChannelCapacity_DefaultsToDegreeTimesBatch()
     {
-        var options = new ParallelBulkInsertOptions { DegreeOfParallelism = 4, BatchSize = 10_000 };
-        Assert.Equal(40_000, options.ResolveChannelCapacity());
+        var options = new ParallelBulkInsertOptions { BatchSize = 10_000 };
+        Assert.Equal(40_000, options.ResolveChannelCapacity(degreeOfParallelism: 4));
     }
 
     [Fact]
     public void ResolveChannelCapacity_HonoursExplicitValue()
     {
         var options = new ParallelBulkInsertOptions { ChannelCapacity = 123 };
-        Assert.Equal(123, options.ResolveChannelCapacity());
-    }
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(-1)]
-    public void Validate_DegreeBelowOne_Throws(int degree)
-    {
-        var options = new ParallelBulkInsertOptions { DegreeOfParallelism = degree };
-        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate(maxPoolSize: 100));
+        Assert.Equal(123, options.ResolveChannelCapacity(degreeOfParallelism: 8));
     }
 
     [Fact]
-    public void Validate_DegreeExceedsMaxPoolSize_Throws()
+    public void ResolveChannelCapacity_LargeValues_ClampToInt32MaxValue()
     {
-        var options = new ParallelBulkInsertOptions { DegreeOfParallelism = 12 };
-        var ex = Assert.Throws<ArgumentException>(() => options.Validate(maxPoolSize: 8));
-        Assert.Contains("MaxPoolSize", ex.Message);
+        // Regression for finding #5: degree*batch can exceed Int32 without either
+        // value being individually invalid; the result must clamp, not overflow.
+        var options = new ParallelBulkInsertOptions { BatchSize = 300_000_000 };
+        Assert.Equal(int.MaxValue, options.ResolveChannelCapacity(degreeOfParallelism: 8));
     }
 
-    [Fact]
-    public void Validate_DegreeEqualToMaxPoolSize_Ok()
-    {
-        var options = new ParallelBulkInsertOptions { DegreeOfParallelism = 8 };
-        options.Validate(maxPoolSize: 8); // does not throw
-    }
-
-    [Fact]
-    public void Validate_BatchSizeBelowOne_Throws()
-    {
-        var options = new ParallelBulkInsertOptions { BatchSize = 0 };
-        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate(maxPoolSize: 100));
-    }
-
-    [Fact]
-    public void Validate_ExplicitChannelCapacityBelowOne_Throws()
-    {
-        var options = new ParallelBulkInsertOptions { ChannelCapacity = 0 };
-        Assert.Throws<ArgumentOutOfRangeException>(() => options.Validate(maxPoolSize: 100));
-    }
+    // --- BuildWorkerOptions ---
 
     [Fact]
     public void BuildWorkerOptions_NeverSetsDeduplicationToken()

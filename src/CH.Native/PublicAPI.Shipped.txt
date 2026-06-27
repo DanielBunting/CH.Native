@@ -71,7 +71,7 @@ CH.Native.BulkInsert.ParallelBulkInsertOptions.BatchSize.get -> int
 CH.Native.BulkInsert.ParallelBulkInsertOptions.BatchSize.set -> void
 CH.Native.BulkInsert.ParallelBulkInsertOptions.ChannelCapacity.get -> int?
 CH.Native.BulkInsert.ParallelBulkInsertOptions.ChannelCapacity.set -> void
-CH.Native.BulkInsert.ParallelBulkInsertOptions.DegreeOfParallelism.get -> int
+CH.Native.BulkInsert.ParallelBulkInsertOptions.DegreeOfParallelism.get -> int?
 CH.Native.BulkInsert.ParallelBulkInsertOptions.DegreeOfParallelism.set -> void
 CH.Native.BulkInsert.ParallelBulkInsertOptions.ParallelBulkInsertOptions() -> void
 CH.Native.BulkInsert.ParallelBulkInsertOptions.QueryId.get -> string?

@@ -189,6 +189,39 @@ public class ParallelBulkInsertTests
         }
     }
 
+    // Finding #1: a CompleteAsync that fails must NOT be silently reported as
+    // success on a retry. The success flag must only flip after the workers
+    // actually committed.
+    [Fact]
+    public async Task CompleteAsync_AfterFailure_RetryThrowsRatherThanSilentSuccess()
+    {
+        await using var dataSource = new ClickHouseDataSource(_fixture.ConnectionString);
+        await using var setup = new ClickHouseConnection(_fixture.ConnectionString);
+        await setup.OpenAsync();
+        var tableName = await CreateTableAsync(setup);
+
+        try
+        {
+            await using var inserter = await dataSource.CreateParallelBulkInserterAsync<NumericRow>(
+                tableName, new ParallelBulkInsertOptions { DegreeOfParallelism = 2 });
+            await inserter.AddRangeAsync(Rows(50));
+
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+
+            // First completion fails (cancelled mid-flight).
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => inserter.CompleteAsync(cts.Token));
+
+            // A second completion must surface that the operation already failed —
+            // not return as if everything committed.
+            await Assert.ThrowsAsync<InvalidOperationException>(() => inserter.CompleteAsync());
+        }
+        finally
+        {
+            await setup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
     // Drives a full round-trip and asserts the row count, a sum-of-id checksum
     // (proves the right rows landed, not just the right number), and RowsWritten.
     private async Task AssertParallelRoundTripAsync(int rowCount, int degreeOfParallelism, int batchSize)

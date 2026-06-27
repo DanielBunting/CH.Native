@@ -24,13 +24,17 @@ namespace CH.Native.BulkInsert;
 /// </remarks>
 public sealed class ParallelBulkInsertOptions
 {
+    /// <summary>The nominal default degree of parallelism when none is requested.</summary>
+    private const int DefaultDegreeOfParallelism = 4;
+
     /// <summary>
     /// Number of pooled connections to fan out across. Each one runs an
-    /// independent INSERT. Must be at least 1 and must not exceed the
-    /// data source's <c>MaxPoolSize</c> (otherwise the inserter cannot rent
-    /// enough connections and would deadlock). Default 4.
+    /// independent INSERT. When <c>null</c> (the default) the effective value is
+    /// <c>min(4, MaxPoolSize)</c>, so the default never exceeds a small pool. When
+    /// set explicitly it must be at least 1 and must not exceed the data source's
+    /// <c>MaxPoolSize</c> (otherwise the inserter cannot rent enough connections).
     /// </summary>
-    public int DegreeOfParallelism { get; set; } = 4;
+    public int? DegreeOfParallelism { get; set; }
 
     /// <summary>
     /// Per-worker batch size — the number of rows each worker buffers before
@@ -42,9 +46,9 @@ public sealed class ParallelBulkInsertOptions
     /// <summary>
     /// Capacity of the bounded channel that feeds the workers. When the channel
     /// is full, <c>AddAsync</c> awaits — bounding memory and applying backpressure
-    /// to the producer. When <c>null</c> (default), the capacity is
+    /// to the producer. When <c>null</c> (default), the capacity is the effective
     /// <see cref="DegreeOfParallelism"/> × <see cref="BatchSize"/> (roughly one
-    /// in-flight batch per worker).
+    /// in-flight batch per worker), clamped to <see cref="int.MaxValue"/>.
     /// </summary>
     public int? ChannelCapacity { get; set; }
 
@@ -75,30 +79,15 @@ public sealed class ParallelBulkInsertOptions
     public static ParallelBulkInsertOptions Default { get; } = new();
 
     /// <summary>
-    /// Resolves the effective channel capacity, defaulting to
-    /// <see cref="DegreeOfParallelism"/> × <see cref="BatchSize"/>.
+    /// Validates these options against the owning data source's pool size and
+    /// returns the effective degree of parallelism. A <c>null</c>
+    /// <see cref="DegreeOfParallelism"/> resolves to <c>min(4, maxPoolSize)</c> so
+    /// the default is usable on a small pool; an explicit value that exceeds
+    /// <paramref name="maxPoolSize"/> throws, since the inserter could never rent
+    /// that many connections.
     /// </summary>
-    internal int ResolveChannelCapacity() =>
-        ChannelCapacity ?? checked(DegreeOfParallelism * BatchSize);
-
-    /// <summary>
-    /// Validates these options against the owning data source's pool size.
-    /// </summary>
-    internal void Validate(int maxPoolSize)
+    internal int Resolve(int maxPoolSize)
     {
-        if (DegreeOfParallelism < 1)
-            throw new ArgumentOutOfRangeException(
-                nameof(DegreeOfParallelism),
-                DegreeOfParallelism,
-                $"{nameof(ParallelBulkInsertOptions)}.{nameof(DegreeOfParallelism)} must be at least 1.");
-
-        if (DegreeOfParallelism > maxPoolSize)
-            throw new ArgumentException(
-                $"{nameof(ParallelBulkInsertOptions)}.{nameof(DegreeOfParallelism)} ({DegreeOfParallelism}) " +
-                $"exceeds the data source MaxPoolSize ({maxPoolSize}); the inserter cannot rent enough " +
-                $"connections. Lower {nameof(DegreeOfParallelism)} or raise MaxPoolSize.",
-                nameof(DegreeOfParallelism));
-
         if (BatchSize < 1)
             throw new ArgumentOutOfRangeException(
                 nameof(BatchSize),
@@ -110,7 +99,36 @@ public sealed class ParallelBulkInsertOptions
                 nameof(ChannelCapacity),
                 ChannelCapacity,
                 $"{nameof(ParallelBulkInsertOptions)}.{nameof(ChannelCapacity)} must be at least 1 when set.");
+
+        if (DegreeOfParallelism is { } degree)
+        {
+            if (degree < 1)
+                throw new ArgumentOutOfRangeException(
+                    nameof(DegreeOfParallelism),
+                    degree,
+                    $"{nameof(ParallelBulkInsertOptions)}.{nameof(DegreeOfParallelism)} must be at least 1.");
+
+            if (degree > maxPoolSize)
+                throw new ArgumentException(
+                    $"{nameof(ParallelBulkInsertOptions)}.{nameof(DegreeOfParallelism)} ({degree}) " +
+                    $"exceeds the data source MaxPoolSize ({maxPoolSize}); the inserter cannot rent enough " +
+                    $"connections. Lower {nameof(DegreeOfParallelism)} or raise MaxPoolSize.",
+                    nameof(DegreeOfParallelism));
+
+            return degree;
+        }
+
+        return Math.Min(DefaultDegreeOfParallelism, maxPoolSize);
     }
+
+    /// <summary>
+    /// Resolves the effective channel capacity for the given (already-resolved)
+    /// degree of parallelism, defaulting to <c>degree × BatchSize</c> clamped to
+    /// <see cref="int.MaxValue"/> so a large-but-individually-valid pair cannot
+    /// overflow.
+    /// </summary>
+    internal int ResolveChannelCapacity(int degreeOfParallelism) =>
+        ChannelCapacity ?? (int)Math.Min((long)degreeOfParallelism * BatchSize, int.MaxValue);
 
     /// <summary>
     /// Builds the per-worker <see cref="BulkInsertOptions"/>. Note that
