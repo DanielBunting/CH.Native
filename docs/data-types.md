@@ -139,6 +139,15 @@ Writing a value with more fractional digits than the column's scale **truncates 
 zero** (no rounding, no error): `1.23456` into `Decimal64(4)` stores `1.2345`. Round in
 application code if that isn't what you want.
 
+The column's **precision** (total digit count, `P`) is **not enforced on the native
+insert path**. ClickHouse validates `Decimal(P, S)` precision only when parsing SQL text
+(`INSERT … VALUES`), which rejects an over-precision value with error 69 (`Too many
+digits`). The native binary protocol carries the pre-scaled backing integer, which the
+server stores verbatim with no precision check — so `12345.67` inserts cleanly into
+`Decimal(4, 2)` and round-trips as `12345.67`, even though the declared precision is 4
+(max `99.99`). This is ClickHouse server behavior, identical across native-protocol
+clients. Keep values within the declared precision in application code if you rely on it.
+
 ## Date and Time Types
 
 ### Date Types
@@ -837,6 +846,16 @@ Bulk-inserting a `decimal` with more fractional digits than the column's scale
 truncates toward zero — `1.23456` into `Decimal64(4)` stores `1.2345`. No rounding, no
 exception, and the official driver behaves identically. Round in application code if
 banker's rounding (or any rounding) is expected. See [Decimal](#decimal).
+
+### Decimal precision is not enforced on insert
+
+Separately from scale, the declared **precision** (`P`, total digits) is not checked on
+the native insert path: `12345.67` inserts cleanly into `Decimal(4, 2)` and round-trips
+verbatim, whereas the same value via SQL `INSERT … VALUES` is rejected (error 69). The
+binary protocol stores the pre-scaled backing integer as-is, and ClickHouse only
+validates precision when parsing text — so this affects all native-protocol clients, not
+just CH.Native. Keep values within the declared precision in application code if you rely
+on it. See [Decimal](#decimal).
 
 ### toString(NULL) inside Dynamic/Variant
 

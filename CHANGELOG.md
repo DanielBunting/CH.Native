@@ -5,25 +5,23 @@ All notable changes to this project are documented in this file.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
-
-### Changed
-
-- Benchmark methodology: the bulk-insert comparison
-  (`BulkInsertComparisonBenchmarks`) now configures CH.Native and
-  `ClickHouse.Driver` with a matched batch size equal to the row count
-  (a single batch per run), so the two clients are compared on identical
-  batching instead of their differing defaults (CH.Native 10K, Driver 100K).
-  Updated matched-batch bulk-insert numbers (1M rows): CH.Native
-  **132 ms / 7.7 MB**, `ClickHouse.Driver` 193 ms / 92 MB,
-  `Octonica.ClickHouseClient` 1,530 ms / 28 MB. Allocations for CH.Native are
-  higher than its pooled-small-batch default by design — a single 1M-row batch
-  buffers every column at once. See `docs/performance-comparison.md`.
-
 ## [1.2.0] - 2026-06-21
 
 ### Added
 
+- Parallel (multi-connection) bulk insert via `ParallelBulkInserter<T>` and the
+  `ClickHouseDataSource` entry points `CreateParallelBulkInserterAsync<T>` and the
+  one-shot `BulkInsertAsync<T>` (`IEnumerable<T>` / `IAsyncEnumerable<T>`). Rows
+  pushed via `AddAsync` are fanned out through a bounded channel to
+  `DegreeOfParallelism` workers, each running an independent single-connection
+  insert over its own pooled connection ("pipe"), with backpressure, error
+  aggregation, and `RowsWritten` reporting. Configured by `ParallelBulkInsertOptions`
+  (`DegreeOfParallelism`, `BatchSize`, `ChannelCapacity`, `Roles`, `UseSchemaCache`,
+  `QueryId`). The insert is intentionally not atomic and not idempotent on retry,
+  and exposes **no** `DeduplicationToken` — work-stealing fan-out cannot make a
+  dedup token sound (handle idempotency above the inserter via a staging-table swap
+  or an idempotent engine). `DegreeOfParallelism` above the data source's
+  `MaxPoolSize` is rejected up front. See `docs/bulk-insert.md`.
 - Multidimensional array support for `Array(Array(T))` (and deeper) columns.
   Properties typed as rectangular `T[,]` / `T[,,]` (any rank ≥ 2) are now
   materialized via a jagged→rectangular conversion at the read boundary,
@@ -123,6 +121,16 @@ and this project follows [Semantic Versioning](https://semver.org/).
   and `GetValue` still return the truncated `DateTime`; only code that
   introspects `ITypedColumn` storage types observes the difference. Scales
   0–7 are unchanged.
+- Benchmark methodology: the bulk-insert comparison
+  (`BulkInsertComparisonBenchmarks`) now configures CH.Native and
+  `ClickHouse.Driver` with a matched batch size equal to the row count
+  (a single batch per run), so the two clients are compared on identical
+  batching instead of their differing defaults (CH.Native 10K, Driver 100K).
+  Updated matched-batch bulk-insert numbers (1M rows): CH.Native
+  **132 ms / 7.7 MB**, `ClickHouse.Driver` 193 ms / 92 MB,
+  `Octonica.ClickHouseClient` 1,530 ms / 28 MB. Allocations for CH.Native are
+  higher than its pooled-small-batch default by design — a single 1M-row batch
+  buffers every column at once. See `docs/performance-comparison.md`.
 
 ### Fixed
 

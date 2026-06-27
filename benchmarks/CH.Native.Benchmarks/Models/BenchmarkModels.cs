@@ -57,6 +57,50 @@ public class InsertRow
 }
 
 /// <summary>
+/// Wide, value/date/numeric-heavy row for parallel bulk-insert benchmarks.
+/// Mixes integer widths, floats, decimals, and date/time columns to exercise
+/// the column-writer serialization path under load.
+/// </summary>
+public class WideInsertRow
+{
+    [ClickHouseColumn(Name = "id", Order = 0)]
+    public long Id { get; set; }
+
+    [ClickHouseColumn(Name = "seq", Order = 1)]
+    public int Seq { get; set; }
+
+    [ClickHouseColumn(Name = "code", Order = 2)]
+    public string Code { get; set; } = string.Empty;
+
+    [ClickHouseColumn(Name = "price", Order = 3)]
+    public double Price { get; set; }
+
+    [ClickHouseColumn(Name = "ratio", Order = 4)]
+    public float Ratio { get; set; }
+
+    [ClickHouseColumn(Name = "amount", Order = 5)]
+    public decimal Amount { get; set; }
+
+    [ClickHouseColumn(Name = "fee", Order = 6)]
+    public decimal Fee { get; set; }
+
+    [ClickHouseColumn(Name = "qty", Order = 7)]
+    public int Qty { get; set; }
+
+    [ClickHouseColumn(Name = "big", Order = 8)]
+    public ulong Big { get; set; }
+
+    [ClickHouseColumn(Name = "flag", Order = 9)]
+    public byte Flag { get; set; }
+
+    [ClickHouseColumn(Name = "created", Order = 10)]
+    public DateTime Created { get; set; }
+
+    [ClickHouseColumn(Name = "event_time", Order = 11)]
+    public DateTime EventTime { get; set; }
+}
+
+/// <summary>
 /// Aggregation result model.
 /// </summary>
 public class AggregationResult

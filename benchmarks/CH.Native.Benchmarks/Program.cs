@@ -32,6 +32,20 @@ if (args.Length > 0)
         case "schemacache":
             BenchmarkRunner.Run<BulkInsertSchemaCacheBenchmarks>();
             break;
+        // Parallel (multi-connection) bulk insert: single vs Nx fan-out.
+        // Extra args are forwarded to BenchmarkSwitcher (e.g. --iterationCount).
+        case "parallelinsert":
+            if (args.Length > 1)
+            {
+                BenchmarkSwitcher
+                    .FromTypes(new[] { typeof(ParallelBulkInsertBenchmarks) })
+                    .Run(args[1..]);
+            }
+            else
+            {
+                BenchmarkRunner.Run<ParallelBulkInsertBenchmarks>();
+            }
+            break;
         case "complex":
             BenchmarkRunner.Run<ComplexQueryBenchmarks>();
             break;
@@ -190,6 +204,7 @@ static void PrintUsage()
           simple      - Simple query latency (SELECT 1, COUNT, 100 rows)
           large       - Large result set reads (10K, 100K, 1M rows)
           insert      - Bulk insert comparison (1K, 10K, 100K rows)
+          parallelinsert - Parallel multi-connection bulk insert (1M, 10M rows; single vs Nx)
           schemacache - Per-connection schema cache (warm vs cold inserter)
           complex     - Complex queries (aggregations, JOINs, filters)
           connection  - Connection establishment overhead

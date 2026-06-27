@@ -88,6 +88,21 @@ All clients insert each run as a **single batch equal to the row count** (matche
 | 100K | **77 ms / 845 KB** | 88 ms / 10 MB | 195 ms / 3.1 MB |
 | 1M | **132 ms / 7.7 MB** | 193 ms / 92 MB | 1,530 ms / 28 MB |
 
+## Parallel bulk insert (`parallelinsert`)
+
+Single-connection bulk insert vs `ParallelBulkInserter<T>` fanning the same load across N pooled connections (intra-library — see [bulk-insert.md](bulk-insert.md#parallel-multi-connection-bulk-insert) for the API and sizing guidance). Wide value/date/numeric row, 50K-row batches, median / allocated.
+
+> ⚠️ **Noisy on this hardware — read the band, not the ranking.** The Apple M5 has **4 performance + 6 efficiency cores**, and the ClickHouse server runs co-located in Docker's Linux VM sharing those same cores. Parallel-insert throughput is dominated by how macOS schedules workers across the (heterogeneous) P/E cores, which varies run to run — even at 10 iterations the spread is ±15–35% and the per-DOP ordering shifts between runs. The robust result is **~3–4× faster than single at 10M across ×2–×4**; the differences *among* ×2/×3/×4 — and the allocated-memory figures, which track backpressure stalls rather than a per-config property — are not significant here. Choose a production degree of parallelism on representative hardware (homogeneous cores, server on its own machine), not on a laptop. Time is therefore left un-bolded among the parallel columns; only the robust per-row memory winner is bolded.
+
+| Rows | Single | Parallel ×2 | Parallel ×3 | Parallel ×4 |
+|---|---|---|---|---|
+| 1M | 190 ms / **615 KB** | 139 ms / 3.5 MB | 135 ms / 18 MB | 173 ms / 26 MB |
+| 10M | 5,824 ms / **2.8 MB** | 2,070 ms / 43 MB | 1,536 ms / 12 MB | 1,910 ms / 51 MB |
+
+- **At 10M, fan-out wins big (~3–4×).** A single INSERT is processed largely by one server-side pipeline; concurrent INSERTs let ClickHouse build parts on separate threads, so the speedup exceeds the ~2× one extra pipe "should" give — the single-connection baseline simply under-utilizes the box.
+- **At 1M it's marginal.** The insert is too short (~190 ms) to amortize opening connections and the channel hop, so ×2/×3 only edge out single and ×4 is already slower.
+- **Single allocates least.** Fan-out adds a bounded channel; under backpressure (workers behind — common when pipes outnumber the fast cores) the producer's `WaitToWriteAsync` stalls allocate, which is why the parallel memory figures are both higher and erratic. When workers keep pace it stays small.
+
 ## Complex queries (`complex`)
 
 | Workload | CH.Native | ClickHouse.Driver | Octonica |
@@ -160,6 +175,7 @@ dotnet run --project benchmarks/CH.Native.Benchmarks -c Release --framework net1
 
 # Writes
 dotnet run --project benchmarks/CH.Native.Benchmarks -c Release --framework net10.0 -- insert
+dotnet run --project benchmarks/CH.Native.Benchmarks -c Release --framework net10.0 -- parallelinsert
 dotnet run --project benchmarks/CH.Native.Benchmarks -c Release --framework net10.0 -- schemacache
 
 # Server-side
