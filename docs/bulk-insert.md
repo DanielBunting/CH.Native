@@ -314,6 +314,8 @@ Console.WriteLine($"Inserted {inserter.RowsWritten} rows");
 
 A single instance is not safe to use from multiple producer threads — push rows from one producer.
 
+For measured single-vs-parallel throughput at 1M and 10M rows, see [Performance Comparison](performance-comparison.md#parallel-bulk-insert-parallelinsert). The headline is ~3–4× over a single connection at 10M; the optimal degree of parallelism is hardware-dependent (it tracks your client's core count and whether the server is co-located), so benchmark it on representative hardware rather than copying a number.
+
 ## Supported Types
 
 Bulk insert covers the same type system as the read path. The common .NET → ClickHouse mappings:

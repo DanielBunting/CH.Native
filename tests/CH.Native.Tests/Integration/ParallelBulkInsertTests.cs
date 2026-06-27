@@ -384,4 +384,120 @@ public class ParallelBulkInsertTests
             await dataSource.CreateParallelBulkInserterAsync<NumericRow>(
                 "any_table", new ParallelBulkInsertOptions { DegreeOfParallelism = 8 }));
     }
+
+    // Startup is eager: opening an INSERT against a table that does not exist must
+    // fault during CreateParallelBulkInserterAsync (not later), and every worker
+    // connection opened during the failed startup must be returned to the pool.
+    [Fact]
+    public async Task Create_NonexistentTable_FailsAtStartupAndReturnsConnections()
+    {
+        await using var dataSource = new ClickHouseDataSource(_fixture.ConnectionString);
+
+        await Assert.ThrowsAnyAsync<Exception>(async () =>
+            await dataSource.CreateParallelBulkInserterAsync<NumericRow>(
+                $"no_such_table_{Guid.NewGuid():N}",
+                new ParallelBulkInsertOptions { DegreeOfParallelism = 3 }));
+
+        // The failed startup must not leak rented connections.
+        Assert.Equal(0, dataSource.GetStatistics().Busy);
+        Assert.True(await dataSource.PingAsync());
+    }
+
+    // A single-worker fan-out that faults surfaces the server exception DIRECTLY
+    // (not wrapped in an AggregateException) — the one-fault branch of the
+    // root-cause reporting, distinct from the multi-worker AggregateException case.
+    [Fact]
+    public async Task CompleteAsync_SingleWorkerFault_SurfacesRootCauseUnwrapped()
+    {
+        await using var dataSource = new ClickHouseDataSource(_fixture.ConnectionString);
+        await using var setup = new ClickHouseConnection(_fixture.ConnectionString);
+        await setup.OpenAsync();
+        var tableName = $"test_parallel_single_{Guid.NewGuid():N}";
+        await setup.ExecuteNonQueryAsync(
+            $"CREATE TABLE {tableName} (id Int64, CONSTRAINT id_positive CHECK id > 0) ENGINE = MergeTree() ORDER BY id");
+
+        try
+        {
+            IEnumerable<ConstraintRow> BadRows()
+            {
+                for (int i = 0; i < 100; i++)
+                    yield return new ConstraintRow { Id = -1 - i };
+            }
+
+            var ex = await Record.ExceptionAsync(() => dataSource.BulkInsertAsync(
+                tableName, BadRows(), new ParallelBulkInsertOptions { DegreeOfParallelism = 1 }));
+
+            Assert.NotNull(ex);
+            // One worker => the root cause is rethrown as-is, never an AggregateException.
+            Assert.IsNotType<AggregateException>(ex);
+            Assert.IsType<ClickHouseServerException>(ex);
+            Assert.Contains("Constraint", ex!.Message);
+            Assert.Equal(0, dataSource.GetStatistics().Busy);
+        }
+        finally
+        {
+            await setup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    // A second CompleteAsync after a SUCCESSFUL completion is a no-op (returns
+    // without re-running the workers), and rows must not be added afterwards.
+    [Fact]
+    public async Task CompleteAsync_AfterSuccess_IsIdempotentAndSealsTheInserter()
+    {
+        await using var dataSource = new ClickHouseDataSource(_fixture.ConnectionString);
+        await using var setup = new ClickHouseConnection(_fixture.ConnectionString);
+        await setup.OpenAsync();
+        var tableName = await CreateTableAsync(setup);
+
+        try
+        {
+            await using var inserter = await dataSource.CreateParallelBulkInserterAsync<NumericRow>(
+                tableName, new ParallelBulkInsertOptions { DegreeOfParallelism = 2 });
+            await inserter.AddRangeAsync(Rows(1_000));
+            await inserter.CompleteAsync();
+
+            // Idempotent: a redundant completion returns immediately.
+            await inserter.CompleteAsync();
+            Assert.Equal(1_000, inserter.RowsWritten);
+
+            // The inserter is sealed: no rows may be pushed after completion.
+            await Assert.ThrowsAsync<InvalidOperationException>(async () => await inserter.AddAsync(new NumericRow()));
+
+            Assert.Equal(1_000, await setup.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}"));
+        }
+        finally
+        {
+            await setup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    // The (database, table) overload routes through the database-qualified worker
+    // construction path; a round-trip against the default database proves it.
+    [Fact]
+    public async Task Create_DatabaseQualified_RoundTrips()
+    {
+        await using var dataSource = new ClickHouseDataSource(_fixture.ConnectionString);
+        await using var setup = new ClickHouseConnection(_fixture.ConnectionString);
+        await setup.OpenAsync();
+        var tableName = await CreateTableAsync(setup);
+
+        try
+        {
+            await using (var inserter = await dataSource.CreateParallelBulkInserterAsync<NumericRow>(
+                "default", tableName, new ParallelBulkInsertOptions { DegreeOfParallelism = 2 }))
+            {
+                await inserter.AddRangeAsync(Rows(5_000));
+                await inserter.CompleteAsync();
+                Assert.Equal(5_000, inserter.RowsWritten);
+            }
+
+            Assert.Equal(5_000, await setup.ExecuteScalarAsync<long>($"SELECT count() FROM {tableName}"));
+        }
+        finally
+        {
+            await setup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
 }

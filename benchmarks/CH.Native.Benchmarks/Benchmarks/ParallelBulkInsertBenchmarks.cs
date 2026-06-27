@@ -121,11 +121,11 @@ public class ParallelBulkInsertBenchmarks
     [Benchmark(Description = "Parallel x2")]
     public Task ParallelX2() => InsertParallel(2);
 
+    [Benchmark(Description = "Parallel x3")]
+    public Task ParallelX3() => InsertParallel(3);
+
     [Benchmark(Description = "Parallel x4")]
     public Task ParallelX4() => InsertParallel(4);
-
-    [Benchmark(Description = "Parallel x8")]
-    public Task ParallelX8() => InsertParallel(8);
 
     private async Task InsertParallel(int degreeOfParallelism)
     {
