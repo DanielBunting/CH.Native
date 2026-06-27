@@ -273,6 +273,46 @@ await inserter.CompleteAsync();
 
 `AddRangeStreamingAsync` flushes each batch as soon as it fills, so memory stays bounded at one `BatchSize`-worth of rows regardless of how long the source runs.
 
+## Parallel (multi-connection) bulk insert
+
+A single connection streams an INSERT as many sequential blocks over **one** socket — that is the native protocol's model and it usually saturates the network or the server's ingest before the client becomes the bottleneck. When it doesn't (you're CPU-bound serializing rows, or you want ClickHouse to parallelize the MergeTree part writes), fan the load out across **multiple** pooled connections with `ParallelBulkInserter<T>`. It lives on `ClickHouseDataSource` (a single connection cannot fan out), and each worker runs an independent single-connection insert over its own pipe.
+
+```csharp
+await using var dataSource = new ClickHouseDataSource(connectionString);
+
+// One-shot: consume a source and return the number of rows committed.
+long written = await dataSource.BulkInsertAsync(
+    "events",
+    GenerateEvents(),                       // IEnumerable<T> or IAsyncEnumerable<T>
+    new ParallelBulkInsertOptions { DegreeOfParallelism = 4, BatchSize = 50_000 });
+```
+
+Or drive it directly for full control — rows pushed via `AddAsync` are fanned out through a bounded channel to the workers, which apply backpressure when full:
+
+```csharp
+await using var inserter = await dataSource.CreateParallelBulkInserterAsync<Event>(
+    "events", new ParallelBulkInsertOptions { DegreeOfParallelism = 4 });
+
+await foreach (var e in GenerateEvents())
+    await inserter.AddAsync(e);
+
+await inserter.CompleteAsync();
+Console.WriteLine($"Inserted {inserter.RowsWritten} rows");
+```
+
+### Sizing
+
+`DegreeOfParallelism` consumes that many pooled connections concurrently, so keep it comfortably below the data source's `MaxPoolSize` (default 100) or other consumers will be starved waiting for a free slot. Setting it **above** `MaxPoolSize` throws `ArgumentException` up front — the inserter could otherwise deadlock waiting for connections it can never rent. `ChannelCapacity` defaults to `DegreeOfParallelism × BatchSize` (about one in-flight batch per worker); lower it to cap memory, raise it to give a bursty producer more slack.
+
+### Semantics (important)
+
+- **Out of order.** Rows are committed in whatever order the workers drain them — fine for MergeTree, which is unordered on insert.
+- **Not atomic.** Each block commits independently across all workers. A mid-stream failure leaves already-flushed blocks persisted and the buffered remainder lost; the first worker's exception is surfaced (wrapped in `AggregateException` if several fail).
+- **Not idempotent, and no dedup token.** `ParallelBulkInsertOptions` deliberately exposes **no `DeduplicationToken`**. ClickHouse keys insert deduplication on `token + block-sequence`, not on content, and the work-stealing fan-out composes blocks non-deterministically across workers and retries — so a token cannot be made sound here (a shared token silently discards every worker's first block; a per-worker token gives no retry safety). If you need retry idempotency, handle it above the inserter: stage into a temporary table and atomic-swap on success, use an idempotent engine such as `ReplacingMergeTree`, or fall back to a single-connection `BulkInserter<T>` with a `DeduplicationToken` (which stays sound on one ordered stream).
+- **Complete to persist.** Call `CompleteAsync` to flush and commit; disposing without completing abandons any un-flushed rows.
+
+A single instance is not safe to use from multiple producer threads — push rows from one producer.
+
 ## Supported Types
 
 Bulk insert covers the same type system as the read path. The common .NET → ClickHouse mappings:

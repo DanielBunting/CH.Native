@@ -66,6 +66,28 @@ CH.Native.BulkInsert.IColumnExtractor<TRow>
 CH.Native.BulkInsert.IColumnExtractor<TRow>.ColumnName.get -> string!
 CH.Native.BulkInsert.IColumnExtractor<TRow>.ExtractAndWrite(ref CH.Native.Protocol.ProtocolWriter writer, System.Collections.Generic.IReadOnlyList<TRow>! rows, int rowCount) -> void
 CH.Native.BulkInsert.IColumnExtractor<TRow>.TypeName.get -> string!
+CH.Native.BulkInsert.ParallelBulkInsertOptions
+CH.Native.BulkInsert.ParallelBulkInsertOptions.BatchSize.get -> int
+CH.Native.BulkInsert.ParallelBulkInsertOptions.BatchSize.set -> void
+CH.Native.BulkInsert.ParallelBulkInsertOptions.ChannelCapacity.get -> int?
+CH.Native.BulkInsert.ParallelBulkInsertOptions.ChannelCapacity.set -> void
+CH.Native.BulkInsert.ParallelBulkInsertOptions.DegreeOfParallelism.get -> int
+CH.Native.BulkInsert.ParallelBulkInsertOptions.DegreeOfParallelism.set -> void
+CH.Native.BulkInsert.ParallelBulkInsertOptions.ParallelBulkInsertOptions() -> void
+CH.Native.BulkInsert.ParallelBulkInsertOptions.QueryId.get -> string?
+CH.Native.BulkInsert.ParallelBulkInsertOptions.QueryId.set -> void
+CH.Native.BulkInsert.ParallelBulkInsertOptions.Roles.get -> System.Collections.Generic.IList<string!>?
+CH.Native.BulkInsert.ParallelBulkInsertOptions.Roles.set -> void
+CH.Native.BulkInsert.ParallelBulkInsertOptions.UseSchemaCache.get -> bool?
+CH.Native.BulkInsert.ParallelBulkInsertOptions.UseSchemaCache.set -> void
+CH.Native.BulkInsert.ParallelBulkInserter<T>
+CH.Native.BulkInsert.ParallelBulkInserter<T>.AddAsync(T! item, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+CH.Native.BulkInsert.ParallelBulkInserter<T>.AddRangeAsync(System.Collections.Generic.IEnumerable<T!>! items, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+CH.Native.BulkInsert.ParallelBulkInserter<T>.AddRangeStreamingAsync(System.Collections.Generic.IAsyncEnumerable<T!>! items, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask
+CH.Native.BulkInsert.ParallelBulkInserter<T>.CompleteAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
+CH.Native.BulkInsert.ParallelBulkInserter<T>.DegreeOfParallelism.get -> int
+CH.Native.BulkInsert.ParallelBulkInserter<T>.DisposeAsync() -> System.Threading.Tasks.ValueTask
+CH.Native.BulkInsert.ParallelBulkInserter<T>.RowsWritten.get -> long
 CH.Native.Commands.ClickHouseCommand
 CH.Native.Commands.ClickHouseCommand.ClickHouseCommand() -> void
 CH.Native.Commands.ClickHouseCommand.ClickHouseCommand(CH.Native.Connection.ClickHouseConnection! connection) -> void
@@ -238,6 +260,8 @@ CH.Native.Connection.ClickHouseConnectionSettingsBuilder.WithTlsClientCertificat
 CH.Native.Connection.ClickHouseConnectionSettingsBuilder.WithTlsPort(int port) -> CH.Native.Connection.ClickHouseConnectionSettingsBuilder!
 CH.Native.Connection.ClickHouseConnectionSettingsBuilder.WithUsername(string! username) -> CH.Native.Connection.ClickHouseConnectionSettingsBuilder!
 CH.Native.Connection.ClickHouseDataSource
+CH.Native.Connection.ClickHouseDataSource.BulkInsertAsync<T>(string! tableName, System.Collections.Generic.IAsyncEnumerable<T!>! source, CH.Native.BulkInsert.ParallelBulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!
+CH.Native.Connection.ClickHouseDataSource.BulkInsertAsync<T>(string! tableName, System.Collections.Generic.IEnumerable<T!>! source, CH.Native.BulkInsert.ParallelBulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!
 CH.Native.Connection.ClickHouseDataSource.ClickHouseDataSource(CH.Native.Connection.ClickHouseConnectionSettings! settings) -> void
 CH.Native.Connection.ClickHouseDataSource.ClickHouseDataSource(CH.Native.Connection.ClickHouseDataSourceOptions! options) -> void
 CH.Native.Connection.ClickHouseDataSource.ClickHouseDataSource(string! connectionString) -> void
@@ -246,6 +270,8 @@ CH.Native.Connection.ClickHouseDataSource.CreateBulkInserterAsync(string! tableN
 CH.Native.Connection.ClickHouseDataSource.CreateBulkInserterAsync<T>(string! database, string! tableName, CH.Native.BulkInsert.BulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.BulkInsert.BulkInserter<T!>!>
 CH.Native.Connection.ClickHouseDataSource.CreateBulkInserterAsync<T>(string! tableName, CH.Native.BulkInsert.BulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.BulkInsert.BulkInserter<T!>!>
 CH.Native.Connection.ClickHouseDataSource.CreateConnection() -> CH.Native.Connection.ClickHouseConnection!
+CH.Native.Connection.ClickHouseDataSource.CreateParallelBulkInserterAsync<T>(string! database, string! tableName, CH.Native.BulkInsert.ParallelBulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.BulkInsert.ParallelBulkInserter<T!>!>
+CH.Native.Connection.ClickHouseDataSource.CreateParallelBulkInserterAsync<T>(string! tableName, CH.Native.BulkInsert.ParallelBulkInsertOptions? options = null, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.BulkInsert.ParallelBulkInserter<T!>!>
 CH.Native.Connection.ClickHouseDataSource.GetStatistics() -> CH.Native.Connection.DataSourceStatistics
 CH.Native.Connection.ClickHouseDataSource.OpenConnectionAsync(System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.ValueTask<CH.Native.Connection.ClickHouseConnection!>
 CH.Native.Connection.ClickHouseDataSource.Options.get -> CH.Native.Connection.ClickHouseDataSourceOptions!
@@ -1225,6 +1251,7 @@ override CH.Native.Results.ClickHouseDataReader.this[string! name].get -> object
 readonly CH.Native.Protocol.PooledBytes.Memory -> System.ReadOnlyMemory<byte>
 static CH.Native.BulkInsert.BulkInsertOptions.Default.get -> CH.Native.BulkInsert.BulkInsertOptions!
 static CH.Native.BulkInsert.ColumnExtractorFactory.Create<TRow>(System.Reflection.PropertyInfo! property, string! columnName, string! clickHouseType) -> CH.Native.BulkInsert.IColumnExtractor<TRow>!
+static CH.Native.BulkInsert.ParallelBulkInsertOptions.Default.get -> CH.Native.BulkInsert.ParallelBulkInsertOptions!
 static CH.Native.Connection.ClickHouseConnectionExtensions.ExecuteNonQueryAsync(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, System.Collections.Generic.IDictionary<string!, object?>! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!
 static CH.Native.Connection.ClickHouseConnectionExtensions.ExecuteNonQueryAsync(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, object! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<long>!
 static CH.Native.Connection.ClickHouseConnectionExtensions.ExecuteScalarAsync<T>(this CH.Native.Connection.ClickHouseConnection! connection, string! sql, System.Collections.Generic.IDictionary<string!, object?>! parameters, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task<T?>!

@@ -436,6 +436,87 @@ public sealed class ClickHouseDataSource : DbDataSource
 #pragma warning restore RS0026, RS0027
 
     /// <summary>
+    /// Creates a <see cref="ParallelBulkInserter{T}"/> that streams a bulk insert
+    /// across <see cref="ParallelBulkInsertOptions.DegreeOfParallelism"/> pooled
+    /// connections ("pipes") in parallel. The workers are started before this
+    /// returns, so a bad table or schema surfaces here.
+    /// </summary>
+    /// <remarks>
+    /// The inserter holds one pooled connection per worker for its lifetime; size
+    /// <see cref="ParallelBulkInsertOptions.DegreeOfParallelism"/> comfortably below
+    /// <c>MaxPoolSize</c> so other consumers are not starved. The insert is not
+    /// atomic and supports no deduplication token — see <see cref="ParallelBulkInsertOptions"/>.
+    /// </remarks>
+    public async ValueTask<ParallelBulkInserter<T>> CreateParallelBulkInserterAsync<T>(
+        string tableName,
+        ParallelBulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+        where T : class
+    {
+        options ??= ParallelBulkInsertOptions.Default;
+        options.Validate(_options.MaxPoolSize);
+        var inserter = new ParallelBulkInserter<T>(this, database: null, tableName, options);
+        await inserter.StartAsync(cancellationToken).ConfigureAwait(false);
+        return inserter;
+    }
+
+#pragma warning disable RS0026, RS0027 // Sibling overload with the (database, table) parameter shape.
+    /// <summary>
+    /// Creates a <see cref="ParallelBulkInserter{T}"/> targeting the explicitly-supplied
+    /// <paramref name="database"/> and <paramref name="tableName"/>.
+    /// </summary>
+    public async ValueTask<ParallelBulkInserter<T>> CreateParallelBulkInserterAsync<T>(
+        string database,
+        string tableName,
+        ParallelBulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+        where T : class
+    {
+        options ??= ParallelBulkInsertOptions.Default;
+        options.Validate(_options.MaxPoolSize);
+        var inserter = new ParallelBulkInserter<T>(this, database, tableName, options);
+        await inserter.StartAsync(cancellationToken).ConfigureAwait(false);
+        return inserter;
+    }
+
+    /// <summary>
+    /// One-shot parallel bulk insert: fans <paramref name="source"/> out across
+    /// <see cref="ParallelBulkInsertOptions.DegreeOfParallelism"/> pooled connections
+    /// and returns the number of rows committed.
+    /// </summary>
+    public async Task<long> BulkInsertAsync<T>(
+        string tableName,
+        IEnumerable<T> source,
+        ParallelBulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        await using var inserter = await CreateParallelBulkInserterAsync<T>(tableName, options, cancellationToken).ConfigureAwait(false);
+        await inserter.AddRangeAsync(source, cancellationToken).ConfigureAwait(false);
+        await inserter.CompleteAsync(cancellationToken).ConfigureAwait(false);
+        return inserter.RowsWritten;
+    }
+
+    /// <summary>
+    /// One-shot parallel bulk insert from an asynchronous <paramref name="source"/>.
+    /// </summary>
+    public async Task<long> BulkInsertAsync<T>(
+        string tableName,
+        IAsyncEnumerable<T> source,
+        ParallelBulkInsertOptions? options = null,
+        CancellationToken cancellationToken = default)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        await using var inserter = await CreateParallelBulkInserterAsync<T>(tableName, options, cancellationToken).ConfigureAwait(false);
+        await inserter.AddRangeStreamingAsync(source, cancellationToken).ConfigureAwait(false);
+        await inserter.CompleteAsync(cancellationToken).ConfigureAwait(false);
+        return inserter.RowsWritten;
+    }
+#pragma warning restore RS0026, RS0027
+
+    /// <summary>
     /// Creates a queryable bound to this data source. Each enumeration and
     /// each <see cref="ClickHouseQueryableExtensions.InsertAsync{T}(IQueryable{T}, T, BulkInsertOptions?, System.Threading.CancellationToken)"/>
     /// rents a connection from the pool and returns it on completion — the
