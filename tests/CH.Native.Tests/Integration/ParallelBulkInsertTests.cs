@@ -1,5 +1,6 @@
 using CH.Native.BulkInsert;
 using CH.Native.Connection;
+using CH.Native.Exceptions;
 using CH.Native.Mapping;
 using CH.Native.Tests.Fixtures;
 using Xunit;
@@ -189,9 +190,8 @@ public class ParallelBulkInsertTests
         }
     }
 
-    // Finding #1: a CompleteAsync that fails must NOT be silently reported as
-    // success on a retry. The success flag must only flip after the workers
-    // actually committed.
+    // A CompleteAsync that fails must NOT be silently reported as success on a
+    // retry. The success flag must only flip after the workers actually committed.
     [Fact]
     public async Task CompleteAsync_AfterFailure_RetryThrowsRatherThanSilentSuccess()
     {
@@ -220,6 +220,70 @@ public class ParallelBulkInsertTests
         {
             await setup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
         }
+    }
+
+    // A genuine (non-cancellation) server fault must surface from CompleteAsync with
+    // its root cause intact — not be swallowed, misclassified as a cancellation
+    // cascade, or collapsed to a generic "without a recorded cause". A CONSTRAINT
+    // CHECK violation is a clean, deterministic server-side rejection on the native
+    // binary insert path.
+    [Fact]
+    public async Task CompleteAsync_RealServerFault_SurfacesRootCause()
+    {
+        await using var dataSource = new ClickHouseDataSource(_fixture.ConnectionString);
+        await using var setup = new ClickHouseConnection(_fixture.ConnectionString);
+        await setup.OpenAsync();
+        var tableName = $"test_parallel_constraint_{Guid.NewGuid():N}";
+        await setup.ExecuteNonQueryAsync(
+            $"CREATE TABLE {tableName} (id Int64, CONSTRAINT id_positive CHECK id > 0) ENGINE = MergeTree() ORDER BY id");
+
+        try
+        {
+            // Every row violates `id > 0`, so the workers fault on flush.
+            IEnumerable<ConstraintRow> BadRows()
+            {
+                for (int i = 0; i < 100; i++)
+                    yield return new ConstraintRow { Id = -1 - i };
+            }
+
+            var ex = await Record.ExceptionAsync(() => dataSource.BulkInsertAsync(
+                tableName, BadRows(), new ParallelBulkInsertOptions { DegreeOfParallelism = 2 }));
+
+            Assert.NotNull(ex);
+            // The server's ClickHouseServerException must reach the caller (possibly
+            // wrapped in an AggregateException when several workers fault), with the
+            // constraint message preserved.
+            var server = Flatten(ex!).OfType<ClickHouseServerException>().FirstOrDefault();
+            Assert.NotNull(server);
+            Assert.Contains("Constraint", server!.Message);
+
+            // The fault path must still return the worker connections to the pool.
+            Assert.Equal(0, dataSource.GetStatistics().Busy);
+        }
+        finally
+        {
+            await setup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+
+        static IEnumerable<Exception> Flatten(Exception ex)
+        {
+            yield return ex;
+            if (ex is AggregateException agg)
+            {
+                foreach (var inner in agg.Flatten().InnerExceptions)
+                    yield return inner;
+            }
+            else if (ex.InnerException is not null)
+            {
+                yield return ex.InnerException;
+            }
+        }
+    }
+
+    public class ConstraintRow
+    {
+        [ClickHouseColumn(Name = "id", Order = 0)]
+        public long Id { get; set; }
     }
 
     // Drives a full round-trip and asserts the row count, a sum-of-id checksum

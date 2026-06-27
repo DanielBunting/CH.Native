@@ -40,8 +40,8 @@ public class ParallelBulkInsertOptionsTests
     [Fact]
     public void Resolve_DefaultOptions_OnSmallPool_DoesNotThrowAndClamps()
     {
-        // Regression for finding #8: the default (unset) DegreeOfParallelism must
-        // not throw just because MaxPoolSize is below the nominal default of 4.
+        // The default (unset) DegreeOfParallelism must not throw just because
+        // MaxPoolSize is below the nominal default of 4.
         var options = new ParallelBulkInsertOptions();
         Assert.Equal(2, options.Resolve(maxPoolSize: 2));
     }
@@ -116,8 +116,8 @@ public class ParallelBulkInsertOptionsTests
     [Fact]
     public void ResolveChannelCapacity_LargeValues_ClampToInt32MaxValue()
     {
-        // Regression for finding #5: degree*batch can exceed Int32 without either
-        // value being individually invalid; the result must clamp, not overflow.
+        // degree*batch can exceed Int32 without either value being individually
+        // invalid; the result must clamp, not overflow.
         var options = new ParallelBulkInsertOptions { BatchSize = 300_000_000 };
         Assert.Equal(int.MaxValue, options.ResolveChannelCapacity(degreeOfParallelism: 8));
     }
