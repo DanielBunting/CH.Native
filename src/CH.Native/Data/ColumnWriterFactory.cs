@@ -229,15 +229,10 @@ public sealed class ColumnWriterFactory
         return CreateWriterForType(type.TypeArguments[0]);
     }
 
+    // Raw AggregateFunction(...) state columns are not supported — see
+    // ColumnReaderFactory.UnsupportedAggregateFunction. SimpleAggregateFunction is unaffected.
     private IColumnWriter CreateAggregateFunctionWriter(ClickHouseType type)
-    {
-        if (type.AggregateFunctionName is null)
-            throw new FormatException(
-                $"AggregateFunction missing function name: {type.OriginalTypeName}");
-        var format = AggregateState.AggregateFunctionStateFormatRegistry.Resolve(
-            type.AggregateFunctionName, type.TypeArguments);
-        return new AggregateFunctionColumnWriter(type.OriginalTypeName, format);
-    }
+        => throw ColumnReaderFactory.UnsupportedAggregateFunction(type);
 
     private IColumnWriter CreateFixedStringWriter(ClickHouseType type)
     {

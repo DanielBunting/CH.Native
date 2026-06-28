@@ -21,13 +21,15 @@ Host=localhost;Port=9000;Database=default;Username=default;Password=secret
 | **Roles** | Role | string | - | Comma-separated default roles (`SET ROLE …` per query) |
 | **SshKeyPath** | SshPrivateKeyPath, SshKeyFile | string | - | Path to SSH private key (PEM/OpenSSH; sets auth method to `SshKey`) |
 | **SshKeyPassphrase** | SshPassphrase | string | - | Passphrase for an encrypted SSH key |
-| **Timeout** | ConnectTimeout | int | 30 | Connection timeout in seconds |
+| **Timeout** | ConnectTimeout | int | 10 | Connection timeout in seconds |
 | **Compress** | Compression | bool | true | Enable compression |
 | **CompressionMethod** | - | enum | Lz4 | Lz4 or Zstd |
 | **UseTls** | Tls, Ssl, Secure | bool | false | Enable TLS encryption |
 | **TlsPort** | SslPort, SecurePort | int | 9440 | TLS port number |
 | **AllowInsecureTls** | TrustServerCertificate, Insecure | bool | false | Skip certificate validation |
 | **TlsCaCertificate** | SslCa, CaCert | string | - | Path to CA certificate file |
+| **TlsClientCertificate** | ClientCertificate, ClientCertificatePath, SslCert | string | - | Path to client certificate (PKCS#12/PFX) for mTLS; use with `UseTls` |
+| **TlsClientCertificatePassword** | ClientCertificatePassword, SslCertPassword | string | - | Password for an encrypted client certificate |
 | **Servers** | - | string | - | Comma-separated host:port list |
 | **LoadBalancing** | LoadBalancer | enum | RoundRobin | RoundRobin, Random, FirstAvailable |
 | **MaxRetries** | Retries | int | 3 | Maximum retry attempts |
@@ -36,6 +38,8 @@ Host=localhost;Port=9000;Database=default;Username=default;Password=secret
 | **CircuitBreakerThreshold** | CbThreshold | int | 5 | Failures before circuit opens |
 | **CircuitBreakerDuration** | CbDuration | int | 30 | Circuit open duration in seconds |
 | **HealthCheckInterval** | - | int | 10 | Health check interval in seconds |
+| **StringMaterialization** | - | enum | Eager | `Eager` (decode strings during parsing) or `Lazy` (raw UTF-8, decode on demand; enables `GetFieldValue<byte[]>` raw-byte access) |
+| **UseSchemaCache** | SchemaCache | bool | false | Cache bulk-insert column metadata per connection (per-call `BulkInsertOptions.UseSchemaCache` overrides) |
 
 ## Programmatic Configuration
 

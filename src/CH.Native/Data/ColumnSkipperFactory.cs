@@ -204,15 +204,10 @@ public sealed class ColumnSkipperFactory
         return CreateSkipperForType(type.TypeArguments[0]);
     }
 
+    // Raw AggregateFunction(...) state columns are not supported — see
+    // ColumnReaderFactory.UnsupportedAggregateFunction. SimpleAggregateFunction is unaffected.
     private IColumnSkipper CreateAggregateFunctionSkipper(ClickHouseType type)
-    {
-        if (type.AggregateFunctionName is null)
-            throw new FormatException(
-                $"AggregateFunction missing function name: {type.OriginalTypeName}");
-        var format = AggregateState.AggregateFunctionStateFormatRegistry.Resolve(
-            type.AggregateFunctionName, type.TypeArguments);
-        return new AggregateFunctionColumnSkipper(type.OriginalTypeName, format);
-    }
+        => throw ColumnReaderFactory.UnsupportedAggregateFunction(type);
 
     private IColumnSkipper CreateFixedStringSkipper(ClickHouseType type)
     {

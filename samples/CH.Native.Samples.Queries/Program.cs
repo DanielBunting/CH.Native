@@ -75,7 +75,7 @@ static void PrintUsage()
             progress         IProgress<QueryProgress> + CancellationToken — long-running query control
             log-analytics    Log dashboard — volume by level, latency by service, error rate, top slowest
             map              Map(K, V) columns — Dictionary (lossy/default) vs ClickHouseMap (lossless, preserves duplicates)
-            aggregate-function  AggregateFunction / SimpleAggregateFunction — read MV state columns, finalize server-side
+            aggregate-function  AggregatingMergeTree — query values via finalizeAggregation, SimpleAggregateFunction, hex() for raw state
 
         All samples create a uniquely-named temp table, run the demo, and drop the table.
         """);

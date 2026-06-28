@@ -329,11 +329,6 @@ CH.Native.Connection.ResilienceOptionsBuilder.WithHealthCheckInterval(System.Tim
 CH.Native.Connection.ResilienceOptionsBuilder.WithHealthCheckTimeout(System.TimeSpan timeout) -> CH.Native.Connection.ResilienceOptionsBuilder!
 CH.Native.Connection.ResilienceOptionsBuilder.WithRetry() -> CH.Native.Connection.ResilienceOptionsBuilder!
 CH.Native.Connection.ResilienceOptionsBuilder.WithRetry(CH.Native.Resilience.RetryOptions! options) -> CH.Native.Connection.ResilienceOptionsBuilder!
-CH.Native.Data.AggregateState.ClickHouseAggregateState
-CH.Native.Data.AggregateState.ClickHouseAggregateState.ClickHouseAggregateState(byte[]! state, string! functionName) -> void
-CH.Native.Data.AggregateState.ClickHouseAggregateState.Equals(CH.Native.Data.AggregateState.ClickHouseAggregateState? other) -> bool
-CH.Native.Data.AggregateState.ClickHouseAggregateState.FunctionName.get -> string!
-CH.Native.Data.AggregateState.ClickHouseAggregateState.State.get -> byte[]!
 CH.Native.Data.Block
 CH.Native.Data.Block.Block() -> void
 CH.Native.Data.Block.BlockHeader
@@ -1191,8 +1186,6 @@ override CH.Native.Connection.ClickHouseConnection.ServerVersion.get -> string!
 override CH.Native.Connection.ClickHouseConnection.State.get -> System.Data.ConnectionState
 override CH.Native.Connection.ClickHouseConnectionSettings.ToString() -> string!
 override CH.Native.Connection.ClickHouseDataSource.ConnectionString.get -> string!
-override CH.Native.Data.AggregateState.ClickHouseAggregateState.Equals(object? obj) -> bool
-override CH.Native.Data.AggregateState.ClickHouseAggregateState.GetHashCode() -> int
 override CH.Native.Data.ClickHouseInterval.Equals(object? obj) -> bool
 override CH.Native.Data.ClickHouseInterval.GetHashCode() -> int
 override CH.Native.Data.ClickHouseInterval.ToString() -> string!
@@ -1410,7 +1403,6 @@ static CH.Native.Telemetry.ClickHouseMeter.SetCircuitBreakerState(string! server
 static CH.Native.Telemetry.SqlSanitizer.Sanitize(string! sql) -> string!
 static CH.Native.Telemetry.TelemetrySettings.Default.get -> CH.Native.Telemetry.TelemetrySettings!
 static readonly CH.Native.Ado.ClickHouseProviderFactory.Instance -> CH.Native.Ado.ClickHouseProviderFactory!
-static readonly CH.Native.Data.AggregateState.ClickHouseAggregateState.Empty -> CH.Native.Data.AggregateState.ClickHouseAggregateState!
 static readonly CH.Native.Data.Geo.Geometry.Null -> CH.Native.Data.Geo.Geometry
 static readonly CH.Native.Data.Geo.Point.Zero -> CH.Native.Data.Geo.Point
 static readonly CH.Native.Numerics.ClickHouseDecimal.One -> CH.Native.Numerics.ClickHouseDecimal

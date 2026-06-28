@@ -58,19 +58,21 @@ while (await reader.ReadAsync())
 using var cmd = connection.CreateCommand();
 cmd.CommandText = "SELECT * FROM users WHERE age > @minAge AND status = @status";
 
-cmd.Parameters.Add(new ClickHouseDbParameter
-{
-    ParameterName = "minAge",
-    Value = 18
-});
-
-cmd.Parameters.Add(new ClickHouseDbParameter
-{
-    ParameterName = "status",
-    Value = "active"
-});
+// Name/value overload on the native parameter collection.
+cmd.Parameters.Add("minAge", 18);
+cmd.Parameters.Add("status", "active");
 
 using var reader = await cmd.ExecuteReaderAsync();
+```
+
+When the command is typed as `DbCommand` (e.g. obtained via the ADO.NET `DbConnection`
+surface), use the standard `CreateParameter()` / `DbParameterCollection.Add` shape instead:
+
+```csharp
+var p = cmd.CreateParameter();
+p.ParameterName = "minAge";
+p.Value = 18;
+cmd.Parameters.Add(p);
 ```
 
 ### One connection, both surfaces

@@ -55,7 +55,7 @@ CH.Native creates spans for database operations using `System.Diagnostics.Activi
 ### Activity Source
 
 - **Name:** `CH.Native`
-- **Operations:** `clickhouse.query`, `clickhouse.connect`, `clickhouse.bulk_insert`, `clickhouse.cancel`
+- **Operations:** `clickhouse.query`, `clickhouse.connect`, `clickhouse.bulk_insert`, `clickhouse.bulk_insert.flush`
 
 ### Span Attributes
 
@@ -64,10 +64,13 @@ CH.Native creates spans for database operations using `System.Diagnostics.Activi
 | `db.system` | `clickhouse` |
 | `db.name` | Database name |
 | `db.statement` | SQL query (if enabled, sanitized) |
-| `db.operation` | Operation type (query, insert, etc.) |
-| `server.address` | Server hostname |
-| `server.port` | Server port |
-| `db.response.rows` | Number of rows returned |
+| `db.clickhouse.query_id` | Query ID (matches `system.query_log`) |
+| `db.clickhouse.table` | Target table (bulk insert) |
+| `server.address` | Server hostname (connect span) |
+| `server.port` | Server port (connect span) |
+| `db.clickhouse.rows_read` | Number of rows read |
+| `db.clickhouse.bytes_read` | Number of bytes read |
+| `db.clickhouse.error_code` | ClickHouse server error code (on failure) |
 
 ### OpenTelemetry Integration
 
@@ -201,16 +204,18 @@ var settings = ClickHouseConnectionSettings.CreateBuilder()
 
 ### Example Log Output
 
+All log entries use the single category `CH.Native`:
+
 ```
-dbug: CH.Native.Connection[0]
+dbug: CH.Native[0]
       Opening connection to localhost:9000
-info: CH.Native.Connection[0]
+info: CH.Native[0]
       Connected to ClickHouse 24.1.5 (protocol 54467)
-dbug: CH.Native.Query[0]
+dbug: CH.Native[0]
       Executing: SELECT count() FROM users
-dbug: CH.Native.Query[0]
+dbug: CH.Native[0]
       Query completed in 12ms, 1 rows
-warn: CH.Native.Resilience[0]
+warn: CH.Native[0]
       Retry 1/3 after 100ms: Connection refused
 ```
 

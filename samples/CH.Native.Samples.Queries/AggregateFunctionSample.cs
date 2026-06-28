@@ -1,19 +1,19 @@
 using CH.Native.Connection;
-using CH.Native.Data.AggregateState;
 using CH.Native.Mapping;
 
 namespace CH.Native.Samples.Queries;
 
 /// <summary>
-/// Reading <c>AggregateFunction(...)</c> and <c>SimpleAggregateFunction(...)</c>
-/// columns — the per-row "intermediate state" emitted by <c>AggregatingMergeTree</c>
-/// materialized views and any <c>*State()</c> aggregate.
+/// Querying <c>AggregatingMergeTree</c> aggregates — the per-row "intermediate state"
+/// emitted by <c>*State()</c> aggregates.
 ///
 /// Two distinct shapes:
 /// <list type="bullet">
-/// <item><c>AggregateFunction(fn, T...)</c> — opaque per-row state bytes, surfaced
-/// as <see cref="ClickHouseAggregateState"/>. The bytes are produced and consumed by
-/// ClickHouse; use <c>finalizeAggregation()</c> server-side to materialize a scalar.</item>
+/// <item><c>AggregateFunction(fn, T...)</c> — an opaque, server-internal state blob.
+/// CH.Native is a push-and-query client and does not decode these client-side: query
+/// the finalized value with <c>finalizeAggregation()</c> (or the matching <c>-Merge</c>
+/// combinator) instead. Reading the raw state column fails fast with guidance; if you
+/// genuinely need the raw bytes, <c>SELECT hex(col)</c> ships them as a String.</item>
 /// <item><c>SimpleAggregateFunction(fn, T)</c> — transparent wrapper. The wire
 /// format is identical to <c>T</c>, the function name is a server-side merge hint,
 /// and the column reads as the inner CLR type directly (no wrapper).</item>
@@ -62,33 +62,10 @@ internal static class AggregateFunctionSample
                 """);
             Console.WriteLine($"Seeded {src} with 8 events across 3 users; MV {mv} captured the states.");
 
-            // --- Read the opaque state column directly ---------------------------
-            // SELECT * on a *State() MV used to throw NotSupportedException; this
-            // is the path that now works for tier-1 aggregates.
-            Console.WriteLine("\n--- SELECT id, *_state FROM mv — reads as ClickHouseAggregateState ---");
-            await foreach (var row in connection.QueryStreamAsync(
-                $"SELECT user_id, event_count_state, value_sum_state, min_event_state, max_event_state " +
-                $"FROM {mv} ORDER BY user_id"))
-            {
-                var userId = row.GetFieldValue<int>("user_id");
-                var countState = row.GetFieldValue<ClickHouseAggregateState>("event_count_state");
-                var sumState = row.GetFieldValue<ClickHouseAggregateState>("value_sum_state");
-                var minState = row.GetFieldValue<ClickHouseAggregateState>("min_event_state");
-                var maxState = row.GetFieldValue<ClickHouseAggregateState>("max_event_state");
-
-                Console.WriteLine(
-                    $"  user {userId}: " +
-                    $"count={Hex(countState.State)} ({countState.State.Length}B), " +
-                    $"sum={Hex(sumState.State)} ({sumState.State.Length}B), " +
-                    $"min={Hex(minState.State)} ({minState.State.Length}B), " +
-                    $"max={Hex(maxState.State)} ({maxState.State.Length}B)");
-            }
-
-            // --- Server-side finalization gives the scalar values ----------------
-            // The opaque bytes aren't decoded client-side; project through
-            // finalizeAggregation() (or the *Merge() variant) when you want the
-            // final scalar.
-            Console.WriteLine("\n--- SELECT finalizeAggregation(*) — server materializes the scalar ---");
+            // --- Query the finalized values (the values you actually want) -------
+            // finalizeAggregation() (or the *Merge() variant) materializes the scalar
+            // server-side; it reads back through the ordinary typed readers.
+            Console.WriteLine("\n--- SELECT finalizeAggregation(*) — the per-user aggregates ---");
             await foreach (var row in connection.QueryStreamAsync($"""
                 SELECT
                     user_id,
@@ -107,32 +84,35 @@ internal static class AggregateFunctionSample
                     $"max={row.GetFieldValue<int>("max_event")}");
             }
 
-            // --- ClickHouseAggregateState equality is byte-wise -----------------
-            // Two states with identical bytes compare equal regardless of array
-            // reference identity — safe for HashSet/Dictionary keys.
-            var twin1 = new ClickHouseAggregateState(new byte[] { 1, 2, 3 }, "sum");
-            var twin2 = new ClickHouseAggregateState(new byte[] { 1, 2, 3 }, "sum");
-            Console.WriteLine($"\nIdentical-bytes equality: {twin1.Equals(twin2)} (matches ClickHouseMap convention).");
-
-            // --- Unsupported function: actionable error -------------------------
-            // For functions outside the tier-1 set, the driver throws an exception
-            // that names the function and points to the workaround. Use a separate
-            // connection: when the reader rejects an unsupported column header,
-            // the pipe still has the partial response bytes — easier to isolate
-            // than drain.
-            Console.WriteLine("\n--- Unsupported function — driver throws an actionable error ---");
+            // --- Reading a raw state column fails fast with guidance -------------
+            // Selecting the opaque AggregateFunction state directly is not supported;
+            // the driver throws an actionable error naming the workaround. Use a
+            // separate connection: rejecting an unsupported column header leaves the
+            // partial response in the pipe, so that connection is closed.
+            Console.WriteLine("\n--- SELECT a raw state column — driver throws an actionable error ---");
             await using (var aux = new ClickHouseConnection(connectionString))
             {
                 await aux.OpenAsync();
                 try
                 {
-                    _ = await aux.ExecuteScalarAsync<ClickHouseAggregateState>(
-                        "SELECT uniqExactState(toUInt64(number)) FROM numbers(100)");
+                    await foreach (var _ in aux.QueryStreamAsync($"SELECT value_sum_state FROM {mv}"))
+                    {
+                    }
                 }
                 catch (NotSupportedException ex)
                 {
                     Console.WriteLine($"  {ex.Message}");
                 }
+            }
+
+            // --- If you really need the raw bytes: hex() ships them as a String --
+            // Version-proof and works through any client; decode/re-inject with unhex().
+            Console.WriteLine("\n--- SELECT hex(state) — transfer the opaque bytes as a String ---");
+            await foreach (var row in connection.QueryStreamAsync(
+                $"SELECT user_id, hex(value_sum_state) AS sum_state_hex FROM {mv} ORDER BY user_id"))
+            {
+                Console.WriteLine(
+                    $"  user {row.GetFieldValue<int>("user_id")}: sum_state={row.GetFieldValue<string>("sum_state_hex")}");
             }
 
             // --- SimpleAggregateFunction reads as the inner CLR type directly ---
@@ -166,9 +146,6 @@ internal static class AggregateFunctionSample
             Console.WriteLine($"\nDropped {mv} and {src}.");
         }
     }
-
-    private static string Hex(byte[] bytes) =>
-        bytes.Length == 0 ? "(empty)" : Convert.ToHexString(bytes);
 }
 
 file class UserTotal

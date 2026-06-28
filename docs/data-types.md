@@ -39,7 +39,7 @@ When reading data, CH.Native automatically converts ClickHouse types to their .N
 | Bool | bool | Stored as UInt8 |
 | Decimal32(S) | decimal | S = scale (decimal places) |
 | Decimal64(S) | decimal | |
-| Decimal128(S) | decimal | |
+| Decimal128(S) | ClickHouseDecimal | 38 digits exceed .NET `decimal`'s 28-29 |
 | Decimal256(S) | ClickHouseDecimal | 76 digits exceed .NET `decimal`'s 28-29 |
 | Date | DateOnly | Days since 1970-01-01 |
 | Date32 | DateOnly | Supports dates before 1970 (full range to 2299-12-31) |
@@ -48,7 +48,7 @@ When reading data, CH.Native automatically converts ClickHouse types to their .N
 | DateTime64(P) | DateTime | P = precision (0-9); P=8/9 also readable as `long` — see [DateTime Types](#datetime-types) |
 | Time | TimeOnly | Time-of-day; ClickHouse 25.10+ |
 | Time64(P) | TimeOnly | Sub-second time-of-day; ClickHouse 25.10+ |
-| IntervalSecond … IntervalYear | ClickHouseInterval | All 11 units; calendar units (Month/Quarter/Year) have no fixed duration |
+| IntervalNanosecond … IntervalYear | ClickHouseInterval | All 11 units; calendar units (Month/Quarter/Year) have no fixed duration |
 | String | string | UTF-8 encoded |
 | FixedString(N) | byte[] | Fixed N bytes |
 | UUID | Guid | |
@@ -66,7 +66,7 @@ When reading data, CH.Native automatically converts ClickHouse types to their .N
 | Dynamic | ClickHouseDynamic | Per-row type discriminator |
 | Variant(T0, T1, ...) | VariantValue<T0, T1> / ClickHouseVariant | Boxing-free up to 2 arms |
 | SimpleAggregateFunction(fn, T) | CLR type of T | Transparent — wire format is identical to T |
-| AggregateFunction(fn, T...) | ClickHouseAggregateState | Opaque per-row state bytes; tier-1 fn set only |
+| AggregateFunction(fn, T...) | — (not read client-side) | Opaque state; query via `finalizeAggregation()`, or `hex()` for raw bytes |
 | Point | (X, Y) record struct | |
 | Ring, LineString | Point[] | |
 | Polygon, MultiLineString | Point[][] | |
@@ -130,10 +130,10 @@ Decimal256(10) -- Up to 76 total digits
 Decimal(18, 4) -- P=precision, S=scale
 ```
 
-`Decimal32/64/128` map to .NET `decimal`. `Decimal256` maps to `ClickHouseDecimal`
-(`CH.Native.Numerics`) because its 76 significant digits exceed `decimal`'s 28–29; all
-digits are preserved. `ClickHouseDecimal` also works for bulk-inserting full-precision
-`Decimal128/256` values.
+`Decimal32/64` map to .NET `decimal`. `Decimal128` and `Decimal256` map to
+`ClickHouseDecimal` (`CH.Native.Numerics`) because their 38 and 76 significant digits
+exceed `decimal`'s 28–29; all digits are preserved. `ClickHouseDecimal` also works for
+bulk-inserting full-precision `Decimal128/256` values.
 
 Writing a value with more fractional digits than the column's scale **truncates toward
 zero** (no rounding, no error): `1.23456` into `Decimal64(4)` stores `1.2345`. Round in
@@ -655,73 +655,38 @@ var total = row.GetFieldValue<long>("total");
 
 `AggregateFunction(fn, T...)` columns store the **serialized intermediate state** of an aggregate function — they appear in every materialized view backed by `AggregatingMergeTree` and in any `*State()` aggregate output.
 
-Reading exposes a `ClickHouseAggregateState` wrapper:
+These states are **opaque, server-internal binary blobs** whose layout is function- and inner-type-specific and is not part of a stable wire contract. CH.Native is a push-and-query client and does **not** decode raw `AggregateFunction(...)` state columns. Reading one throws `NotSupportedException` — and because the failure happens mid-block (native-protocol column data is not length-prefixed), the rest of the response is unreadable and **the connection is closed**. The exception message names the workarounds, the close is immediate (`State == Closed`), and a pooled `ClickHouseDataSource` discards the connection rather than reusing it — the blast radius is exactly one query.
 
-```csharp
-public sealed class ClickHouseAggregateState : IEquatable<ClickHouseAggregateState>
-{
-    public ClickHouseAggregateState(byte[] state, string functionName);
-    public byte[] State { get; }
-    public string FunctionName { get; }
-    public static readonly ClickHouseAggregateState Empty;
-}
+The supported pattern is to query the **value** server-side rather than the state:
+
+```sql
+-- Finalize the state on the server; it reads back through the ordinary typed readers.
+SELECT id, finalizeAggregation(sum_state) AS total
+FROM mv_user_totals;
 ```
-
-Equality is **byte-wise** on `State` and string-wise on `FunctionName`, so two instances with identical content compare equal regardless of array reference identity (safe for `HashSet`/`Dictionary` keys).
-
-Example — reading a materialized-view state column:
 
 ```csharp
 await foreach (var row in connection.QueryStreamAsync(
-    "SELECT id, sum_state FROM mv_user_totals ORDER BY id"))
+    "SELECT id, toInt64(finalizeAggregation(sum_state)) AS total FROM mv_user_totals ORDER BY id"))
 {
-    var state = row.GetFieldValue<ClickHouseAggregateState>("sum_state");
-    // state.State is the opaque bytes; state.FunctionName is "sum".
+    var total = row.GetFieldValue<long>("total"); // a normal scalar, no special support
 }
 ```
 
-#### Tier-1 supported aggregates
-
-CH.Native ships first-class support for the following aggregate functions:
-
-| Function | Inner types (supported in tier 1) | Wire format |
-|----------|-----------------------------------|-------------|
-| `sum` | Int8/16/32/64, UInt8/16/32/64, Float32/64, Int128/UInt128, Int256/UInt256, Decimal32/64/128/256 | Fixed 8/16/32 bytes |
-| `count` | Any (or zero args — `countState()`) | VarUInt (1–10 bytes) |
-| `min`, `max`, `any`, `anyLast` | Int8/16/32/64, UInt8/16/32/64, Float32/64, Date, Date32, DateTime, DateTime64, UUID, Bool | 1-byte flag + N data bytes |
-
-Functions outside this set throw `NotSupportedException` — and because the failure
-happens mid-block (native-protocol column data is not length-prefixed), the rest of the
-response is unreadable and **the connection is closed**. The exception message says so,
-the close is immediate (`State == Closed`), and a pooled `ClickHouseDataSource` discards
-the connection rather than reusing it — the blast radius is exactly one query. Use the
-workarounds below to keep unsupported states off the wire. Notable exclusions:
-
-- `avg` — needs a `Float64 + VarUInt` composite format; coming in a follow-up.
-- Nullable inner types for any aggregate — state size varies between rows; deferred.
-- String / FixedString inner for `min`/`max`/`any`/`anyLast` — variable-length state; deferred.
-- `uniqExact`, `uniqHLL12`, `quantilesTDigest`, `groupArray`, `topK`, `argMin`, `argMax` — variable-size states by design.
-
-#### Workaround for unsupported functions
-
-For aggregate functions outside the supported set, use the server-side `finalizeAggregation()` or `*Merge()` pattern:
+If you genuinely need the raw bytes (e.g. to ferry a mergeable state between servers that can't reach each other directly), transport them as a hex `String` — version-proof and works through any client:
 
 ```sql
--- Pattern 1: finalize the state on the server, transport the final scalar.
-SELECT id, finalizeAggregation(uniq_state) AS unique_users
-FROM mv_daily_users;
-
--- Pattern 2: transport the opaque state as a hex String, finalize on a different server.
 SELECT id, hex(uniq_state) FROM mv_daily_users;                 -- producer
 INSERT INTO mv (uniq_state) VALUES (unhex('aabbcc...'));        -- consumer
 ```
 
-The `unhex`/`finalizeAggregation` recipe is exactly how CH.Native's own cross-version system tests transfer states (`tests/CH.Native.SystemTests/VersionMatrix/ComplexTypeMatrixProbeTests.cs:341`).
+> Most state movement (rollups, `INSERT … SELECT` between `AggregatingMergeTree` tables, `remote()`/`Distributed`, backups) happens entirely server-side and never needs the client. Raw client-side state reading was removed because `finalizeAggregation()` covers the query case and `hex()` covers the rare transport case, both without coupling to ClickHouse internals.
+
+For the transparent variant that **does** read as a value, see [SimpleAggregateFunction](#simpleaggregatefunctionfn-t) above.
 
 #### Limitations
 
 - `Nullable(AggregateFunction(...))` is rejected by both ClickHouse and the driver — there is no nullable wrapper for state columns.
-- Round-tripping a state through `BulkInserter<T>` works for the supported set: declare a POCO property of type `ClickHouseAggregateState` and bulk-insert as usual.
 
 ### Geospatial
 
@@ -846,10 +811,10 @@ expressions read as `ClickHouseInterval` (count + unit); `ToTimeSpan()` converts
 time-based units and throws for `Month`/`Quarter`/`Year`. See
 [Interval Types](#interval-types).
 
-### Decimal256 exceeds .NET decimal
+### Decimal128/256 exceed .NET decimal
 
-`decimal` holds 28–29 significant digits; `Decimal256` holds up to 76. Those columns map
-to `ClickHouseDecimal` instead. See [Decimal](#decimal).
+`decimal` holds 28–29 significant digits; `Decimal128` holds up to 38 and `Decimal256`
+up to 76. Both map to `ClickHouseDecimal` instead. See [Decimal](#decimal).
 
 ### BFloat16 truncates on write
 

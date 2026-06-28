@@ -119,9 +119,9 @@ The visitor translates the standard `System.String` instance methods:
 
 | .NET | ClickHouse SQL |
 |---|---|
-| `s.Contains(sub)` | `position(s, sub) > 0` |
-| `s.StartsWith(p)` | `startsWith(s, p)` |
-| `s.EndsWith(p)` | `endsWith(s, p)` |
+| `s.Contains(sub)` | `s LIKE '%sub%'` (special chars in `sub` escaped) |
+| `s.StartsWith(p)` | `s LIKE 'p%'` |
+| `s.EndsWith(p)` | `s LIKE '%p'` |
 | `s.ToLower()` / `ToLowerInvariant()` | `lower(s)` |
 | `s.ToUpper()` / `ToUpperInvariant()` | `upper(s)` |
 | `s.Trim()` / `TrimStart()` / `TrimEnd()` | `trim(...)` / `trimLeft(...)` / `trimRight(...)` |

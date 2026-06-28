@@ -1,15 +1,17 @@
 using CH.Native.Connection;
-using CH.Native.Data.AggregateState;
 using CH.Native.Tests.Fixtures;
 using Xunit;
 
 namespace CH.Native.Tests.Integration;
 
 /// <summary>
-/// Headline integration test for <c>AggregateFunction</c> support — proves
-/// <c>SELECT *</c> from an <c>AggregatingMergeTree</c> MV with tier-1 aggregates
-/// no longer throws, plus a finalize-aggregation cross-check that the bytes
-/// we read are the same ones ClickHouse produces.
+/// AggregatingMergeTree behaviour for a push-and-query client. CH.Native does not
+/// decode raw <c>AggregateFunction(...)</c> state columns (opaque, server-internal
+/// blobs); the supported path is to query the finalized value with
+/// <c>finalizeAggregation()</c>, and <c>SimpleAggregateFunction(fn, T)</c> reads as its
+/// inner type <c>T</c>. These pin that contract: the finalize path returns correct
+/// values, SimpleAggregateFunction round-trips, and a raw state column fails clean with
+/// actionable guidance (connection isolated).
 /// </summary>
 [Collection("ClickHouse")]
 public class AggregateFunctionTypeTests
@@ -19,7 +21,7 @@ public class AggregateFunctionTypeTests
     public AggregateFunctionTypeTests(ClickHouseFixture fixture) => _fixture = fixture;
 
     [Fact]
-    public async Task SelectStar_FromAggregatingMv_Succeeds_ForSumState()
+    public async Task FinalizeAggregation_FromAggregatingMv_ReturnsCorrectValues()
     {
         await using var conn = new ClickHouseConnection(_fixture.ConnectionString);
         await conn.OpenAsync();
@@ -29,92 +31,27 @@ public class AggregateFunctionTypeTests
         await conn.ExecuteNonQueryAsync($"CREATE TABLE {src} (id Int32, v Int32) ENGINE=MergeTree ORDER BY id");
         await conn.ExecuteNonQueryAsync(
             $"CREATE MATERIALIZED VIEW {mv} ENGINE=AggregatingMergeTree ORDER BY id AS " +
-            $"SELECT id, sumState(v) AS v_state FROM {src} GROUP BY id");
-
-        try
-        {
-            await conn.ExecuteNonQueryAsync($"INSERT INTO {src} VALUES (1, 10), (1, 20), (2, 5)");
-
-            // The crucial assertion: SELECT * does not throw on the state column.
-            var rows = new List<(int id, ClickHouseAggregateState s)>();
-            await foreach (var r in conn.QueryStreamAsync($"SELECT id, v_state FROM {mv} ORDER BY id"))
-            {
-                rows.Add((r.GetFieldValue<int>("id"), r.GetFieldValue<ClickHouseAggregateState>("v_state")));
-            }
-
-            Assert.True(rows.Count >= 1, "expected at least one materialized row");
-            Assert.All(rows, t => Assert.Equal("sum", t.s.FunctionName));
-            Assert.All(rows, t => Assert.Equal(8, t.s.State.Length)); // sumState(Int32) → 8 bytes
-
-            // Cross-check: finalizeAggregation gives the expected totals.
-            var totals = new Dictionary<int, long>();
-            await foreach (var r in conn.QueryStreamAsync(
-                $"SELECT id, toInt64(finalizeAggregation(v_state)) AS total FROM {mv} ORDER BY id"))
-            {
-                totals[r.GetFieldValue<int>("id")] = r.GetFieldValue<long>("total");
-            }
-            Assert.Equal(30L, totals[1]); // 10 + 20
-            Assert.Equal(5L, totals[2]);
-        }
-        finally
-        {
-            await conn.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {mv}");
-            await conn.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {src}");
-        }
-    }
-
-    [Fact]
-    public async Task SelectStar_FromAggregatingMv_Succeeds_ForCountAndMinMaxStates()
-    {
-        await using var conn = new ClickHouseConnection(_fixture.ConnectionString);
-        await conn.OpenAsync();
-        var src = $"agg_multi_src_{Guid.NewGuid():N}";
-        var mv = $"agg_multi_mv_{Guid.NewGuid():N}";
-
-        await conn.ExecuteNonQueryAsync($"CREATE TABLE {src} (id Int32, v Int32) ENGINE=MergeTree ORDER BY id");
-        await conn.ExecuteNonQueryAsync(
-            $"CREATE MATERIALIZED VIEW {mv} ENGINE=AggregatingMergeTree ORDER BY id AS " +
-            $"SELECT id, countState() AS c_state, minState(v) AS min_state, maxState(v) AS max_state " +
+            $"SELECT id, countState() AS c, sumState(v) AS s, minState(v) AS mn, maxState(v) AS mx " +
             $"FROM {src} GROUP BY id");
 
         try
         {
             await conn.ExecuteNonQueryAsync($"INSERT INTO {src} VALUES (1, 10), (1, 20), (1, 5), (2, 100)");
 
-            var rows = new List<(int id, ClickHouseAggregateState c, ClickHouseAggregateState mn, ClickHouseAggregateState mx)>();
-            await foreach (var r in conn.QueryStreamAsync($"SELECT id, c_state, min_state, max_state FROM {mv} ORDER BY id"))
-            {
-                rows.Add((
-                    r.GetFieldValue<int>("id"),
-                    r.GetFieldValue<ClickHouseAggregateState>("c_state"),
-                    r.GetFieldValue<ClickHouseAggregateState>("min_state"),
-                    r.GetFieldValue<ClickHouseAggregateState>("max_state")));
-            }
-
-            Assert.True(rows.Count >= 1);
-            Assert.All(rows, t => Assert.Equal("count", t.c.FunctionName));
-            Assert.All(rows, t => Assert.Equal("min", t.mn.FunctionName));
-            Assert.All(rows, t => Assert.Equal("max", t.mx.FunctionName));
-
-            // count state is a varuint; min/max(Int32) is 1-byte flag + 4 data bytes.
-            Assert.All(rows, t => Assert.NotEmpty(t.c.State));
-            Assert.All(rows, t => Assert.Equal(5, t.mn.State.Length));
-            Assert.All(rows, t => Assert.Equal(5, t.mx.State.Length));
-
-            // Server-side cross-checks against finalizeAggregation.
-            var checks = new Dictionary<int, (long count, int min, int max)>();
+            var byId = new Dictionary<int, (long count, long sum, int min, int max)>();
             await foreach (var r in conn.QueryStreamAsync(
-                $"SELECT id, toInt64(finalizeAggregation(c_state)) AS c, " +
-                $"finalizeAggregation(min_state) AS mn, finalizeAggregation(max_state) AS mx " +
-                $"FROM {mv} ORDER BY id"))
+                $"SELECT id, toInt64(finalizeAggregation(c)) AS c, toInt64(finalizeAggregation(s)) AS s, " +
+                $"finalizeAggregation(mn) AS mn, finalizeAggregation(mx) AS mx FROM {mv} ORDER BY id"))
             {
-                checks[r.GetFieldValue<int>("id")] = (
+                byId[r.GetFieldValue<int>("id")] = (
                     r.GetFieldValue<long>("c"),
+                    r.GetFieldValue<long>("s"),
                     r.GetFieldValue<int>("mn"),
                     r.GetFieldValue<int>("mx"));
             }
-            Assert.Equal((3L, 5, 20), checks[1]);
-            Assert.Equal((1L, 100, 100), checks[2]);
+
+            Assert.Equal((3L, 35L, 5, 20), byId[1]);
+            Assert.Equal((1L, 100L, 100, 100), byId[2]);
         }
         finally
         {
@@ -124,32 +61,27 @@ public class AggregateFunctionTypeTests
     }
 
     [Fact]
-    public async Task SelectStar_FromAggregatingMv_Succeeds_ForSimpleAggregateFunction()
+    public async Task SimpleAggregateFunction_ReadsAsInnerType()
     {
         await using var conn = new ClickHouseConnection(_fixture.ConnectionString);
         await conn.OpenAsync();
         var table = $"agg_simple_{Guid.NewGuid():N}";
 
-        // SimpleAggregateFunction stores the inner type's value directly; the function
-        // name is a server-side merge hint that the driver ignores.
         await conn.ExecuteNonQueryAsync(
             $"CREATE TABLE {table} (id Int32, total SimpleAggregateFunction(sum, Int64)) " +
             $"ENGINE=AggregatingMergeTree ORDER BY id");
 
         try
         {
-            await conn.ExecuteNonQueryAsync(
-                $"INSERT INTO {table} VALUES (1, 100), (1, 200), (2, 5)");
+            await conn.ExecuteNonQueryAsync($"INSERT INTO {table} VALUES (1, 100), (1, 200), (2, 5)");
             await conn.ExecuteNonQueryAsync($"OPTIMIZE TABLE {table} FINAL");
 
-            var rows = new List<(int id, long total)>();
+            var byId = new Dictionary<int, long>();
             await foreach (var r in conn.QueryStreamAsync($"SELECT id, total FROM {table} ORDER BY id"))
-            {
-                rows.Add((r.GetFieldValue<int>("id"), r.GetFieldValue<long>("total")));
-            }
+                byId[r.GetFieldValue<int>("id")] = r.GetFieldValue<long>("total"); // reads as long, no wrapper
 
-            Assert.True(rows.Count >= 2);
-            // SimpleAggregateFunction reads as the inner CLR type directly.
+            Assert.Equal(300L, byId[1]); // 100 + 200 merged
+            Assert.Equal(5L, byId[2]);
         }
         finally
         {
@@ -157,122 +89,28 @@ public class AggregateFunctionTypeTests
         }
     }
 
-    // ------------------------------------------------------------------
-    // Wide / exotic inner-type state-format coverage. The state-format registry's
-    // byte sizes for these widths were exercised only by synthetic in-process bytes;
-    // server-validated coverage stopped at Int32 widths (sum→8, min/max→5). These
-    // read a REAL AggregateFunction state column produced by the server for each
-    // wide inner type and assert the exact on-wire state length CH.Native expects.
-    //
-    // Because column data on the wire is NOT length-prefixed, a wrong state size
-    // silently over/under-reads and corrupts the next column — so a trailing
-    // sentinel column reading back correctly is itself proof the size is right
-    // against this server version. A finalizeAggregation cross-check confirms the
-    // bytes are semantically the ones ClickHouse produced.
-    // ------------------------------------------------------------------
-
-    [Theory]
-    // innerType, stateFn, fnName, expectedStateBytes, sampleLiteral, expectedFinalizedToString
-    [InlineData("Int128", "sumState", "sum", 16, "toInt128(5)", "5")]
-    [InlineData("Int256", "sumState", "sum", 32, "toInt256(5)", "5")]
-    [InlineData("UInt256", "sumState", "sum", 32, "toUInt256(5)", "5")]
-    [InlineData("Float64", "sumState", "sum", 8, "toFloat64(1.5)", "1.5")]
-    [InlineData("Int64", "minState", "min", 9, "toInt64(42)", "42")]
-    [InlineData("UUID", "maxState", "max", 17, "toUUID('00000000-0000-0000-0000-000000000001')", "00000000-0000-0000-0000-000000000001")]
-    [InlineData("Date", "maxState", "max", 3, "toDate('2024-01-01')", "2024-01-01")]
-    // Decimal inner types (the fix). The server emits these as canonical Decimal(P, S);
-    // sum PROMOTES (Decimal32/64/128 → 16-byte state, Decimal256 → 32), while min/max
-    // store 1 flag + native width (Decimal32 → 5, Decimal128 → 17, Decimal256 → 33).
-    [InlineData("Decimal32(4)", "sumState", "sum", 16, "toDecimal32(1.2345, 4)", "1.2345")]
-    [InlineData("Decimal128(4)", "sumState", "sum", 16, "toDecimal128(1.2345, 4)", "1.2345")]
-    [InlineData("Decimal256(4)", "sumState", "sum", 32, "toDecimal256(1.2345, 4)", "1.2345")]
-    [InlineData("Decimal32(4)", "minState", "min", 5, "toDecimal32(1.2345, 4)", "1.2345")]
-    [InlineData("Decimal128(4)", "minState", "min", 17, "toDecimal128(1.2345, 4)", "1.2345")]
-    [InlineData("Decimal256(4)", "maxState", "max", 33, "toDecimal256(1.2345, 4)", "1.2345")]
-    // Higher scale (10 dp) — state size is unchanged (it follows precision, not scale),
-    // and the finalized value preserves all 10 decimal places. The literal is passed as
-    // a STRING so the server parses the decimal exactly (a numeric literal would round-
-    // trip through Float64 and lose the last digits).
-    [InlineData("Decimal128(10)", "sumState", "sum", 16, "toDecimal128('1.2345678901', 10)", "1.2345678901")]
-    [InlineData("Decimal64(10)", "minState", "min", 9, "toDecimal64('1.2345678901', 10)", "1.2345678901")]
-    public async Task AggregateState_WideInnerType_DecodesExactSize_AndStaysAligned(
-        string innerType, string stateFn, string fnName, int expectedStateBytes,
-        string sampleLiteral, string expectedFinalizedToString)
-    {
-        await using var conn = new ClickHouseConnection(_fixture.ConnectionString);
-        await conn.OpenAsync();
-        var src = $"agg_wide_src_{Guid.NewGuid():N}";
-        var mv = $"agg_wide_mv_{Guid.NewGuid():N}";
-
-        await conn.ExecuteNonQueryAsync($"CREATE TABLE {src} (id Int32, v {innerType}) ENGINE=MergeTree ORDER BY id");
-        await conn.ExecuteNonQueryAsync(
-            $"CREATE MATERIALIZED VIEW {mv} ENGINE=AggregatingMergeTree ORDER BY id AS " +
-            $"SELECT id, {stateFn}(v) AS s FROM {src} GROUP BY id");
-
-        try
-        {
-            await conn.ExecuteNonQueryAsync($"INSERT INTO {src} VALUES (1, {sampleLiteral})");
-
-            // Read the state column followed by a trailing sentinel: if the state
-            // size is wrong the sentinel reads garbage (or the connection poisons).
-            ClickHouseAggregateState? state = null;
-            int sentinel = 0;
-            await foreach (var r in conn.QueryStreamAsync(
-                $"SELECT s, toInt32(987654) AS sentinel FROM {mv} ORDER BY id"))
-            {
-                state = r.GetFieldValue<ClickHouseAggregateState>("s");
-                sentinel = r.GetFieldValue<int>("sentinel");
-            }
-
-            Assert.NotNull(state);
-            Assert.Equal(fnName, state!.FunctionName);
-            Assert.Equal(expectedStateBytes, state.State.Length);
-            Assert.Equal(987654, sentinel); // alignment held → size decode is correct
-
-            // The connection must remain usable for a subsequent query.
-            var ping = await conn.ExecuteScalarAsync<int>("SELECT 123");
-            Assert.Equal(123, ping);
-
-            // Semantic cross-check: the server finalizes the same state to the value.
-            var finalized = await conn.ExecuteScalarAsync<string>(
-                $"SELECT toString(finalizeAggregation(s)) FROM {mv} ORDER BY id LIMIT 1");
-            Assert.Equal(expectedFinalizedToString, finalized);
-        }
-        finally
-        {
-            await conn.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {mv}");
-            await conn.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {src}");
-        }
-    }
-
-    /// <summary>
-    /// A genuinely-unsupported aggregate state (<c>uniqExact</c> — a variable-size HLL/hash
-    /// state outside CH.Native's tier-1 set) must still fail CLEAN: a clear
-    /// <see cref="NotSupportedException"/> naming the <c>finalizeAggregation</c>/<c>hex</c>
-    /// workarounds, with the broken connection isolated (a fresh connection works and the
-    /// documented workarounds succeed). This guards the unsupported-type hardening path
-    /// now that the Decimal inner types it used to demonstrate have been fixed and moved
-    /// into the matrix above.
-    /// </summary>
     [Fact]
-    public async Task AggregateState_UnsupportedFunction_FailsClean_WithWorkaround()
+    public async Task RawAggregateFunctionStateColumn_FailsClean_WithGuidance()
     {
-        var src = $"agg_unsup_src_{Guid.NewGuid():N}";
-        var mv = $"agg_unsup_mv_{Guid.NewGuid():N}";
+        // Reading a raw AggregateFunction state column is not supported. It must throw a
+        // clear NotSupportedException naming the finalizeAggregation/hex workarounds, with
+        // the broken connection isolated (a fresh connection still works, and the
+        // documented workarounds succeed).
+        var src = $"agg_raw_src_{Guid.NewGuid():N}";
+        var mv = $"agg_raw_mv_{Guid.NewGuid():N}";
 
         await using (var setup = new ClickHouseConnection(_fixture.ConnectionString))
         {
             await setup.OpenAsync();
-            await setup.ExecuteNonQueryAsync($"CREATE TABLE {src} (id Int32, v UInt64) ENGINE=MergeTree ORDER BY id");
+            await setup.ExecuteNonQueryAsync($"CREATE TABLE {src} (id Int32, v Int32) ENGINE=MergeTree ORDER BY id");
             await setup.ExecuteNonQueryAsync(
                 $"CREATE MATERIALIZED VIEW {mv} ENGINE=AggregatingMergeTree ORDER BY id AS " +
-                $"SELECT id, uniqExactState(v) AS s FROM {src} GROUP BY id");
-            await setup.ExecuteNonQueryAsync($"INSERT INTO {src} VALUES (1, 10), (1, 20), (1, 10), (2, 99)");
+                $"SELECT id, sumState(v) AS s FROM {src} GROUP BY id");
+            await setup.ExecuteNonQueryAsync($"INSERT INTO {src} VALUES (1, 10), (1, 20)");
         }
 
         try
         {
-            // Reading the opaque uniqExact state throws clean (and closes that connection).
             var failing = new ClickHouseConnection(_fixture.ConnectionString);
             await failing.OpenAsync();
             var ex = await Assert.ThrowsAsync<NotSupportedException>(async () =>
@@ -282,21 +120,20 @@ public class AggregateFunctionTypeTests
                 }
             });
             Assert.Contains("not supported", ex.Message);
-            Assert.Contains("uniqExact", ex.Message);
-            Assert.Contains("finalizeAggregation", ex.Message); // the documented workaround
+            Assert.Contains("finalizeAggregation", ex.Message);
+            Assert.Contains("hex(", ex.Message);
             await failing.DisposeAsync();
 
-            // A fresh connection is unaffected, and the documented workarounds work.
+            // Fresh connection is unaffected; the documented workarounds both work.
             await using var ok = new ClickHouseConnection(_fixture.ConnectionString);
             await ok.OpenAsync();
 
-            var distinctForGroup1 = await ok.ExecuteScalarAsync<ulong>(
-                $"SELECT toUInt64(finalizeAggregation(s)) FROM {mv} WHERE id = 1");
-            Assert.Equal(2UL, distinctForGroup1); // {10, 20} → 2 distinct
+            var finalized = await ok.ExecuteScalarAsync<long>(
+                $"SELECT toInt64(finalizeAggregation(s)) FROM {mv} WHERE id = 1");
+            Assert.Equal(30L, finalized);
 
-            // hex(state) ships the opaque bytes as a String — also documented.
-            var hexLen = await ok.ExecuteScalarAsync<ulong>($"SELECT length(hex(s)) / 2 FROM {mv} WHERE id = 1");
-            Assert.True(hexLen > 0);
+            var hex = await ok.ExecuteScalarAsync<string>($"SELECT hex(s) FROM {mv} WHERE id = 1");
+            Assert.False(string.IsNullOrEmpty(hex)); // raw bytes transfer as a String
         }
         finally
         {
