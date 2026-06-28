@@ -11,6 +11,16 @@ namespace CH.Native.Tests.Unit.Data.ColumnSkippers;
 public class TupleColumnSkipperTests
 {
     [Fact]
+    public void TypeName_RendersElementTypes()
+    {
+        var skipper = new TupleColumnSkipper(
+            new IColumnSkipper[] { new Int32ColumnSkipper(), new StringColumnSkipper() },
+            new[] { "Int32", "String" });
+
+        Assert.Equal("Tuple(Int32, String)", skipper.TypeName);
+    }
+
+    [Fact]
     public void Skip_HomogeneousTuple_AllElementsAdvance()
     {
         // Tuple(Int32, Int32, Int32) — columnar layout: rowCount * 4 bytes per element = rowCount * 12.

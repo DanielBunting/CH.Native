@@ -1,3 +1,4 @@
+using System.Buffers;
 using CH.Native.Data;
 using CH.Native.Data.ColumnSkippers;
 using CH.Native.Data.ColumnWriters;
@@ -52,5 +53,53 @@ public class NestedColumnSkipperTests
 
         var reader = new ProtocolReader(truncated);
         Assert.False(Skipper().TrySkipColumn(ref reader, rows.Length));
+    }
+
+    [Fact]
+    public void TypeName_IsTheConstructorValue()
+    {
+        Assert.Equal("Nested(ids Int32, names String)", Skipper().TypeName);
+    }
+
+    [Fact]
+    public void Skip_ZeroRows_ReturnsTrue_WithoutReading()
+    {
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(System.Array.Empty<byte>()));
+        Assert.True(Skipper().TrySkipColumn(ref reader, 0));
+    }
+
+    [Fact]
+    public void Skip_AllRowsEmpty_TotalElementsZero_SkipsFieldLoop()
+    {
+        // Three empty rows: the offsets block is present (all cumulative 0) but there are
+        // zero field elements, so the per-field skip loop is never entered.
+        var rows = new[]
+        {
+            new object[] { System.Array.Empty<int>(), System.Array.Empty<string>() },
+            new object[] { System.Array.Empty<int>(), System.Array.Empty<string>() },
+            new object[] { System.Array.Empty<int>(), System.Array.Empty<string>() },
+        };
+        var seq = SkipperTestBase.Encode((ref ProtocolWriter w) => Writer().WriteColumn(ref w, rows));
+
+        var reader = new ProtocolReader(seq);
+        Assert.True(Skipper().TrySkipColumn(ref reader, rows.Length));
+        Assert.Equal(0, reader.Remaining);
+    }
+
+    [Fact]
+    public void Skip_TruncatedOffsetsBlock_ReturnsFalse()
+    {
+        // rowCount=3 needs (3-1)*8 = 16 bytes to skip the leading offsets; give only 10.
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(new byte[10]));
+        Assert.False(Skipper().TrySkipColumn(ref reader, 3));
+    }
+
+    [Fact]
+    public void Skip_TruncatedAtTotalElementsRead_ReturnsFalse()
+    {
+        // rowCount=3: exactly 16 bytes lets the offsets skip succeed, but the final
+        // cumulative-offset UInt64 read (total element count) then has nothing left.
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(new byte[16]));
+        Assert.False(Skipper().TrySkipColumn(ref reader, 3));
     }
 }

@@ -2,6 +2,7 @@ using System.Buffers;
 using CH.Native.Data;
 using CH.Native.Data.ColumnReaders;
 using CH.Native.Data.ColumnWriters;
+using CH.Native.Exceptions;
 using CH.Native.Protocol;
 using Xunit;
 
@@ -106,5 +107,80 @@ public class NestedColumnReaderTests
         using var column = sut.ReadTypedColumn(ref reader, 0);
 
         Assert.Equal(0, column.Count);
+    }
+
+    [Fact]
+    public void ClrType_IsObjectArray()
+    {
+        var sut = new NestedColumnReader(ElementReaders(), new[] { "id", "name" });
+        Assert.Equal(typeof(object[]), sut.ClrType);
+    }
+
+    [Fact]
+    public void ReadValue_SingleRow_RoundTripsViaWriterWriteValue()
+    {
+        // ReadValue (a single Nested value: its offset, then the row's field elements)
+        // is the path used when a Nested appears as an element of another composite.
+        // Round-trip it against NestedColumnWriter.WriteValue.
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+        var nestedWriter = new NestedColumnWriter(
+            new IColumnWriter[] { new Int32ColumnWriter(), new StringColumnWriter() },
+            new[] { "id", "name" });
+        nestedWriter.WriteValue(ref writer, new object[] { new[] { 1, 2, 3 }, new[] { "a", "b", "c" } });
+
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        var sut = new NestedColumnReader(ElementReaders(), new[] { "id", "name" });
+        var row = sut.ReadValue(ref reader);
+
+        Assert.Equal(new[] { 1, 2, 3 }, (int[])row[0]);
+        Assert.Equal(new[] { "a", "b", "c" }, (string[])row[1]);
+    }
+
+    [Fact]
+    public void ReadValue_EmptyRow_RoundTrips()
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+        var nestedWriter = new NestedColumnWriter(
+            new IColumnWriter[] { new Int32ColumnWriter(), new StringColumnWriter() },
+            new[] { "id", "name" });
+        nestedWriter.WriteValue(ref writer, new object[] { Array.Empty<int>(), Array.Empty<string>() });
+
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        var sut = new NestedColumnReader(ElementReaders(), new[] { "id", "name" });
+        var row = sut.ReadValue(ref reader);
+
+        Assert.Empty((int[])row[0]);
+        Assert.Empty((string[])row[1]);
+    }
+
+    [Fact]
+    public void ReadTypedColumn_DecreasingOffset_ThrowsProtocolException()
+    {
+        // The cumulative offsets must be monotonically non-decreasing; a row whose
+        // offset drops below the previous cumulative is a malformed/garbage stream and
+        // must fail loudly rather than slice a negative-length span.
+        var buffer = new ArrayBufferWriter<byte>();
+        var pw = new ProtocolWriter(buffer);
+        pw.WriteUInt64(5); // row 0 cumulative offset
+        pw.WriteUInt64(2); // row 1 cumulative offset < previous → invalid
+
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        var sut = new NestedColumnReader(new IColumnReader[] { new Int32ColumnReader() }, new[] { "id" });
+
+        ClickHouseProtocolException? caught = null;
+        try
+        {
+            using var _ = sut.ReadTypedColumn(ref reader, 2);
+        }
+        catch (ClickHouseProtocolException ex)
+        {
+            caught = ex;
+        }
+
+        Assert.NotNull(caught);
+        Assert.Contains("row 1", caught!.Message);
+        Assert.Contains("non-decreasing", caught.Message);
     }
 }

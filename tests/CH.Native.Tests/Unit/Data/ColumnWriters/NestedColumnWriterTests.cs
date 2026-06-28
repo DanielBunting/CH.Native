@@ -208,6 +208,18 @@ public class NestedColumnWriterTests
     }
 
     [Fact]
+    public void Metadata_ClrType_FieldCount_FieldNames()
+    {
+        var w = new NestedColumnWriter(
+            new IColumnWriter[] { new Int32ColumnWriter(), new StringColumnWriter() },
+            new[] { "id", "name" });
+
+        Assert.Equal(typeof(object[]), w.ClrType);
+        Assert.Equal(2, w.FieldCount);
+        Assert.Equal(new[] { "id", "name" }, w.FieldNames);
+    }
+
+    [Fact]
     public void Ctor_NoFieldWriters_Throws()
     {
         var ex = Assert.Throws<ArgumentException>(() =>
