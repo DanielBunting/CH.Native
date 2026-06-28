@@ -165,8 +165,9 @@ public sealed class ClickHouseType
     public bool IsDynamic => BaseName == "Dynamic";
 
     /// <summary>
-    /// Whether this is an <c>AggregateFunction(name, T...)</c> type — opaque per-row
-    /// aggregate state, exposed as <c>ClickHouseAggregateState</c>.
+    /// Whether this is an <c>AggregateFunction(name, T...)</c> type — an opaque per-row
+    /// aggregate state. These are not read client-side; query the finalized value with
+    /// <c>finalizeAggregation()</c> instead (see <c>docs/data-types.md</c>).
     /// </summary>
     public bool IsAggregateFunction => BaseName == "AggregateFunction";
 

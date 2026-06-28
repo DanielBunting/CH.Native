@@ -118,8 +118,22 @@ internal sealed class ClickHouseExpressionVisitor : ExpressionVisitor
     private Expression VisitWhere(MethodCallExpression node)
     {
         var lambda = GetLambda(node.Arguments[1]);
-        var whereSql = TranslatePredicate(lambda.Body);
-        _sql.Where(whereSql);
+        var conditionSql = TranslatePredicate(lambda.Body);
+
+        // A Where whose predicate operates on a grouping (IGrouping<,>) is a
+        // post-group filter and must become HAVING, not WHERE — WHERE filters rows
+        // before aggregation and cannot reference aggregates. The aggregate/key
+        // references in the body (g.Count(), g.Sum(x => x.Amount), g.Key) translate
+        // the same way they do in a GroupBy projection.
+        if (IsGroupingType(lambda.Parameters[0].Type))
+        {
+            _sql.Having(conditionSql);
+        }
+        else
+        {
+            _sql.Where(conditionSql);
+        }
+
         return node;
     }
 

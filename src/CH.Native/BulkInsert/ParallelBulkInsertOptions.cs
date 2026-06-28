@@ -21,6 +21,27 @@ namespace CH.Native.BulkInsert;
 /// <see cref="BulkInserter{T}"/> with a <see cref="BulkInsertOptions.DeduplicationToken"/>
 /// (which stays sound on one ordered stream).
 /// </para>
+/// <para>
+/// Several other <see cref="BulkInsertOptions"/> members are also intentionally
+/// not surfaced here — the parallel path is a deliberately minimal, throughput-first
+/// surface, and each worker runs with the high-throughput defaults:
+/// <list type="bullet">
+/// <item><description>
+/// <c>ColumnTypes</c> — per-column type overrides aren't exposed because the column
+/// schema is resolved independently per worker from the target table; the fan-out has
+/// no single place to apply a caller-supplied type map soundly.
+/// </description></item>
+/// <item><description>
+/// <c>IncludeNullColumns</c>, <c>PreferDirectStreaming</c>, <c>UsePooledArrays</c> —
+/// these are left fixed at their <see cref="BulkInsertOptions"/> defaults
+/// (<c>true</c> for all three), the fastest, lowest-allocation settings. They exist
+/// on the single-connection path as escape hatches; the parallel path keeps them
+/// pinned so every worker behaves identically and the surface stays small.
+/// </description></item>
+/// </list>
+/// Callers needing any of these knobs use a single-connection
+/// <see cref="BulkInserter{T}"/> with a full <see cref="BulkInsertOptions"/>.
+/// </para>
 /// </remarks>
 public sealed class ParallelBulkInsertOptions
 {

@@ -107,6 +107,33 @@ public class ClickHouseCommandContractTests
     }
 
     [Fact]
+    public void ExecuteNonQueryAsync_OverloadResolution_IsLocked()
+    {
+        // ExecuteNonQueryAsync deliberately keeps `progress` required on the native
+        // (Task<long>) overload. If anyone defaults it — or adds a parameterless /
+        // ct-only native overload — to "fix" the ergonomics, the argument-light calls
+        // below would rebind from the inherited ADO Task<int> members to the derived
+        // native Task<long> (derived members win overload resolution regardless of
+        // optional args), silently widening every existing caller's result int->long.
+        // This compile-time block pins the binding; it never runs (an open connection
+        // would be required) and exists purely to fail the build if resolution drifts.
+        //   - no args / CancellationToken-only -> ADO DbCommand surface (Task<int>)
+        //   - progress (null or set)           -> native surface (Task<long>)
+        static void ResolutionLock(ClickHouseCommand cmd)
+        {
+            System.Threading.Tasks.Task<int> ado = cmd.ExecuteNonQueryAsync();
+            System.Threading.Tasks.Task<int> adoCt = cmd.ExecuteNonQueryAsync(default(System.Threading.CancellationToken));
+            System.Threading.Tasks.Task<long> nativeNoProgress = cmd.ExecuteNonQueryAsync(progress: null);
+            System.Threading.Tasks.Task<long> nativeWithProgress =
+                cmd.ExecuteNonQueryAsync(new System.Progress<CH.Native.Data.QueryProgress>());
+            _ = (ado, adoCt, nativeNoProgress, nativeWithProgress);
+        }
+
+        _ = (System.Action<ClickHouseCommand>)ResolutionLock;
+        Assert.True(true);
+    }
+
+    [Fact]
     public void Prepare_IsNoOp()
     {
         var cmd = new ClickHouseCommand();

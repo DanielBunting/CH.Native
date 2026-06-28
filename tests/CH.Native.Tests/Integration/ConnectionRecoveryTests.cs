@@ -27,10 +27,10 @@ public class ConnectionRecoveryTests
 
     public ConnectionRecoveryTests(ClickHouseFixture fixture) => _fixture = fixture;
 
-    // Aggregate functions whose state format the registry doesn't decode yet.
-    // All four hit ColumnReaderFactory.CreateAggregateFunctionReader →
-    // AggregateFunctionStateFormatRegistry.Resolve → NotSupportedException.
-    // Same shape as tests/CH.Native.SystemTests/.../AggregateFunctionEdgeCaseTests.cs.
+    // Raw AggregateFunction(...) state columns are not read client-side; every one hits
+    // ColumnReaderFactory.CreateAggregateFunctionReader → UnsupportedAggregateFunction →
+    // NotSupportedException, which (mid-block) closes the connection. These projections
+    // are just representative state-producing aggregates used to trigger that path.
     public static IEnumerable<object[]> UnsupportedAggregateProjections() => new[]
     {
         new object[] { "uniqExactState(toUInt64(number))",            "uniqExact" },

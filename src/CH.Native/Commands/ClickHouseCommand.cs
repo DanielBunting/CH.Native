@@ -198,7 +198,18 @@ public sealed class ClickHouseCommand : DbCommand
     /// <summary>
     /// Executes the command that does not return rows.
     /// </summary>
-    /// <param name="progress">Optional progress reporter.</param>
+    /// <remarks>
+    /// <paramref name="progress"/> is intentionally required (no default) and there is
+    /// no parameterless or cancellation-token-only native overload. Defaulting it, or
+    /// adding such an overload, would let an argument-light call bind to this
+    /// derived <see cref="long"/>-returning method instead of the inherited ADO
+    /// <see cref="DbCommand.ExecuteNonQueryAsync()"/> / <see cref="ExecuteNonQueryAsync(CancellationToken)"/>
+    /// (both <see cref="int"/>) — derived members win overload resolution regardless of
+    /// optional arguments, silently widening existing callers' results from
+    /// <see cref="int"/> to <see cref="long"/>. To run without a progress reporter, pass
+    /// <c>progress: null</c>.
+    /// </remarks>
+    /// <param name="progress">Progress reporter; pass <c>null</c> for none.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The number of rows affected.</returns>
     public Task<long> ExecuteNonQueryAsync(

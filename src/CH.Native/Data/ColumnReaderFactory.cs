@@ -222,22 +222,16 @@ public sealed class ColumnReaderFactory
         if (!type.HasFieldNames)
             throw new FormatException($"Nested type requires named fields, got: {type.OriginalTypeName}");
 
-        // Each field in Nested is wrapped in Array
-        var fieldReaders = type.TypeArguments
-            .Select(fieldType =>
-            {
-                // Wrap each field type in Array
-                var arrayType = new Types.ClickHouseType(
-                    "Array",
-                    typeArguments: new[] { fieldType },
-                    originalTypeName: $"Array({fieldType.OriginalTypeName})");
-                return CreateReaderForType(arrayType);
-            })
+        // A Nested column is parallel arrays sharing one offsets block. The reader owns
+        // the shared offsets, so it takes the field ELEMENT readers (the inner field
+        // types), not Array(fieldType) readers.
+        var fieldElementReaders = type.TypeArguments
+            .Select(CreateReaderForType)
             .ToArray();
 
         var fieldNames = type.FieldNames.ToArray();
 
-        return new NestedColumnReader(fieldReaders, fieldNames);
+        return new NestedColumnReader(fieldElementReaders, fieldNames);
     }
 
     private IColumnReader CreateLowCardinalityReader(ClickHouseType type)
@@ -301,19 +295,20 @@ public sealed class ColumnReaderFactory
     }
 
     private IColumnReader CreateAggregateFunctionReader(ClickHouseType type)
-    {
-        if (type.AggregateFunctionName is null)
-            throw new FormatException(
-                $"AggregateFunction missing function name: {type.OriginalTypeName}");
+        => throw UnsupportedAggregateFunction(type);
 
-        // Zero type arguments is valid for some aggregates (e.g. AggregateFunction(count)).
-        // Whether a given (function, inner-types) combination is semantically supported
-        // is the registry's call.
-        var format = AggregateState.AggregateFunctionStateFormatRegistry.Resolve(
-            type.AggregateFunctionName, type.TypeArguments);
-        return new ColumnReaders.AggregateFunctionColumnReader(
-            type.OriginalTypeName, type.AggregateFunctionName, format);
-    }
+    // Raw AggregateFunction(...) state columns are opaque, server-internal binary blobs
+    // whose layout is function- and inner-type-specific and not part of a stable wire
+    // contract. CH.Native is a push-and-query client: query the finalized value
+    // server-side instead. This fails fast with guidance (and the connection-hardening
+    // path closes the connection cleanly, since column data is not length-prefixed).
+    // SimpleAggregateFunction(fn, T) is unaffected — it is a transparent pass-through
+    // for the inner type T and is read normally.
+    internal static NotSupportedException UnsupportedAggregateFunction(ClickHouseType type) =>
+        new($"Reading raw AggregateFunction state columns ('{type.OriginalTypeName}') is not supported. " +
+            "Aggregate states are opaque, server-internal binary blobs — query the finalized value with " +
+            "finalizeAggregation(col) (or the matching -Merge combinator), or SELECT hex(col) to transfer " +
+            "the raw state bytes as a String.");
 
     private IColumnReader CreateFixedStringReader(ClickHouseType type)
     {

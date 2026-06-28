@@ -1,5 +1,12 @@
 # LINQ Provider
 
+> **Preview.** The LINQ provider is usable for single-table reads, but its operator coverage
+> is deliberately narrow and unsupported constructs throw `NotSupportedException`
+> **at query-build time — there is no compile-time signal**. Treat it as a convenience for
+> readable single-table queries, not a general-purpose ORM. For multi-table queries (`Join`),
+> subqueries, CTEs, or set operations, fall back to raw SQL via
+> `connection.QueryStreamAsync<T>(sql)`. The full list is in [Limitations](#limitations) below.
+
 CH.Native ships a typed LINQ provider in `CH.Native.Linq` that translates LINQ expressions to ClickHouse SQL. It's designed for readable, single-table queries — for joins, CTEs, or anything not in the operator list below, fall back to `connection.QueryStreamAsync<T>(sql)`.
 
 ## Entry point
@@ -38,6 +45,7 @@ The DataSource handle itself does not pin a connection — it composes naturally
 | `Count` / `LongCount` / `Any` / `All` | Aggregate forms. |
 | `Sum` / `Average` / `Min` / `Max` | Aggregate forms. |
 | `GroupBy` | Translated to `GROUP BY`. |
+| `Where` after `GroupBy` (filter on an aggregate) | Translated to `HAVING` — e.g. `GroupBy(x => x.K).Where(g => g.Count() > 5)`. A `Where` *before* `GroupBy` stays a `WHERE`. |
 
 ## ClickHouse-specific modifiers
 
@@ -111,9 +119,9 @@ The visitor translates the standard `System.String` instance methods:
 
 | .NET | ClickHouse SQL |
 |---|---|
-| `s.Contains(sub)` | `position(s, sub) > 0` |
-| `s.StartsWith(p)` | `startsWith(s, p)` |
-| `s.EndsWith(p)` | `endsWith(s, p)` |
+| `s.Contains(sub)` | `s LIKE '%sub%'` (special chars in `sub` escaped) |
+| `s.StartsWith(p)` | `s LIKE 'p%'` |
+| `s.EndsWith(p)` | `s LIKE '%p'` |
 | `s.ToLower()` / `ToLowerInvariant()` | `lower(s)` |
 | `s.ToUpper()` / `ToUpperInvariant()` | `upper(s)` |
 | `s.Trim()` / `TrimStart()` / `TrimEnd()` | `trim(...)` / `trimLeft(...)` / `trimRight(...)` |
@@ -138,13 +146,18 @@ Console.WriteLine(query.ToSql());
 
 ## Limitations
 
-The visitor handles the operators above. Anything else falls outside scope:
+The provider is **preview** and handles only the operators listed above. Anything else falls
+outside scope and throws `NotSupportedException` **when the query is built (enumerated or
+`ToSql()`-ed), not at compile time** — so unsupported code compiles cleanly and fails at runtime.
+When in doubt, fall back to raw SQL.
 
 | Not supported in LINQ | Workaround |
 |---|---|
-| `Join` (multi-table) | Raw SQL with `connection.QueryStreamAsync<T>` |
+| `Join` / `GroupJoin` (multi-table) | Raw SQL with `connection.QueryStreamAsync<T>` |
 | Subqueries / CTEs | Raw SQL |
-| `Union` / `Intersect` | Raw SQL or `UNION ALL` in raw SQL |
+| `Union` / `Intersect` / `Except` | Raw SQL or `UNION ALL` in raw SQL |
+| `DateTime` parts beyond `.Year` / `.Month` / `.Day`, and date arithmetic | Raw SQL |
+| Casts / conversions, and uncommon operators (bitwise, shift, power) | Raw SQL |
 | User-defined SQL functions | Raw SQL, or extend `ClickHouseExpressionVisitor` |
 | Server-side aggregations beyond Sum/Avg/Min/Max/Count | Raw SQL |
 

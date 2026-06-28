@@ -46,6 +46,7 @@ public sealed class ColumnWriterFactory
             "Array" => CreateArrayWriter(type),
             "Map" => CreateMapWriter(type),
             "Tuple" => CreateTupleWriter(type),
+            "Nested" => CreateNestedWriter(type),
             "LowCardinality" => CreateLowCardinalityWriter(type),
             "Variant" => CreateVariantWriter(type),
             "Dynamic" => CreateDynamicWriter(type),
@@ -149,6 +150,26 @@ public sealed class ColumnWriterFactory
         return new TupleColumnWriter(elementWriters, fieldNames);
     }
 
+    private IColumnWriter CreateNestedWriter(ClickHouseType type)
+    {
+        // A Nested column is parallel arrays sharing one offsets block. The writer owns
+        // the shared offsets, so it takes the field ELEMENT writers (the inner field
+        // types), not Array(fieldType) writers.
+        if (type.TypeArguments.Count == 0)
+            throw new FormatException($"Nested requires at least one field, got: {type.OriginalTypeName}");
+
+        if (!type.HasFieldNames)
+            throw new FormatException($"Nested type requires named fields, got: {type.OriginalTypeName}");
+
+        var fieldElementWriters = type.TypeArguments
+            .Select(CreateWriterForType)
+            .ToArray();
+
+        var fieldNames = type.FieldNames.ToArray();
+
+        return new NestedColumnWriter(fieldElementWriters, fieldNames);
+    }
+
     private IColumnWriter CreateLowCardinalityWriter(ClickHouseType type)
     {
         if (type.TypeArguments.Count != 1)
@@ -208,15 +229,10 @@ public sealed class ColumnWriterFactory
         return CreateWriterForType(type.TypeArguments[0]);
     }
 
+    // Raw AggregateFunction(...) state columns are not supported — see
+    // ColumnReaderFactory.UnsupportedAggregateFunction. SimpleAggregateFunction is unaffected.
     private IColumnWriter CreateAggregateFunctionWriter(ClickHouseType type)
-    {
-        if (type.AggregateFunctionName is null)
-            throw new FormatException(
-                $"AggregateFunction missing function name: {type.OriginalTypeName}");
-        var format = AggregateState.AggregateFunctionStateFormatRegistry.Resolve(
-            type.AggregateFunctionName, type.TypeArguments);
-        return new AggregateFunctionColumnWriter(type.OriginalTypeName, format);
-    }
+        => throw ColumnReaderFactory.UnsupportedAggregateFunction(type);
 
     private IColumnWriter CreateFixedStringWriter(ClickHouseType type)
     {

@@ -120,7 +120,7 @@ Monitor retry attempts:
 var retryPolicy = new RetryPolicy(options);
 retryPolicy.OnRetry += (sender, args) =>
 {
-    Console.WriteLine($"Retry {args.Attempt} after {args.Delay}: {args.Exception.Message}");
+    Console.WriteLine($"Retry {args.AttemptNumber} after {args.Delay}: {args.Exception.Message}");
 };
 ```
 
@@ -184,14 +184,14 @@ circuitBreaker.OnStateChanged += (sender, args) =>
     Console.WriteLine($"Circuit breaker: {args.OldState} -> {args.NewState}");
 };
 
-// Fires every time the breaker resets to Closed after a successful probe.
+// Fires when Reset() is called manually — even if the breaker was already Closed.
 circuitBreaker.OnReset += (sender, args) =>
 {
-    Console.WriteLine($"Circuit recovered after {args.OpenDuration.TotalSeconds:F1}s open");
+    Console.WriteLine($"Circuit manually reset from {args.PreviousState} (failures cleared: {args.PreviousFailureCount})");
 };
 ```
 
-`OnStateChanged` fires for every transition between Closed/HalfOpen/Open. `OnReset` is the narrower hook for the HalfOpen → Closed transition that signals "service is back" — useful for clearing alerts.
+`OnStateChanged` fires for every automatic transition between Closed/HalfOpen/Open — including the HalfOpen → Closed recovery that signals "service is back," useful for clearing alerts. `OnReset` is the narrower hook for a manual `Reset()` call (it fires even when the breaker was already Closed), for observing operator-initiated resets.
 
 ## Load Balancing
 

@@ -1,42 +1,46 @@
+using CH.Native.Exceptions;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data.ColumnReaders;
 
 /// <summary>
-/// Column reader for Nested(field1 Type1, field2 Type2, ...) values.
+/// Column reader for Nested(field1 Type1, field2 Type2, ...) values — the read-side
+/// counterpart of <see cref="ColumnWriters.NestedColumnWriter"/>.
 /// </summary>
 /// <remarks>
-/// Wire format: Nested types are stored as tuples of arrays in columnar layout.
-/// Each field becomes an array, and the arrays are stored sequentially.
-///
-/// For example, Nested(id UInt64, name String) is stored as:
-/// - Array offsets for id (UInt64[])
-/// - Array values for id
-/// - Array offsets for name (String[])
-/// - Array values for name
-///
-/// Returns object[][] where each row is an array of (fieldValue1[], fieldValue2[], ...).
-/// Each fieldValue is an array because Nested represents repeated structured data.
+/// Wire format (verified against the server): a Nested column is a set of parallel
+/// arrays that <b>share a single offsets block</b>. The cumulative row offsets are sent
+/// <b>once</b> (one <c>UInt64</c> per row), then each field's element values flattened
+/// across all rows — NOT a self-contained <c>Array(fieldType)</c> (with its own offsets)
+/// per field. So the reader reads the offsets once and slices every field's flat values
+/// with them.
+/// <para>
+/// Returns <c>object[][]</c> where each row is <c>[ field1Array, field2Array, ... ]</c>;
+/// each field value is a typed array (e.g. <c>string[]</c>, <c>int[]</c>) of the field's
+/// values for that row.
+/// </para>
 /// </remarks>
 internal sealed class NestedColumnReader : IColumnReader<object[]>
 {
-    private readonly IColumnReader[] _fieldReaders;
+    // Element readers for each field's INNER type (e.g. String, Int32) — not Array(...)
+    // readers: the offsets are shared and read here, once.
+    private readonly IColumnReader[] _fieldElementReaders;
     private readonly string[] _fieldNames;
 
     /// <summary>
-    /// Creates a Nested reader with the specified field readers and names.
+    /// Creates a Nested reader from the per-field element readers and names.
     /// </summary>
-    /// <param name="fieldReaders">Array readers for each nested field, in order.</param>
-    /// <param name="fieldNames">Names for each field.</param>
-    public NestedColumnReader(IColumnReader[] fieldReaders, string[] fieldNames)
+    /// <param name="fieldElementReaders">Element readers for each field's inner type, in order.</param>
+    /// <param name="fieldNames">Names for each field; must match <paramref name="fieldElementReaders"/>.</param>
+    public NestedColumnReader(IColumnReader[] fieldElementReaders, string[] fieldNames)
     {
-        if (fieldReaders == null || fieldReaders.Length == 0)
-            throw new ArgumentException("Nested requires at least one field reader.", nameof(fieldReaders));
+        if (fieldElementReaders == null || fieldElementReaders.Length == 0)
+            throw new ArgumentException("Nested requires at least one field reader.", nameof(fieldElementReaders));
 
-        if (fieldNames == null || fieldNames.Length != fieldReaders.Length)
+        if (fieldNames == null || fieldNames.Length != fieldElementReaders.Length)
             throw new ArgumentException("Field names count must match field readers count.", nameof(fieldNames));
 
-        _fieldReaders = fieldReaders;
+        _fieldElementReaders = fieldElementReaders;
         _fieldNames = fieldNames;
     }
 
@@ -45,16 +49,7 @@ internal sealed class NestedColumnReader : IColumnReader<object[]>
     {
         get
         {
-            var fields = _fieldReaders.Select((r, i) =>
-            {
-                // Extract inner type from Array reader
-                var innerTypeName = r.TypeName;
-                if (innerTypeName.StartsWith("Array(") && innerTypeName.EndsWith(")"))
-                {
-                    innerTypeName = innerTypeName.Substring(6, innerTypeName.Length - 7);
-                }
-                return $"{_fieldNames[i]} {innerTypeName}";
-            });
+            var fields = _fieldElementReaders.Select((r, i) => $"{_fieldNames[i]} {r.TypeName}");
             return $"Nested({string.Join(", ", fields)})";
         }
     }
@@ -62,19 +57,13 @@ internal sealed class NestedColumnReader : IColumnReader<object[]>
     /// <inheritdoc />
     public Type ClrType => typeof(object[]);
 
-    /// <summary>
-    /// Gets the number of fields in the nested structure.
-    /// </summary>
-    public int FieldCount => _fieldReaders.Length;
+    /// <summary>Gets the number of fields in the nested structure.</summary>
+    public int FieldCount => _fieldElementReaders.Length;
 
-    /// <summary>
-    /// Gets the field names.
-    /// </summary>
+    /// <summary>Gets the field names.</summary>
     public IReadOnlyList<string> FieldNames => _fieldNames;
 
-    /// <summary>
-    /// Gets the index of a field by name. Returns -1 if not found.
-    /// </summary>
+    /// <summary>Gets the index of a field by name. Returns -1 if not found.</summary>
     public int GetFieldIndex(string fieldName)
     {
         for (int i = 0; i < _fieldNames.Length; i++)
@@ -86,13 +75,24 @@ internal sealed class NestedColumnReader : IColumnReader<object[]>
     }
 
     /// <inheritdoc />
+    // Read each field element-reader's prefix in field order, matching
+    // NestedColumnWriter.WritePrefix (e.g. a LowCardinality field's version byte).
+    public void ReadPrefix(ref ProtocolReader reader)
+    {
+        for (int i = 0; i < _fieldElementReaders.Length; i++)
+            _fieldElementReaders[i].ReadPrefix(ref reader);
+    }
+
+    /// <inheritdoc />
+    // A single Nested value (one row): its offset, then the row's field elements.
     public object[] ReadValue(ref ProtocolReader reader)
     {
-        var nested = new object[_fieldReaders.Length];
-        for (int i = 0; i < _fieldReaders.Length; i++)
+        var length = reader.ReadUInt64AsInt32("Nested offset");
+        var nested = new object[_fieldElementReaders.Length];
+        for (int f = 0; f < _fieldElementReaders.Length; f++)
         {
-            using var col = _fieldReaders[i].ReadTypedColumn(ref reader, 1);
-            nested[i] = col.GetValue(0)!;
+            using var col = _fieldElementReaders[f].ReadTypedColumn(ref reader, length);
+            nested[f] = BuildFieldArray(_fieldElementReaders[f].ClrType, col, start: 0, length);
         }
         return nested;
     }
@@ -103,37 +103,54 @@ internal sealed class NestedColumnReader : IColumnReader<object[]>
         if (rowCount == 0)
             return new TypedColumn<object[]>(Array.Empty<object[]>());
 
-        // Read each field column fully (columnar layout)
-        // Each field is an Array, so we get T[][] for each field
-        var fieldColumns = new ITypedColumn[_fieldReaders.Length];
-        try
+        // Step 1: one shared offsets block (UInt64 cumulative), read once.
+        var offsets = new int[rowCount];
+        int previous = 0;
+        for (int i = 0; i < rowCount; i++)
         {
-            for (int f = 0; f < _fieldReaders.Length; f++)
+            var offset = reader.ReadUInt64AsInt32("Nested offset");
+            if (offset < previous)
             {
-                fieldColumns[f] = _fieldReaders[f].ReadTypedColumn(ref reader, rowCount);
+                throw new ClickHouseProtocolException(
+                    $"Nested offset at row {i} ({offset}) is less than previous cumulative offset " +
+                    $"({previous}); offsets must be monotonically non-decreasing.");
             }
+            offsets[i] = offset;
+            previous = offset;
+        }
 
-            // Transpose to row-major: each row is [field1Array, field2Array, ...]
-            var result = new object[rowCount][];
+        var totalElements = offsets[rowCount - 1];
+
+        // Step 2: each field's flat element column, sliced per row using the shared offsets.
+        var result = new object[rowCount][];
+        for (int row = 0; row < rowCount; row++)
+            result[row] = new object[_fieldElementReaders.Length];
+
+        for (int f = 0; f < _fieldElementReaders.Length; f++)
+        {
+            var clr = _fieldElementReaders[f].ClrType;
+            using var elements = _fieldElementReaders[f].ReadTypedColumn(ref reader, totalElements);
+
+            int start = 0;
             for (int row = 0; row < rowCount; row++)
             {
-                result[row] = new object[_fieldReaders.Length];
-                for (int f = 0; f < _fieldReaders.Length; f++)
-                {
-                    result[row][f] = fieldColumns[f].GetValue(row)!;
-                }
+                int end = offsets[row];
+                result[row][f] = BuildFieldArray(clr, elements, start, end - start);
+                start = end;
             }
+        }
 
-            return new TypedColumn<object[]>(result);
-        }
-        finally
-        {
-            // Dispose all field columns
-            foreach (var col in fieldColumns)
-            {
-                col?.Dispose();
-            }
-        }
+        return new TypedColumn<object[]>(result);
+    }
+
+    // Builds a typed array (string[], int[], ...) of the field's element CLR type for one
+    // row's slice [start, start+length) of the field's flat element column.
+    private static Array BuildFieldArray(Type elementClrType, ITypedColumn elements, int start, int length)
+    {
+        var array = Array.CreateInstance(elementClrType, length);
+        for (int j = 0; j < length; j++)
+            array.SetValue(elements.GetValue(start + j), j);
+        return array;
     }
 
     ITypedColumn IColumnReader.ReadTypedColumn(ref ProtocolReader reader, int rowCount)

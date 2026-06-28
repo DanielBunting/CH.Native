@@ -114,13 +114,17 @@ public sealed class ParallelBulkInserter<T> : IAsyncDisposable where T : class
         }
         catch
         {
-            // Task.WhenAll has awaited every task; return the ones that opened
+            // Task.WhenAll has awaited every task; dispose the ones that opened
             // successfully (the failed ones already disposed their own connection).
+            // Disposal is best-effort and must not mask the startup root cause that
+            // we re-throw below, so it runs through the exception-safe helper.
+            var opened = new List<IAsyncDisposable>();
             foreach (var task in setupTasks)
             {
                 if (task.IsCompletedSuccessfully)
-                    await task.Result.DisposeAsync().ConfigureAwait(false);
+                    opened.Add(task.Result);
             }
+            await DisposeOpenedWorkersAsync(opened).ConfigureAwait(false);
 
             _cts.Dispose();
             throw;
@@ -131,6 +135,22 @@ public sealed class ParallelBulkInserter<T> : IAsyncDisposable where T : class
         {
             WorkerHandle handle = handles[i];
             _workers[i] = Task.Run(() => RunWorkerAsync(handle));
+        }
+    }
+
+    // Disposes the workers that opened before a sibling's setup faulted. Extracted
+    // from the StartAsync failure path so its exception-safety contract can be
+    // exercised directly: a throwing DisposeAsync on one worker must neither mask
+    // the startup root cause (re-thrown by the caller) nor abort disposal of the
+    // remaining workers.
+    internal static async ValueTask DisposeOpenedWorkersAsync(IEnumerable<IAsyncDisposable> opened)
+    {
+        foreach (var worker in opened)
+        {
+            // Swallow per-worker teardown faults: the startup root cause is the error
+            // worth surfacing, and one worker throwing must not strand the rest.
+            try { await worker.DisposeAsync().ConfigureAwait(false); }
+            catch { /* secondary teardown signal during a failed startup */ }
         }
     }
 
@@ -395,6 +415,7 @@ public sealed class ParallelBulkInserter<T> : IAsyncDisposable where T : class
     // Bundles a worker's connection + inserter so the startup/teardown paths can
     // pass them around together.
     private readonly record struct WorkerHandle(int Index, BulkInserter<T> Inserter, ClickHouseConnection Connection)
+        : IAsyncDisposable
     {
         public async ValueTask DisposeAsync()
         {

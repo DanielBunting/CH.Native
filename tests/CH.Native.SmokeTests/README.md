@@ -35,7 +35,7 @@ dotnet test tests/CH.Native.SmokeTests
 | `TypeRoundTripSmokeTests` | One fact per scalar type (Bool, Int8…Int256, UInt128/256, floats, Decimals, dates, UUID, IP, …): SELECT through CH.Native and through `ClickHouse.Driver`, results compared via `ResultComparer`. |
 | `CompositeTypeSmokeTests` | Array, Map, Tuple, nested combinations, and LowCardinality (including the UInt8→UInt16 dictionary-index overflow case). |
 | `BoundaryValueSmokeTests` | Edge values: NaN/±Infinity/−0/subnormals, large strings, embedded null bytes, CJK and emoji strings, DateTime epoch/max. |
-| `AggregateFunctionSmokeTests` | `SimpleAggregateFunction(fn, T)` pass-through and server-side `finalizeAggregation(state)` parity. Direct `AggregateFunction` column parity is intentionally out of scope (CH.Native surfaces an opaque `ClickHouseAggregateState` the driver has no equivalent for). |
+| `AggregateFunctionSmokeTests` | `SimpleAggregateFunction(fn, T)` pass-through and server-side `finalizeAggregation(state)` parity. Direct `AggregateFunction` column parity is out of scope — CH.Native does not read raw aggregate-state columns (opaque, server-internal blobs); query via `finalizeAggregation()` instead. |
 | `MapMaterialisationSmokeTests` | The `ClickHouseMap<TKey, TValue>` opt-in path: duplicate keys preserved in wire order, as opposed to the legacy `Dictionary` materialization. |
 
 ### Write-path round-trips
