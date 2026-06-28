@@ -402,4 +402,117 @@ public class MapMaterialisationTests
             await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
         }
     }
+
+    // ------------------------------------------------------------------
+    // Entries-path inner-type variety. Existing entries-path coverage was almost
+    // entirely Map(String, Int32); the lossless MapEntriesColumnReader drives its
+    // inner key/value readers, so a stateful or non-string inner type (Nullable,
+    // Array, wide int, non-string key) is a genuinely different decode. These
+    // round-trip each through the ClickHouseMap (entries) read path.
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public async Task EntriesPath_NullableValue_PreservesNulls()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var map = await connection.ExecuteScalarAsync<ClickHouseMap<string, int?>>(
+            "SELECT cast(map('a', 1, 'b', NULL, 'c', 3) as Map(String, Nullable(Int32)))");
+
+        Assert.NotNull(map);
+        Assert.Equal(3, map!.Count);
+        Assert.Equal(new KeyValuePair<string, int?>("a", 1), map[0]);
+        Assert.Equal(new KeyValuePair<string, int?>("b", null), map[1]);
+        Assert.Equal(new KeyValuePair<string, int?>("c", 3), map[2]);
+    }
+
+    [Fact]
+    public async Task EntriesPath_NonStringKey_RoundTrips()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var map = await connection.ExecuteScalarAsync<ClickHouseMap<int, string>>(
+            "SELECT cast(map(1, 'one', 2, 'two') as Map(Int32, String))");
+
+        Assert.NotNull(map);
+        Assert.Equal(2, map!.Count);
+        Assert.Equal(new KeyValuePair<int, string>(1, "one"), map[0]);
+        Assert.Equal(new KeyValuePair<int, string>(2, "two"), map[1]);
+    }
+
+    [Fact]
+    public async Task EntriesPath_WideIntKeyAndValue_RoundTrips()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var map = await connection.ExecuteScalarAsync<ClickHouseMap<long, long>>(
+            "SELECT cast(map(toInt64(1), toInt64(9223372036854775807)) as Map(Int64, Int64))");
+
+        Assert.NotNull(map);
+        Assert.Single(map!);
+        Assert.Equal(new KeyValuePair<long, long>(1, long.MaxValue), map[0]);
+    }
+
+    [Fact]
+    public async Task EntriesPath_ArrayValue_RoundTrips()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var map = await connection.ExecuteScalarAsync<ClickHouseMap<string, int[]>>(
+            "SELECT cast(map('x', [1, 2], 'y', []) as Map(String, Array(Int32)))");
+
+        Assert.NotNull(map);
+        Assert.Equal(2, map!.Count);
+        Assert.Equal("x", map[0].Key);
+        Assert.Equal(new[] { 1, 2 }, map[0].Value);
+        Assert.Equal("y", map[1].Key);
+        Assert.Empty(map[1].Value);
+    }
+
+    [Fact]
+    public async Task EntriesPath_NullableValue_MultiRow_StaysAligned()
+    {
+        // Multiple rows of a Nullable-valued entries column: the per-column null
+        // bitmap state must not desync row offsets.
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        var tableName = $"map_entries_nullable_{Guid.NewGuid():N}";
+        await connection.ExecuteNonQueryAsync(
+            $"CREATE TABLE {tableName} (id Int32, m Map(String, Nullable(Int32))) ENGINE = Memory");
+        try
+        {
+            await connection.ExecuteNonQueryAsync(
+                $"INSERT INTO {tableName} VALUES " +
+                "(1, map('a', 1, 'b', NULL)), (2, map()), (3, map('c', NULL, 'd', 4))");
+
+            var byId = new Dictionary<int, ClickHouseMap<string, int?>>();
+            await foreach (var row in connection.QueryStreamAsync<NullableMapRow>(
+                $"SELECT id, m FROM {tableName} ORDER BY id"))
+            {
+                byId[row.Id] = row.M;
+            }
+
+            Assert.Equal(3, byId.Count);
+            Assert.Equal(new KeyValuePair<string, int?>("a", 1), byId[1][0]);
+            Assert.Equal(new KeyValuePair<string, int?>("b", null), byId[1][1]);
+            Assert.Empty(byId[2]);
+            Assert.Equal(new KeyValuePair<string, int?>("c", null), byId[3][0]);
+            Assert.Equal(new KeyValuePair<string, int?>("d", 4), byId[3][1]);
+        }
+        finally
+        {
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    private class NullableMapRow
+    {
+        public int Id { get; set; }
+        public ClickHouseMap<string, int?> M { get; set; } = null!;
+    }
 }

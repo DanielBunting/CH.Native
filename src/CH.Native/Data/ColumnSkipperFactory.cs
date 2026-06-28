@@ -145,19 +145,14 @@ public sealed class ColumnSkipperFactory
         if (type.TypeArguments.Count == 0)
             throw new FormatException($"Nested requires at least one field, got: {type.OriginalTypeName}");
 
-        // Each field in Nested is wrapped in Array
-        var fieldSkippers = type.TypeArguments
-            .Select(fieldType =>
-            {
-                var arrayType = new ClickHouseType(
-                    "Array",
-                    typeArguments: new[] { fieldType },
-                    originalTypeName: $"Array({fieldType.OriginalTypeName})");
-                return CreateSkipperForType(arrayType);
-            })
+        // A Nested column is parallel arrays sharing one offsets block. The skipper owns
+        // the shared offsets, so it takes the field ELEMENT skippers (the inner field
+        // types), not Array(fieldType) skippers.
+        var fieldElementSkippers = type.TypeArguments
+            .Select(CreateSkipperForType)
             .ToArray();
 
-        return new NestedColumnSkipper(fieldSkippers, type.OriginalTypeName);
+        return new NestedColumnSkipper(fieldElementSkippers, type.OriginalTypeName);
     }
 
     private IColumnSkipper CreateLowCardinalitySkipper(ClickHouseType type)

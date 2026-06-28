@@ -191,10 +191,22 @@ internal static class AggregateFunctionStateFormatRegistry
                 or "Float32" or "Float64" => 8,
             "Int128" or "UInt128" => 16,
             "Int256" or "UInt256" => 32,
-            "Decimal32" or "Decimal64" or "Decimal128" => 16,
-            "Decimal256" => 32,
             _ => -1
         };
+
+        // Decimal, either spelling. The server canonicalises every Decimal to
+        // Decimal(P, S) (BaseName "Decimal"), so a BaseName switch on the sized
+        // aliases alone never matches real wire data. sum PROMOTES the accumulator:
+        // the state is 16 bytes for native widths up to 16 (Decimal32/64/128 → P ≤ 38)
+        // and 32 bytes for Decimal256 (P 39–76). Verified against the server via
+        // hex(sumState) length.
+        if (size < 0)
+        {
+            var decimalNative = DecimalNativeSize(inner);
+            if (decimalNative >= 0)
+                size = decimalNative <= 16 ? 16 : 32;
+        }
+
         if (size < 0)
             throw Unsupported("sum", typeArguments,
                 $"inner type {inner.OriginalTypeName} is not in the tier-1 set.");
@@ -224,12 +236,39 @@ internal static class AggregateFunctionStateFormatRegistry
             "Int256" or "UInt256" => 32,
             _ => -1
         };
+
+        // Decimal, either spelling (see ResolveSum). Unlike sum, the single-value
+        // state stores the NATIVE-width value behind a one-byte "has value" flag
+        // (FlagPlusFixedStateFormat adds the +1), so the inner size is the native
+        // Decimal width (4/8/16/32 by precision). Verified against the server via
+        // hex(minState)/hex(maxState) length (5/9/17/33 = 1 + native).
+        if (innerSize < 0)
+            innerSize = DecimalNativeSize(inner);
+
         if (innerSize < 0)
             throw Unsupported(functionName, typeArguments,
                 $"inner type {inner.OriginalTypeName} is not in the tier-1 set.");
 
         return new FlagPlusFixedStateFormat(innerSize);
     }
+
+    /// <summary>
+    /// Native on-wire width (bytes) of a Decimal inner type, from either spelling, or
+    /// <c>-1</c> if <paramref name="t"/> is not a Decimal. The sized aliases name the
+    /// width directly; the canonical <c>Decimal(P, S)</c> form (the only one the server
+    /// actually emits in an aggregate descriptor) derives it from the precision <c>P</c>:
+    /// P ≤ 9 → 4, ≤ 18 → 8, ≤ 38 → 16, else 32.
+    /// </summary>
+    private static int DecimalNativeSize(ClickHouseType t) => t.BaseName switch
+    {
+        "Decimal32" => 4,
+        "Decimal64" => 8,
+        "Decimal128" => 16,
+        "Decimal256" => 32,
+        "Decimal" when t.Parameters.Count >= 1 && int.TryParse(t.Parameters[0], out var p)
+            => p <= 9 ? 4 : p <= 18 ? 8 : p <= 38 ? 16 : 32,
+        _ => -1
+    };
 
     private static NotSupportedException Unsupported(
         string functionName,

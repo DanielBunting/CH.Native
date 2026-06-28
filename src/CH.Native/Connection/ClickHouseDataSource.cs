@@ -523,6 +523,15 @@ public sealed class ClickHouseDataSource : DbDataSource
     /// queryable itself does not pin a connection. Table name is resolved via
     /// snake_case from the type name.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Preview.</b> The LINQ provider translates a limited single-table operator set
+    /// (Where, Select, OrderBy, Take/Skip, Distinct, GroupBy, the standard aggregates, common
+    /// string methods, and collection <c>Contains</c>). <c>Join</c>/<c>GroupJoin</c>, <c>HAVING</c>,
+    /// subqueries, CTEs, and <c>Union</c>/<c>Intersect</c>/<c>Except</c> are out of scope and throw
+    /// <see cref="NotSupportedException"/> at query-build time (no compile-time signal). For anything
+    /// beyond that surface, use raw SQL via <c>QueryStreamAsync&lt;T&gt;(sql)</c>. See
+    /// <c>docs/linq-provider.md</c>.</para>
+    /// </remarks>
     /// <typeparam name="T">The entity type.</typeparam>
     /// <returns>A queryable representing the table.</returns>
     public IQueryable<T> Table<T>()
@@ -537,6 +546,13 @@ public sealed class ClickHouseDataSource : DbDataSource
     /// Creates a queryable bound to this data source for the specified table
     /// name (which may be qualified as <c>database.table</c>).
     /// </summary>
+    /// <remarks>
+    /// <para><b>Preview.</b> The LINQ provider translates a limited single-table operator set;
+    /// <c>Join</c>/<c>GroupJoin</c>, <c>HAVING</c>, subqueries, CTEs, and set operations are out of
+    /// scope and throw <see cref="NotSupportedException"/> at query-build time. For anything beyond
+    /// that surface, use raw SQL via <c>QueryStreamAsync&lt;T&gt;(sql)</c>. See
+    /// <c>docs/linq-provider.md</c>.</para>
+    /// </remarks>
     /// <typeparam name="T">The entity type.</typeparam>
     /// <param name="tableName">The explicit table name.</param>
     /// <returns>A queryable representing the table.</returns>

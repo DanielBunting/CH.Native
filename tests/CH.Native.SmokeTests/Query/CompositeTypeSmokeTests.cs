@@ -69,6 +69,28 @@ public class CompositeTypeSmokeTests
     public Task MapStringArrayInt32() =>
         RunCompositeTest("val Map(String, Array(Int32))", "({'x': [1, 2], 'y': [3]}),({})");
 
+    // Map key/value type variety — prior cross-client Map coverage was String-keyed
+    // only. A non-string key, wide-int key/value, and an array-of-nullable value each
+    // decode differently; comparing CH.Native against the official driver pins the
+    // wire decode for each.
+    [Fact]
+    public Task MapInt32String() =>
+        RunCompositeTest("val Map(Int32, String)", "({1: 'a', 2: 'b'}),({})");
+
+    [Fact]
+    public Task MapInt64Float64() =>
+        RunCompositeTest("val Map(Int64, Float64)", "({1: 1.5, 9223372036854775807: 2.5}),({})");
+
+    [Fact]
+    public Task MapStringArrayNullableInt32() =>
+        RunCompositeTest("val Map(String, Array(Nullable(Int32)))", "({'x': [1, NULL, 3], 'y': []}),({})");
+
+    [Fact]
+    public Task MapUuidInt32() =>
+        RunCompositeTest(
+            "val Map(UUID, Int32)",
+            "({'00000000-0000-0000-0000-000000000001': 10}),({})");
+
     [Fact]
     public Task TupleIntString() =>
         RunCompositeTest("val Tuple(Int32, String)", "((1, 'hello')),((42, 'world'))");

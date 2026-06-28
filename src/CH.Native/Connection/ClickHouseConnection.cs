@@ -1220,6 +1220,13 @@ public sealed class ClickHouseConnection : DbConnection
     /// This sends a Cancel message to the server which will abort the query.
     /// The query method will throw an OperationCanceledException after cancellation.
     /// The connection remains usable for subsequent queries after cancellation.
+    /// <para>
+    /// The parameterless form is a deliberate convenience: cancellation is itself the
+    /// caller's "stop now" intent, so there is usually nothing to cancel the cancel
+    /// <i>with</i>. Pass a token via <see cref="CancelCurrentQueryAsync(CancellationToken)"/>
+    /// only to bound the Cancel-packet write. The parameterless overload existing here
+    /// is intentional and not an oversight.
+    /// </para>
     /// </remarks>
     public Task CancelCurrentQueryAsync() => CancelCurrentQueryAsync(CancellationToken.None);
 
@@ -1640,6 +1647,11 @@ public sealed class ClickHouseConnection : DbConnection
     /// ALTER TABLE on a table whose schema is cached, or pass <c>null</c> to clear the
     /// entire cache.
     /// </summary>
+    /// <remarks>
+    /// Synchronous and <c>void</c> by design on this otherwise async-first API: it is a
+    /// purely in-memory cache eviction with no I/O, so it is safe to call from an async
+    /// context without awaiting.
+    /// </remarks>
     /// <param name="tableName">
     /// The table to evict. When null, the entire cache is cleared. May be qualified
     /// as <c>database.table</c>; an unqualified name targets the connection's default

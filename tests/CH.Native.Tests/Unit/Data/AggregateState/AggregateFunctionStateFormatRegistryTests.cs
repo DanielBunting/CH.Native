@@ -465,4 +465,143 @@ public class AggregateFunctionStateFormatRegistryTests
         // No trailing args clause when typeArguments is empty.
         Assert.DoesNotContain("AggregateFunction(mysteryFn,", ex.Message);
     }
+
+    // ------------------------------------------------------------------
+    // Canonical Decimal(P, S) resolution — the bug fix. The server ALWAYS emits a
+    // Decimal aggregate inner type in canonical form (BaseName "Decimal", precision
+    // in Parameters[0]), never the sized alias. Before the fix, ResolveSum/ResolveSingleValue
+    // switched only on the sized-alias base names, so these never matched and every
+    // Decimal aggregate state read as unsupported. Sizes below are the exact widths
+    // measured off a live server via hex(state) length.
+    // ------------------------------------------------------------------
+
+    private static ClickHouseType CanonicalDecimal(int precision, int scale) =>
+        new("Decimal", parameters: new[] { precision.ToString(), scale.ToString() });
+
+    private static int FixedStateSize(FixedSizeStateFormat format)
+    {
+        // No public size getter — derive it by round-tripping a probe and inspecting
+        // how many bytes WriteOneState emits (it validates the length it expects).
+        for (int candidate = 0; candidate <= 64; candidate++)
+        {
+            var buffer = new ArrayBufferWriter<byte>();
+            var pw = new ProtocolWriter(buffer);
+            try
+            {
+                format.WriteOneState(ref pw, new byte[candidate]);
+                return candidate;
+            }
+            catch (ArgumentException)
+            {
+                // wrong length — keep searching
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException("Could not determine fixed state size <= 64.");
+    }
+
+    public static IEnumerable<object[]> CanonicalDecimalSumSizes => new[]
+    {
+        // precision, expected promoted sum-state bytes (native ≤16 → 16, Decimal256 → 32)
+        new object[] { 9, 16 },   // Decimal32
+        new object[] { 18, 16 },  // Decimal64
+        new object[] { 38, 16 },  // Decimal128
+        new object[] { 39, 32 },  // first Decimal256 precision
+        new object[] { 76, 32 },  // Decimal256 max
+    };
+
+    [Theory]
+    [MemberData(nameof(CanonicalDecimalSumSizes))]
+    public void Resolve_Sum_CanonicalDecimal_ResolvesPromotedSize(int precision, int expectedBytes)
+    {
+        var format = AggregateFunctionStateFormatRegistry.Resolve("sum", new[] { CanonicalDecimal(precision, 4) });
+        var fixedSize = Assert.IsType<FixedSizeStateFormat>(format);
+        Assert.Equal(expectedBytes, FixedStateSize(fixedSize));
+    }
+
+    public static IEnumerable<object[]> CanonicalDecimalSingleValueSizes => new[]
+    {
+        // function, precision, expected NATIVE inner bytes (state = 1 flag + native)
+        new object[] { "min", 9, 4 },    // Decimal32
+        new object[] { "max", 18, 8 },   // Decimal64
+        new object[] { "any", 38, 16 },  // Decimal128
+        new object[] { "anyLast", 76, 32 }, // Decimal256
+    };
+
+    [Theory]
+    [MemberData(nameof(CanonicalDecimalSingleValueSizes))]
+    public void Resolve_SingleValue_CanonicalDecimal_ResolvesNativeInnerSize(
+        string fn, int precision, int expectedInnerBytes)
+    {
+        var format = AggregateFunctionStateFormatRegistry.Resolve(fn, new[] { CanonicalDecimal(precision, 4) });
+        var flagPlusFixed = Assert.IsType<FlagPlusFixedStateFormat>(format);
+
+        // Round-trip a flag+native state to confirm the total width is 1 + native.
+        var stateBytes = new byte[1 + expectedInnerBytes];
+        stateBytes[0] = 0x01;
+        var buffer = new ArrayBufferWriter<byte>();
+        var pw = new ProtocolWriter(buffer);
+        flagPlusFixed.WriteOneState(ref pw, stateBytes);
+        Assert.Equal(1 + expectedInnerBytes, buffer.WrittenCount);
+    }
+
+    [Theory]
+    [InlineData("Decimal32", 9)]
+    [InlineData("Decimal64", 18)]
+    [InlineData("Decimal128", 38)]
+    [InlineData("Decimal256", 76)]
+    public void Resolve_Sum_SizedAliasAndCanonical_ResolveToSameSize(string sizedAlias, int precision)
+    {
+        // The fix must keep the sized-alias spelling working AND make the canonical
+        // form (the one the server sends) resolve identically — same wire size.
+        var aliasFormat = Assert.IsType<FixedSizeStateFormat>(
+            AggregateFunctionStateFormatRegistry.Resolve("sum", new[] { new ClickHouseType(sizedAlias) }));
+        var canonicalFormat = Assert.IsType<FixedSizeStateFormat>(
+            AggregateFunctionStateFormatRegistry.Resolve("sum", new[] { CanonicalDecimal(precision, 4) }));
+
+        Assert.Equal(FixedStateSize(aliasFormat), FixedStateSize(canonicalFormat));
+    }
+
+    [Fact]
+    public void Resolve_Sum_CanonicalDecimal_NoPrecisionParameter_ThrowsNotSupported()
+    {
+        // Defensive: a "Decimal" with no parsable precision can't yield a width.
+        var malformed = new ClickHouseType("Decimal"); // no parameters
+        Assert.Throws<NotSupportedException>(() =>
+            AggregateFunctionStateFormatRegistry.Resolve("sum", new[] { malformed }));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4)]
+    [InlineData(10)]
+    [InlineData(38)]
+    public void Resolve_Sum_Decimal_ScaleDoesNotAffectStateSize(int scale)
+    {
+        // The on-wire state width follows PRECISION (storage width), never SCALE. A
+        // Decimal(38, S) is 16-byte storage for any scale 0..38, so its promoted sum
+        // state is 16 bytes regardless of how many decimal places the data carries.
+        var format = Assert.IsType<FixedSizeStateFormat>(
+            AggregateFunctionStateFormatRegistry.Resolve("sum", new[] { CanonicalDecimal(38, scale) }));
+        Assert.Equal(16, FixedStateSize(format));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(4)]
+    [InlineData(10)]
+    public void Resolve_Min_Decimal_ScaleDoesNotAffectStateSize(int scale)
+    {
+        // Same for the single-value path: native width (16 for Decimal128) + 1 flag,
+        // independent of scale.
+        var format = Assert.IsType<FlagPlusFixedStateFormat>(
+            AggregateFunctionStateFormatRegistry.Resolve("min", new[] { CanonicalDecimal(38, scale) }));
+
+        var stateBytes = new byte[1 + 16];
+        stateBytes[0] = 0x01;
+        var buffer = new ArrayBufferWriter<byte>();
+        var pw = new ProtocolWriter(buffer);
+        format.WriteOneState(ref pw, stateBytes);
+        Assert.Equal(17, buffer.WrittenCount);
+    }
 }

@@ -133,4 +133,59 @@ public class DateTime64RawValueTests
 
             Assert.Equal(new[] { 1_704_067_200_000_000_001L, 1_704_067_200_999_999_999L }, raws);
         });
+
+    // ------------------------------------------------------------------
+    // Nullable(DateTime64(8/9)). Documented limitation: the raw Int64 view is NOT
+    // wired through the Nullable wrapper, so the value materialises as a truncated
+    // DateTime and the exact sub-tick nanoseconds are only recoverable server-side
+    // via toUnixTimestamp64Nano. These pin both halves so a future fix (raw long on
+    // the nullable path) trips the workaround test and the limitation gets revisited.
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public Task NullablePrecision9_NullValue_ReadsAsNull() =>
+        RunNullableAsync("Nullable(DateTime64(9, 'UTC'))", "NULL", async (connection, table) =>
+        {
+            await foreach (var row in connection.QueryStreamAsync($"SELECT val FROM {table}"))
+            {
+                Assert.True(row.IsDBNull(0));
+            }
+        });
+
+    [Fact]
+    public Task NullablePrecision9_PresentValue_TruncatesToDateTime_NanosViaServerWorkaround() =>
+        RunNullableAsync("Nullable(DateTime64(9, 'UTC'))", "'2024-01-01 00:00:00.123456789'", async (connection, table) =>
+        {
+            await foreach (var row in connection.QueryStreamAsync($"SELECT val FROM {table}"))
+            {
+                Assert.False(row.IsDBNull(0));
+                // DateTime view truncates to 100ns ticks (works on the nullable path).
+                Assert.Equal(
+                    new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddTicks(1234567),
+                    row.GetFieldValue<DateTime>(0));
+            }
+
+            // Exact nanoseconds remain available via the server-side accessor — the
+            // documented escape hatch while raw long is unwired for Nullable.
+            var serverNanos = await connection.ExecuteScalarAsync<long>(
+                $"SELECT toUnixTimestamp64Nano(val) FROM {table}");
+            Assert.Equal(Nanos, serverNanos);
+        });
+
+    private async Task RunNullableAsync(string columnType, string literal, Func<ClickHouseConnection, string, Task> body)
+    {
+        var table = $"test_dt64raw_nullable_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        await connection.ExecuteNonQueryAsync($"CREATE TABLE {table} (val {columnType}) ENGINE = Memory");
+        try
+        {
+            await connection.ExecuteNonQueryAsync($"INSERT INTO {table} VALUES ({literal})");
+            await body(connection, table);
+        }
+        finally
+        {
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {table}");
+        }
+    }
 }

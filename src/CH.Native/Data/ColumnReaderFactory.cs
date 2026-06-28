@@ -222,22 +222,16 @@ public sealed class ColumnReaderFactory
         if (!type.HasFieldNames)
             throw new FormatException($"Nested type requires named fields, got: {type.OriginalTypeName}");
 
-        // Each field in Nested is wrapped in Array
-        var fieldReaders = type.TypeArguments
-            .Select(fieldType =>
-            {
-                // Wrap each field type in Array
-                var arrayType = new Types.ClickHouseType(
-                    "Array",
-                    typeArguments: new[] { fieldType },
-                    originalTypeName: $"Array({fieldType.OriginalTypeName})");
-                return CreateReaderForType(arrayType);
-            })
+        // A Nested column is parallel arrays sharing one offsets block. The reader owns
+        // the shared offsets, so it takes the field ELEMENT readers (the inner field
+        // types), not Array(fieldType) readers.
+        var fieldElementReaders = type.TypeArguments
+            .Select(CreateReaderForType)
             .ToArray();
 
         var fieldNames = type.FieldNames.ToArray();
 
-        return new NestedColumnReader(fieldReaders, fieldNames);
+        return new NestedColumnReader(fieldElementReaders, fieldNames);
     }
 
     private IColumnReader CreateLowCardinalityReader(ClickHouseType type)

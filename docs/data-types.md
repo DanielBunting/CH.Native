@@ -481,6 +481,42 @@ var rows = await connection.QueryStreamAsync(
 
 You can also project each subcolumn directly (`items.name`, `items.quantity`) and read it as `string[]` / `uint[]` — that is usually the more ergonomic shape and is what most queries against `Nested` use in practice.
 
+#### Inserting and reading the whole column
+
+By default (`flatten_nested = 1`) ClickHouse stores and exposes a `Nested` column as its flattened `name.subcolumn Array(T)` columns — the shape shown above, and the one most code uses. With `flatten_nested = 0` the column is presented as a single `Nested(...)` column on the wire, and CH.Native round-trips it whole: it bulk-inserts and reads back as an `object[]` per row holding the per-field arrays, in declared field order, all the same length (the fields share one offsets block).
+
+```csharp
+class Event
+{
+    [ClickHouseColumn(Name = "id")] public ulong Id { get; set; }
+
+    // One object[] per row: the per-field arrays in declared order — here
+    // [ string[] names, uint[] quantities ] for Nested(name String, quantity UInt32).
+    [ClickHouseColumn(Name = "items")] public object[] Items { get; set; } = Array.Empty<object>();
+}
+
+await connection.ExecuteNonQueryAsync("SET flatten_nested = 0");
+
+await using var inserter = connection.CreateBulkInserter<Event>("events");
+await inserter.InitAsync();
+await inserter.AddAsync(new Event
+{
+    Id = 1,
+    Items = new object[] { new[] { "a", "b" }, new uint[] { 10, 20 } },
+});
+await inserter.CompleteAsync();
+
+// Whole-column read returns object[] per row: [ namesArray, quantitiesArray ].
+await foreach (var row in connection.QueryStreamAsync("SELECT items FROM events"))
+{
+    var items = (object[])row.GetFieldValue<object>("items");
+    var names = (string[])items[0];
+    var quantities = (uint[])items[1];
+}
+```
+
+Field types may themselves be composite (e.g. `Nested(tag LowCardinality(String), vals Array(Int32))`); each field's array is materialised with its element CLR type.
+
 ### JSON
 
 **Requires ClickHouse 25.6+**
