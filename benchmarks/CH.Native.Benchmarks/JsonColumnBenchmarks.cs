@@ -20,7 +20,8 @@ public class JsonColumnBenchmarks
 {
     private byte[] _simpleJsonBytes = null!;
     private byte[] _complexJsonBytes = null!;
-    private byte[] _multiRowJsonBytes = null!;
+    private byte[] _simpleJsonColumnBytes = null!;
+    private byte[] _multiRowJsonColumnBytes = null!;
     private JsonDocument _simpleDoc = null!;
     private JsonDocument _complexDoc = null!;
 
@@ -30,10 +31,13 @@ public class JsonColumnBenchmarks
     [GlobalSetup]
     public void Setup()
     {
-        // Create protocol-formatted bytes (length-prefixed strings)
+        // Bare value bytes (a single length-prefixed string) for the ReadValue path.
         _simpleJsonBytes = CreateProtocolBytes(SimpleJson);
         _complexJsonBytes = CreateProtocolBytes(ComplexJson);
-        _multiRowJsonBytes = CreateMultiRowProtocolBytes(SimpleJson, 100);
+        // Full column wire format (UInt64 version prefix + rows) for the ReadPrefix +
+        // ReadTypedColumn and skip paths, which read the serialization version first.
+        _simpleJsonColumnBytes = CreateJsonColumnBytes(SimpleJson, 1);
+        _multiRowJsonColumnBytes = CreateJsonColumnBytes(SimpleJson, 100);
 
         _simpleDoc = JsonDocument.Parse(SimpleJson);
         _complexDoc = JsonDocument.Parse(ComplexJson);
@@ -55,10 +59,14 @@ public class JsonColumnBenchmarks
         return buffer.WrittenSpan.ToArray();
     }
 
-    private static byte[] CreateMultiRowProtocolBytes(string json, int rowCount)
+    // Full JSON column wire format: a UInt64 serialization version (1 = string) followed
+    // by rowCount length-prefixed UTF-8 strings — i.e. exactly what ReadPrefix +
+    // ReadTypedColumn (and the skipper's TrySkipColumn) consume.
+    private static byte[] CreateJsonColumnBytes(string json, int rowCount)
     {
         var buffer = new ArrayBufferWriter<byte>();
         var writer = new ProtocolWriter(buffer);
+        writer.WriteUInt64(1);
         for (int i = 0; i < rowCount; i++)
         {
             writer.WriteString(json);
@@ -91,8 +99,9 @@ public class JsonColumnBenchmarks
     [Benchmark(Description = "Read 100 JSON rows")]
     public int Reader_MultiRow()
     {
-        var reader = new ProtocolReader(new ReadOnlySequence<byte>(_multiRowJsonBytes));
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(_multiRowJsonColumnBytes));
         var columnReader = new JsonColumnReader();
+        columnReader.ReadPrefix(ref reader);
         using var column = columnReader.ReadTypedColumn(ref reader, 100);
 
         // Dispose all documents
@@ -102,24 +111,6 @@ public class JsonColumnBenchmarks
         }
 
         return column.Count;
-    }
-
-    // --- JsonStringColumnReader Benchmarks (no parsing) ---
-
-    [Benchmark(Description = "Read simple JSON as string")]
-    public string Reader_SimpleJson_AsString()
-    {
-        var reader = new ProtocolReader(new ReadOnlySequence<byte>(_simpleJsonBytes));
-        var columnReader = new JsonStringColumnReader();
-        return columnReader.ReadValue(ref reader);
-    }
-
-    [Benchmark(Description = "Read complex JSON as string")]
-    public string Reader_ComplexJson_AsString()
-    {
-        var reader = new ProtocolReader(new ReadOnlySequence<byte>(_complexJsonBytes));
-        var columnReader = new JsonStringColumnReader();
-        return columnReader.ReadValue(ref reader);
     }
 
     // --- JsonColumnWriter Benchmarks ---
@@ -159,7 +150,7 @@ public class JsonColumnBenchmarks
     [Benchmark(Description = "Skip simple JSON")]
     public bool Skipper_SimpleJson()
     {
-        var reader = new ProtocolReader(new ReadOnlySequence<byte>(_simpleJsonBytes));
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(_simpleJsonColumnBytes));
         var skipper = new JsonColumnSkipper();
         return skipper.TrySkipColumn(ref reader, 1);
     }
@@ -167,12 +158,12 @@ public class JsonColumnBenchmarks
     [Benchmark(Description = "Skip 100 JSON rows")]
     public bool Skipper_MultiRow()
     {
-        var reader = new ProtocolReader(new ReadOnlySequence<byte>(_multiRowJsonBytes));
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(_multiRowJsonColumnBytes));
         var skipper = new JsonColumnSkipper();
         return skipper.TrySkipColumn(ref reader, 100);
     }
 
-    // --- Comparison: JsonDocument vs String ---
+    // --- Comparison ---
 
     [Benchmark(Description = "Parse then access property")]
     public string? ParseAndAccess()
@@ -181,13 +172,5 @@ public class JsonColumnBenchmarks
         var columnReader = new JsonColumnReader();
         using var doc = columnReader.ReadValue(ref reader);
         return doc.RootElement.GetProperty("name").GetString();
-    }
-
-    [Benchmark(Description = "Read as string only")]
-    public string ReadStringOnly()
-    {
-        var reader = new ProtocolReader(new ReadOnlySequence<byte>(_simpleJsonBytes));
-        var columnReader = new JsonStringColumnReader();
-        return columnReader.ReadValue(ref reader);
     }
 }
