@@ -17,6 +17,8 @@ CH.Native provides comprehensive support for ClickHouse data types, with automat
 
 When reading data, CH.Native automatically converts ClickHouse types to their .NET equivalents. When writing data (bulk insert), .NET types are converted back to ClickHouse format.
 
+> Reading via the Arrow [ADBC driver](adbc.md)? That path maps ClickHouse types to **Arrow** types instead of CLR types — see the [ClickHouse → Arrow table](adbc.md#type-mapping-clickhouse--arrow).
+
 ## Quick Reference
 
 | ClickHouse Type | .NET Type | Notes |

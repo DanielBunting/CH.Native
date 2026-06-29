@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Description>Apache Arrow Database Connectivity (ADBC) driver for ClickHouse, built on the CH.Native native-protocol client. Streams query results as Arrow record batches.</Description>
+    <PackageTags>clickhouse;adbc;arrow;apache-arrow;database;native</PackageTags>
+    <!-- This project intentionally does NOT enable the PublicApiAnalyzer gate that the
+         core library uses: it pulls in the Apache.Arrow dependency and is versioned
+         independently, so its surface is not tracked in PublicAPI.{Shipped,Unshipped}.txt. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CH.Native\CH.Native.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Apache.Arrow.Adbc 0.23.0 depends on Apache.Arrow >= 22.1.0. -->
+    <PackageReference Include="Apache.Arrow.Adbc" Version="0.23.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CH.Native.Adbc.Tests" />
+  </ItemGroup>
+
+</Project>

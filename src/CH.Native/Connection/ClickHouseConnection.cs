@@ -2320,6 +2320,75 @@ public sealed class ClickHouseConnection : DbConnection
     }
 
     /// <summary>
+    /// Executes a query and streams raw <see cref="TypedBlock"/> results using the fast typed path,
+    /// without mapping rows to objects. This is the columnar entry point used by adapters (e.g. the
+    /// Arrow/ADBC driver) that consume column data directly rather than per-row.
+    /// </summary>
+    /// <remarks>
+    /// Each yielded block is owned by the caller, who MUST <see cref="TypedBlock.Dispose">dispose</see>
+    /// it — its column arrays are pooled and are returned to the pool on dispose. Empty header blocks
+    /// (carrying only column name/type metadata with zero rows) are yielded too, so callers can derive
+    /// the result schema before any data arrives. If enumeration stops early, dispose the enumerator to
+    /// release the connection; a parse failure mid-block closes the connection eagerly (it is poisoned).
+    /// </remarks>
+    /// <param name="sql">The SQL query to execute.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="queryId">Optional caller-supplied query ID. Null or empty auto-generates a GUID; max length 128.</param>
+    /// <returns>An async enumerable of typed blocks. The caller owns and must dispose each block.</returns>
+    public async IAsyncEnumerable<TypedBlock> QueryBlocksAsync(
+        string sql,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default,
+        string? queryId = null)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_isOpen)
+            ThrowNotOpen();
+
+        var effectiveQueryId = ResolveQueryId(queryId);
+        EnterBusy(effectiveQueryId);
+        try
+        {
+            using var activity = ClickHouseActivitySource.StartQuery(sql, effectiveQueryId, Settings.Database, Settings.Telemetry);
+            var stopwatch = Stopwatch.StartNew();
+            long totalRows = 0;
+            var success = false;
+
+            _logger.LogQueryStarted(effectiveQueryId, sql);
+
+            try
+            {
+                await SendQueryAsync(sql, cancellationToken, effectiveQueryId);
+
+                // Register cancellation callback to send Cancel message to server
+                await using var registration = cancellationToken.Register(() => _ = SendCancelAsync());
+
+                await foreach (var block in ReadTypedBlocksAsync(cancellationToken))
+                {
+                    // Ownership of the block transfers to the caller; do not dispose here.
+                    totalRows += block.RowCount;
+                    yield return block;
+                }
+
+                success = true;
+                ClickHouseActivitySource.SetQueryResults(activity, totalRows, 0);
+            }
+            finally
+            {
+                stopwatch.Stop();
+                ClickHouseMeter.RecordQuery(Settings.Database, stopwatch.Elapsed, totalRows, success);
+                if (success)
+                    _logger.QueryCompleted(effectiveQueryId, totalRows, stopwatch.Elapsed.TotalMilliseconds);
+                else
+                    ClickHouseMeter.ErrorsTotal.Add(1);
+            }
+        }
+        finally
+        {
+            ExitBusy();
+        }
+    }
+
+    /// <summary>
     /// Reads typed blocks from the server message stream.
     /// </summary>
     private async IAsyncEnumerable<TypedBlock> ReadTypedBlocksAsync(

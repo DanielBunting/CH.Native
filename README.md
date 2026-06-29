@@ -147,6 +147,7 @@ story.
 | [Resilience](docs/resilience.md) | Retry policies, circuit breakers, load balancing |
 | [Bulk Insert](docs/bulk-insert.md) | High-performance data loading |
 | [ADO.NET & Dapper](docs/ado-net-dapper.md) | Standard provider and ORM integration |
+| [ADBC (Apache Arrow)](docs/adbc.md) | Arrow ADBC driver — streams results as `RecordBatch`es, with the ClickHouse → Arrow type map |
 | [LINQ Provider](docs/linq-provider.md) | `connection.Table<T>()`, operators, modifiers (**preview** — single-table only) |
 | [Telemetry](docs/telemetry.md) | Tracing, metrics, and logging |
 | [Performance Comparison](docs/performance-comparison.md) | Full benchmark matrix vs `ClickHouse.Driver` and `Octonica` |

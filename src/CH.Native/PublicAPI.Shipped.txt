@@ -180,6 +180,7 @@ CH.Native.Connection.ClickHouseConnection.IsOpen.get -> bool
 CH.Native.Connection.ClickHouseConnection.KillQueryAsync(string! queryId, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken)) -> System.Threading.Tasks.Task!
 CH.Native.Connection.ClickHouseConnection.LastQueryId.get -> string?
 CH.Native.Connection.ClickHouseConnection.NegotiatedProtocolVersion.get -> int
+CH.Native.Connection.ClickHouseConnection.QueryBlocksAsync(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Data.TypedBlock!>!
 CH.Native.Connection.ClickHouseConnection.QueryStreamAsync(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<CH.Native.Results.ClickHouseRow>!
 CH.Native.Connection.ClickHouseConnection.QueryStreamAsync<T>(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<T>!
 CH.Native.Connection.ClickHouseConnection.QueryTypedAsync<T>(string! sql, System.Threading.CancellationToken cancellationToken = default(System.Threading.CancellationToken), string? queryId = null) -> System.Collections.Generic.IAsyncEnumerable<T>!

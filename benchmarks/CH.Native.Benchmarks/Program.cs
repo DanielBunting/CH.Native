@@ -120,6 +120,21 @@ if (args.Length > 0)
             }
             break;
 
+        // ADBC (Apache Arrow) columnar read vs row-oriented paths (requires Docker).
+        // Extra args after "adbc" are forwarded to BenchmarkSwitcher (e.g. --filter).
+        case "adbc":
+            if (args.Length > 1)
+            {
+                BenchmarkSwitcher
+                    .FromTypes(new[] { typeof(AdbcReadBenchmarks) })
+                    .Run(args[1..]);
+            }
+            else
+            {
+                BenchmarkRunner.Run<AdbcReadBenchmarks>();
+            }
+            break;
+
         // JSON benchmarks (requires Docker with ClickHouse 25.6+)
         case "jsoncolumn":
             BenchmarkRunner.Run<JsonColumnBenchmarks>();
@@ -212,6 +227,7 @@ static void PrintUsage()
           types       - Per-type read suite: Native vs Driver × Bulk/Single for every primitive
           pool        - DataSource pool throughput across MaxPoolSize × Parallelism matrix
           dapper      - Dapper QueryAsync vs native QueryStreamAsync (CH.Native vs ClickHouse.Driver)
+          adbc        - ADBC (Arrow columnar) read vs QueryStream/Dapper/DataReader (100, 1M rows)
           compare     - Run all protocol comparison benchmarks
           quick       - Quick dev test (SimpleQueryBenchmarks, few iterations)
 
