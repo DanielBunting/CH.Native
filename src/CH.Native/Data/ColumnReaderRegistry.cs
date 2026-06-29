@@ -41,6 +41,20 @@ public sealed class ColumnReaderRegistry
     /// <exception cref="NotSupportedException">Thrown if the type is not supported.</exception>
     public IColumnReader GetReader(string typeName)
     {
+        // Readers for JSON-bearing types carry per-block serialization-version state on
+        // the instance (JsonColumnReader._serializationVersion is set in ReadPrefix and
+        // read back in ReadTypedColumn). A cached or registry-singleton instance is shared
+        // across connections, so a concurrent query on another connection can clobber the
+        // version between this query's ReadPrefix and ReadTypedColumn, mis-dispatching the
+        // decode. Build a fresh, uncached reader tree per call for anything containing a
+        // JSON sub-column — top-level JSON as well as Array(JSON), Nullable(JSON),
+        // Map(K, JSON), Tuple(..., JSON), etc. A fresh ColumnReaderFactory also attaches
+        // the factory the JSON reader needs to decode the binary (v0/v3) formats.
+        if (typeName.Contains("JSON", StringComparison.Ordinal))
+        {
+            return new ColumnReaderFactory(this).CreateReader(typeName);
+        }
+
         // Try exact match first
         if (_readers.TryGetValue(typeName, out var reader))
         {
@@ -217,8 +231,11 @@ public sealed class ColumnReaderRegistryBuilder
         Register(new ColumnReaders.Enum8ColumnReader());
         Register(new ColumnReaders.Enum16ColumnReader());
 
-        // JSON type
-        Register(new ColumnReaders.JsonColumnReader());
+        // JSON type — intentionally not registered here. JSON-bearing types are served
+        // by GetReader via a fresh, uncached factory build (see GetReader) because the
+        // JSON reader carries per-block serialization-version state that must not be
+        // shared across concurrent queries. A registry singleton would also lack the
+        // ColumnReaderFactory needed to decode the binary (v0/v3) formats.
 
         // Geo types (aliases for existing Tuple/Array wire formats)
         Register(new ColumnReaders.PointColumnReader());
