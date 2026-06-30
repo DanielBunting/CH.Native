@@ -291,7 +291,7 @@ public class AdbcDapperParityTests : AdbcIntegrationTestBase
 
         private static string CanonList(ListArray l, int i)
         {
-            int start = l.GetValueOffset(i), len = l.GetValueLength(i);
+            int start = l.ValueOffsets[i], len = l.GetValueLength(i);
             var parts = new string[len];
             for (int k = 0; k < len; k++) parts[k] = FromArrow(l.Values, start + k) ?? "null";
             return "[" + string.Join(",", parts) + "]";
@@ -309,7 +309,7 @@ public class AdbcDapperParityTests : AdbcIntegrationTestBase
             // MapArray surfaces the flattened key/value child arrays directly (not the entries struct).
             var keys = m.Keys;
             var values = m.Values;
-            int start = m.GetValueOffset(i), len = m.GetValueLength(i);
+            int start = m.ValueOffsets[i], len = m.GetValueLength(i);
             var pairs = new List<string>(len);
             for (int k = 0; k < len; k++)
                 pairs.Add((FromArrow(keys, start + k) ?? "null") + "=" + (FromArrow(values, start + k) ?? "null"));

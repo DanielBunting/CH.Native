@@ -185,4 +185,127 @@ public class ScalarConversionTests
         var ex = Record.Exception(() => Convert(block));
         Assert.IsType<NotSupportedException>(ex);
     }
+
+    // The span fast path (TypedColumn<T>/TypedColumn<T?>) must produce a byte-for-byte identical Arrow
+    // array to the boxing GetValue fallback. Real-server tests only ever hit TypedColumn<T> (the fast
+    // path); these feed the SAME values through both branches and assert the arrays agree, covering
+    // non-null and nullable storage across an integer, a float, and the bit-packed bool builder.
+
+    [Fact]
+    public void Int32_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("Int32", () => new TypedColumn<int>(new[] { 1, 2, -3, int.MinValue, int.MaxValue }, 5));
+
+    [Fact]
+    public void NullableInt32_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("Nullable(Int32)", () => new TypedColumn<int?>(new int?[] { 1, null, -3, null, 7 }, 5));
+
+    [Fact]
+    public void Float64_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("Float64", () => new TypedColumn<double>(new[] { 1.5, -2.25, 0d, double.MaxValue }, 4));
+
+    [Fact]
+    public void NullableFloat64_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("Nullable(Float64)", () => new TypedColumn<double?>(new double?[] { 1.5, null, 3d }, 3));
+
+    [Fact]
+    public void Bool_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("Bool", () => new TypedColumn<bool>(new[] { true, false, true }, 3));
+
+    [Fact]
+    public void NullableBool_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("Nullable(Bool)", () => new TypedColumn<bool?>(new bool?[] { true, null, false }, 3));
+
+    [Fact]
+    public void Date32_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("Date32", () => new TypedColumn<DateOnly>(
+            new[] { new DateOnly(2026, 6, 29), new DateOnly(1970, 1, 1), new DateOnly(2000, 2, 29) }, 3));
+
+    [Fact]
+    public void NullableDate32_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("Nullable(Date32)", () => new TypedColumn<DateOnly?>(
+            new DateOnly?[] { new DateOnly(2026, 6, 29), null, new DateOnly(1999, 12, 31) }, 3));
+
+    [Fact]
+    public void DateTimeNaive_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("DateTime", () => new TypedColumn<DateTime>(
+            new[] { new DateTime(2026, 6, 29, 12, 0, 0, DateTimeKind.Utc), new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc) }, 2));
+
+    [Fact]
+    public void DateTimeTz_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("DateTime('UTC')", () => new TypedColumn<DateTimeOffset>(
+            new[] { new DateTimeOffset(2026, 6, 29, 12, 0, 0, TimeSpan.Zero), new DateTimeOffset(2000, 1, 1, 0, 0, 0, TimeSpan.FromHours(2)) }, 2));
+
+    [Fact]
+    public void NullableDateTimeTz_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("Nullable(DateTime('UTC'))", () => new TypedColumn<DateTimeOffset?>(
+            new DateTimeOffset?[] { new DateTimeOffset(2026, 6, 29, 12, 0, 0, TimeSpan.Zero), null }, 2));
+
+    [Fact]
+    public void DecimalNarrow_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("Decimal64(4)", () => new TypedColumn<decimal>(new[] { 12.3456m, -1.5m, 0m }, 3));
+
+    [Fact]
+    public void NullableDecimalNarrow_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("Nullable(Decimal64(4))", () => new TypedColumn<decimal?>(new decimal?[] { 12.3456m, null, -0.0001m }, 3));
+
+    [Fact]
+    public void DecimalWide_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("Decimal128(6)", () => new TypedColumn<ClickHouseDecimal>(
+            new[] { (ClickHouseDecimal)12.345678m, (ClickHouseDecimal)(-1m) }, 2));
+
+    [Fact]
+    public void String_FastPath_MatchesBoxingFallback()
+        => AssertFastEqualsBoxed("String", () => new TypedColumn<string>(new[] { "hello", null!, "" }, 3));
+
+    private static void AssertFastEqualsBoxed(string type, Func<ITypedColumn> make)
+    {
+        // Fast: the concrete TypedColumn<T> hits the span branch. Boxed: the same data behind a
+        // forwarding wrapper that is NOT a TypedColumn<T>, forcing the GetValue fallback.
+        using var fastBlock = Block("a", type, make());
+        using var fast = Convert(fastBlock);
+        using var boxedBlock = Block("a", type, new ForwardingColumn(make()));
+        using var boxed = Convert(boxedBlock);
+
+        AssertArraysEqual(fast.Column(0), boxed.Column(0));
+    }
+
+    private static void AssertArraysEqual(IArrowArray a, IArrowArray b)
+    {
+        var aa = (Apache.Arrow.Array)a;
+        var bb = (Apache.Arrow.Array)b;
+        Assert.Equal(a.GetType(), b.GetType());
+        Assert.Equal(aa.Length, bb.Length);
+        Assert.Equal(aa.NullCount, bb.NullCount);
+        for (int i = 0; i < aa.Length; i++)
+        {
+            Assert.Equal(aa.IsNull(i), bb.IsNull(i));
+            if (!aa.IsNull(i))
+                Assert.Equal(BoxedValue(a, i), BoxedValue(b, i));
+        }
+    }
+
+    private static object? BoxedValue(IArrowArray array, int i) => array switch
+    {
+        Int32Array x => x.GetValue(i),
+        DoubleArray x => x.GetValue(i),
+        BooleanArray x => x.GetValue(i),
+        Date32Array x => x.GetDateOnly(i),
+        TimestampArray x => x.GetTimestamp(i),
+        Decimal128Array x => x.GetValue(i),
+        Decimal256Array x => x.GetValue(i),
+        StringArray x => x.GetString(i),
+        _ => throw new NotSupportedException($"No comparison for '{array.GetType().Name}'."),
+    };
+
+    /// <summary>Wraps an <see cref="ITypedColumn"/> so it is NOT a <c>TypedColumn&lt;T&gt;</c>, forcing the converter's boxing fallback.</summary>
+    private sealed class ForwardingColumn : ITypedColumn
+    {
+        private readonly ITypedColumn _inner;
+        public ForwardingColumn(ITypedColumn inner) => _inner = inner;
+        public Type ElementType => _inner.ElementType;
+        public int Count => _inner.Count;
+        public object? GetValue(int index) => _inner.GetValue(index);
+        public bool IsNull(int index) => _inner.IsNull(index);
+        public void Dispose() => _inner.Dispose();
+    }
 }

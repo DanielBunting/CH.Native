@@ -65,7 +65,7 @@ internal static class BlockRecordBatchConverter
             "Float32" or "BFloat16" => BuildFloat(col, n),
             "Float64" => BuildDouble(col, n),
             "Bool" => BuildBool(col, n),
-            "String" => BuildString(col, n, static v => (string)v),
+            "String" => BuildStringColumn(col, n),
             "UUID" or "IPv4" or "IPv6" => BuildString(col, n, static v => v.ToString()!),
             "FixedString" => BuildBinary(col, n),
             "Date" or "Date32" => BuildDate32(col, n),
@@ -104,80 +104,110 @@ internal static class BlockRecordBatchConverter
     private static string FormatInvariant(object v) =>
         v is IFormattable f ? f.ToString(null, CultureInfo.InvariantCulture) : v.ToString()!;
 
-    private static IArrowArray BuildInt8(ITypedColumn col, int n)
-    {
-        var b = new Int8Array.Builder();
-        for (int i = 0; i < n; i++) { if (col.IsNull(i)) b.AppendNull(); else b.Append((sbyte)col.GetValue(i)!); }
-        return b.Build();
-    }
+    private static IArrowArray BuildInt8(ITypedColumn col, int n) =>
+        BuildPrimitive<sbyte, Int8Array, Int8Array.Builder>(new Int8Array.Builder(), col, n);
 
-    private static IArrowArray BuildInt16(ITypedColumn col, int n)
-    {
-        var b = new Int16Array.Builder();
-        for (int i = 0; i < n; i++) { if (col.IsNull(i)) b.AppendNull(); else b.Append((short)col.GetValue(i)!); }
-        return b.Build();
-    }
+    private static IArrowArray BuildInt16(ITypedColumn col, int n) =>
+        BuildPrimitive<short, Int16Array, Int16Array.Builder>(new Int16Array.Builder(), col, n);
 
-    private static IArrowArray BuildInt32(ITypedColumn col, int n)
-    {
-        var b = new Int32Array.Builder();
-        for (int i = 0; i < n; i++) { if (col.IsNull(i)) b.AppendNull(); else b.Append((int)col.GetValue(i)!); }
-        return b.Build();
-    }
+    private static IArrowArray BuildInt32(ITypedColumn col, int n) =>
+        BuildPrimitive<int, Int32Array, Int32Array.Builder>(new Int32Array.Builder(), col, n);
 
-    private static IArrowArray BuildInt64(ITypedColumn col, int n)
-    {
-        var b = new Int64Array.Builder();
-        for (int i = 0; i < n; i++) { if (col.IsNull(i)) b.AppendNull(); else b.Append((long)col.GetValue(i)!); }
-        return b.Build();
-    }
+    private static IArrowArray BuildInt64(ITypedColumn col, int n) =>
+        BuildPrimitive<long, Int64Array, Int64Array.Builder>(new Int64Array.Builder(), col, n);
 
-    private static IArrowArray BuildUInt8(ITypedColumn col, int n)
-    {
-        var b = new UInt8Array.Builder();
-        for (int i = 0; i < n; i++) { if (col.IsNull(i)) b.AppendNull(); else b.Append((byte)col.GetValue(i)!); }
-        return b.Build();
-    }
+    private static IArrowArray BuildUInt8(ITypedColumn col, int n) =>
+        BuildPrimitive<byte, UInt8Array, UInt8Array.Builder>(new UInt8Array.Builder(), col, n);
 
-    private static IArrowArray BuildUInt16(ITypedColumn col, int n)
-    {
-        var b = new UInt16Array.Builder();
-        for (int i = 0; i < n; i++) { if (col.IsNull(i)) b.AppendNull(); else b.Append((ushort)col.GetValue(i)!); }
-        return b.Build();
-    }
+    private static IArrowArray BuildUInt16(ITypedColumn col, int n) =>
+        BuildPrimitive<ushort, UInt16Array, UInt16Array.Builder>(new UInt16Array.Builder(), col, n);
 
-    private static IArrowArray BuildUInt32(ITypedColumn col, int n)
-    {
-        var b = new UInt32Array.Builder();
-        for (int i = 0; i < n; i++) { if (col.IsNull(i)) b.AppendNull(); else b.Append((uint)col.GetValue(i)!); }
-        return b.Build();
-    }
+    private static IArrowArray BuildUInt32(ITypedColumn col, int n) =>
+        BuildPrimitive<uint, UInt32Array, UInt32Array.Builder>(new UInt32Array.Builder(), col, n);
 
-    private static IArrowArray BuildUInt64(ITypedColumn col, int n)
-    {
-        var b = new UInt64Array.Builder();
-        for (int i = 0; i < n; i++) { if (col.IsNull(i)) b.AppendNull(); else b.Append((ulong)col.GetValue(i)!); }
-        return b.Build();
-    }
+    private static IArrowArray BuildUInt64(ITypedColumn col, int n) =>
+        BuildPrimitive<ulong, UInt64Array, UInt64Array.Builder>(new UInt64Array.Builder(), col, n);
 
-    private static IArrowArray BuildFloat(ITypedColumn col, int n)
-    {
-        var b = new FloatArray.Builder();
-        for (int i = 0; i < n; i++) { if (col.IsNull(i)) b.AppendNull(); else b.Append((float)col.GetValue(i)!); }
-        return b.Build();
-    }
+    private static IArrowArray BuildFloat(ITypedColumn col, int n) =>
+        BuildPrimitive<float, FloatArray, FloatArray.Builder>(new FloatArray.Builder(), col, n);
 
-    private static IArrowArray BuildDouble(ITypedColumn col, int n)
+    private static IArrowArray BuildDouble(ITypedColumn col, int n) =>
+        BuildPrimitive<double, DoubleArray, DoubleArray.Builder>(new DoubleArray.Builder(), col, n);
+
+    /// <summary>
+    /// Builds a fixed-width primitive Arrow array. Fast path: bulk-copy the column's backing span
+    /// (<c>TypedColumn&lt;T&gt;</c>) or iterate a <c>TypedColumn&lt;T?&gt;</c> span — neither boxes.
+    /// Any other <see cref="ITypedColumn"/> implementation falls back to the boxing
+    /// <see cref="ITypedColumn.GetValue"/> accessor. All three branches are value-identical.
+    /// </summary>
+    private static IArrowArray BuildPrimitive<T, TArray, TBuilder>(TBuilder builder, ITypedColumn col, int n)
+        where T : struct
+        where TArray : IArrowArray
+        where TBuilder : PrimitiveArrayBuilder<T, TArray, TBuilder>
     {
-        var b = new DoubleArray.Builder();
-        for (int i = 0; i < n; i++) { if (col.IsNull(i)) b.AppendNull(); else b.Append((double)col.GetValue(i)!); }
-        return b.Build();
+        builder.Reserve(n);
+        switch (col)
+        {
+            case TypedColumn<T> nonNull:
+                builder.Append(nonNull.Values);
+                break;
+            case TypedColumn<T?> nullable:
+                foreach (var value in nullable.Values)
+                {
+                    if (value.HasValue) builder.Append(value.Value);
+                    else builder.AppendNull();
+                }
+                break;
+            default:
+                for (int i = 0; i < n; i++)
+                {
+                    if (col.IsNull(i)) builder.AppendNull();
+                    else builder.Append((T)col.GetValue(i)!);
+                }
+                break;
+        }
+        return builder.Build();
     }
 
     private static IArrowArray BuildBool(ITypedColumn col, int n)
     {
+        // BooleanArray is bit-packed (not a PrimitiveArrayBuilder<bool>), but the span branches still
+        // avoid per-cell boxing relative to the GetValue fallback.
         var b = new BooleanArray.Builder();
-        for (int i = 0; i < n; i++) { if (col.IsNull(i)) b.AppendNull(); else b.Append((bool)col.GetValue(i)!); }
+        switch (col)
+        {
+            case TypedColumn<bool> nonNull:
+                foreach (var value in nonNull.Values) b.Append(value);
+                break;
+            case TypedColumn<bool?> nullable:
+                foreach (var value in nullable.Values)
+                {
+                    if (value.HasValue) b.Append(value.Value);
+                    else b.AppendNull();
+                }
+                break;
+            default:
+                for (int i = 0; i < n; i++) { if (col.IsNull(i)) b.AppendNull(); else b.Append((bool)col.GetValue(i)!); }
+                break;
+        }
+        return b.Build();
+    }
+
+    // Dedicated builder for the String column. A ClickHouse String (and Nullable(String)) reads back as
+    // TypedColumn<string> (nulls are null refs), so the span path needs no boxing and no conversion;
+    // the other text-projected types keep the convert-delegate overload below.
+    private static IArrowArray BuildStringColumn(ITypedColumn col, int n)
+    {
+        var b = new StringArray.Builder();
+        b.Reserve(n);
+        if (col is TypedColumn<string> typed)
+        {
+            foreach (var s in typed.Values) { if (s is null) b.AppendNull(); else b.Append(s); }
+        }
+        else
+        {
+            for (int i = 0; i < n; i++) { if (col.IsNull(i)) b.AppendNull(); else b.Append((string)col.GetValue(i)!); }
+        }
         return b.Build();
     }
 
@@ -202,35 +232,65 @@ internal static class BlockRecordBatchConverter
     private static IArrowArray BuildDate32(ITypedColumn col, int n)
     {
         var b = new Date32Array.Builder();
-        for (int i = 0; i < n; i++)
+        b.Reserve(n);
+        // Same conversion as the boxing path (DateOnly → midnight-UTC DateTime), sourced from the
+        // typed span where possible so no DateOnly is boxed.
+        switch (col)
         {
-            if (col.IsNull(i)) b.AppendNull();
-            else b.Append(((DateOnly)col.GetValue(i)!).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc));
+            case TypedColumn<DateOnly> nonNull:
+                foreach (var v in nonNull.Values) b.Append(Date32Of(v));
+                break;
+            case TypedColumn<DateOnly?> nullable:
+                foreach (var v in nullable.Values) { if (v.HasValue) b.Append(Date32Of(v.Value)); else b.AppendNull(); }
+                break;
+            default:
+                for (int i = 0; i < n; i++) { if (col.IsNull(i)) b.AppendNull(); else b.Append(Date32Of((DateOnly)col.GetValue(i)!)); }
+                break;
         }
         return b.Build();
     }
+
+    private static DateTime Date32Of(DateOnly d) => d.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
 
     private static IArrowArray BuildTimestamp(ITypedColumn col, int n, TimestampType type)
     {
         var b = new TimestampArray.Builder(type);
-        for (int i = 0; i < n; i++)
+        b.Reserve(n);
+        // A timezone-aware ClickHouse DateTime/DateTime64 column reads as DateTimeOffset (offset carried
+        // on the value); a naive one reads as DateTime (interpreted as UTC). Take the typed-span path for
+        // either storage; fall back to the boxing value-switch for anything else.
+        switch (col)
         {
-            if (col.IsNull(i)) { b.AppendNull(); continue; }
-
-            // A timezone-aware ClickHouse DateTime/DateTime64 column reads as DateTimeOffset (the
-            // offset is carried on the value); a naive one reads as DateTime (interpreted as UTC).
-            var value = col.GetValue(i)!;
-            var instant = value switch
-            {
-                DateTimeOffset dto => dto,
-                DateTime dt => new DateTimeOffset(DateTime.SpecifyKind(dt, DateTimeKind.Utc)),
-                _ => throw new NotSupportedException(
-                    $"Unexpected timestamp element type '{value.GetType()}'."),
-            };
-            b.Append(instant);
+            case TypedColumn<DateTimeOffset> nonNull:
+                foreach (var v in nonNull.Values) b.Append(v);
+                break;
+            case TypedColumn<DateTimeOffset?> nullable:
+                foreach (var v in nullable.Values) { if (v.HasValue) b.Append(v.Value); else b.AppendNull(); }
+                break;
+            case TypedColumn<DateTime> nonNull:
+                foreach (var v in nonNull.Values) b.Append(InstantOf(v));
+                break;
+            case TypedColumn<DateTime?> nullable:
+                foreach (var v in nullable.Values) { if (v.HasValue) b.Append(InstantOf(v.Value)); else b.AppendNull(); }
+                break;
+            default:
+                for (int i = 0; i < n; i++)
+                {
+                    if (col.IsNull(i)) { b.AppendNull(); continue; }
+                    var value = col.GetValue(i)!;
+                    b.Append(value switch
+                    {
+                        DateTimeOffset dto => dto,
+                        DateTime dt => InstantOf(dt),
+                        _ => throw new NotSupportedException($"Unexpected timestamp element type '{value.GetType()}'."),
+                    });
+                }
+                break;
         }
         return b.Build();
     }
+
+    private static DateTimeOffset InstantOf(DateTime dt) => new(DateTime.SpecifyKind(dt, DateTimeKind.Utc));
 
     // ClickHouse Time/Time64 read back as TimeOnly (100-ns ticks since midnight). Arrow Time32 carries
     // seconds (or millis); Arrow Time64 carries micros (or nanos). Convert ticks into the column's unit.
@@ -264,21 +324,38 @@ internal static class BlockRecordBatchConverter
         if (arrowType is Decimal128Type d128)
         {
             var b = new Decimal128Array.Builder(d128);
-            for (int i = 0; i < n; i++)
-            {
-                if (col.IsNull(i)) b.AppendNull();
-                else b.Append(DecimalString(col.GetValue(i)!));
-            }
+            FillDecimal(col, n, s => b.Append(s), () => b.AppendNull());
             return b.Build();
         }
 
         var b256 = new Decimal256Array.Builder((Decimal256Type)arrowType);
-        for (int i = 0; i < n; i++)
-        {
-            if (col.IsNull(i)) b256.AppendNull();
-            else b256.Append(DecimalString(col.GetValue(i)!));
-        }
+        FillDecimal(col, n, s => b256.Append(s), () => b256.AppendNull());
         return b256.Build();
+    }
+
+    // Narrow decimals (Decimal32/64) read back as System.Decimal, wide ones (Decimal128/256) as
+    // ClickHouseDecimal. Render each to the same invariant string the boxing path produces, sourced
+    // from the typed span where possible so the value struct is not boxed.
+    private static void FillDecimal(ITypedColumn col, int n, Action<string> append, Action appendNull)
+    {
+        switch (col)
+        {
+            case TypedColumn<decimal> nonNull:
+                foreach (var v in nonNull.Values) append(v.ToString(CultureInfo.InvariantCulture));
+                break;
+            case TypedColumn<decimal?> nullable:
+                foreach (var v in nullable.Values) { if (v.HasValue) append(v.Value.ToString(CultureInfo.InvariantCulture)); else appendNull(); }
+                break;
+            case TypedColumn<ClickHouseDecimal> nonNull:
+                foreach (var v in nonNull.Values) append(v.ToString());
+                break;
+            case TypedColumn<ClickHouseDecimal?> nullable:
+                foreach (var v in nullable.Values) { if (v.HasValue) append(v.Value.ToString()); else appendNull(); }
+                break;
+            default:
+                for (int i = 0; i < n; i++) { if (col.IsNull(i)) appendNull(); else append(DecimalString(col.GetValue(i)!)); }
+                break;
+        }
     }
 
     // A ClickHouse Decimal column reads back as ClickHouseDecimal (full 38/76-digit precision) for

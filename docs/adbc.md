@@ -168,11 +168,11 @@ dotnet run --project benchmarks/CH.Native.Benchmarks -c Release --framework net9
 
 | Path | Mean | Allocated |
 |---|---:|---:|
-| Native `DataReader` (typed accessors) | ~82 ms | ~54 MB |
-| Native `QueryStream<T>` (typed POCO) | ~108 ms | ~105 MB |
-| **ADBC** sum columns (Arrow spans) | ~118 ms | ~259 MB |
-| **ADBC** drain RecordBatches (no per-value work) | ~127 ms | ~259 MB |
-| Native Dapper `QueryAsync<T>` | ~153 ms | ~117 MB |
+| Native `DataReader` (typed accessors) | ~76 ms | ~54 MB |
+| **ADBC** sum columns (Arrow spans) | ~89 ms | ~151 MB |
+| **ADBC** drain RecordBatches (no per-value work) | ~99 ms | ~154 MB |
+| Native `QueryStream<T>` (typed POCO) | ~110 ms | ~101 MB |
+| Native Dapper `QueryAsync<T>` | ~180 ms | ~117 MB |
 
 At **small result sets** (100 rows) ADBC is competitive — on par with the leanest `DataReader` path
 and faster than the row mappers, because there is no per-row POCO/mapper step.
@@ -181,16 +181,25 @@ What to take from this:
 
 - **Consuming Arrow is cheap.** "Sum via Arrow spans" is no slower than "drain only" — reducing over
   the column buffers costs essentially nothing once the batch exists. ADBC's value is the columnar
-  shape and zero-copy access on the *consumer* side.
-- **The current cost is decode-side, not read-side.** The driver builds each Arrow array through the
-  boxing `ITypedColumn.GetValue` accessor (one box per cell — ~4M for 4 columns × 1M rows) plus the
-  Arrow builders' growable buffers, which is why ADBC allocates more and runs slower than the typed
-  row paths on large scans today. Span-based fast paths for the hot primitive columns are a planned
-  optimization; this table is the "before" baseline for that work.
+  shape and zero-copy access on the *consumer* side, and on time it now lands second only to the raw
+  `DataReader`.
+- **Decode uses zero-copy span paths.** Fixed-width primitives (Int8–64, UInt8–64, Float, Double,
+  Bool), `Date`/`Date32`, `DateTime`/`DateTime64`, `Decimal`, and `String` are all decoded straight
+  from the column's backing span with no per-cell boxing.
+- **The remaining gap vs `DataReader` is mostly string materialization.** A `String` column still
+  surfaces 1M `System.String` objects (the reader materializes them before the Arrow layer sees them)
+  plus the Arrow value/offset buffers — that is the bulk of the ~151 MB. Numeric-only scans allocate
+  far less. Decoding UTF-8 straight into Arrow string buffers (bypassing `System.String`) is the next
+  lever, and a larger change.
 
-In short: prefer ADBC when the consumer speaks Arrow or the result set is small/medium; for large
-pure-CLR scans where you just need typed values, the `DataReader`/`QueryStream<T>` paths are leaner
-until the converter's span fast-paths land.
+For context, the ADBC scan above started at ~259 MB / ~127 ms when every column went through the
+boxing `GetValue` accessor; adding span fast paths for the primitive columns brought it to
+~196 MB / ~109 ms, and extending them to `Date`/`DateTime`/`Decimal`/`String` brought it to its
+current ~151 MB / ~89 ms.
+
+In short: prefer ADBC when the consumer speaks Arrow, the result set is small/medium, or you are
+scanning numeric/columnar data; for large string-heavy pure-CLR scans where you just need typed
+values, the `DataReader`/`QueryStream<T>` paths remain the leanest on allocation.
 
 ## Compatibility
 
