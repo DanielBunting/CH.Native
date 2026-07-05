@@ -307,10 +307,12 @@ public class ParameterSerializerTests
     #region Null Handling
 
     [Fact]
-    public void Serialize_NullWithNullableType_ReturnsNULL()
+    public void Serialize_NullWithNullableType_ReturnsEscapedNullMarker()
     {
+        // Two-pass parameter decode: the outer quotes are stripped, then the content `\N` is read as
+        // the escaped-text NULL marker. (Emitting the literal "NULL" is rejected by the server.)
         var result = ParameterSerializer.Serialize(null, "Nullable(Int32)");
-        Assert.Equal("NULL", result);
+        Assert.Equal("'\\\\N'", result);
     }
 
     [Fact]

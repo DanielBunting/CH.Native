@@ -551,6 +551,13 @@ public sealed class ClickHouseConnectionSettingsBuilder
     }
 
     /// <summary>
+    /// The logger factory currently configured on this builder, if any. Used by the
+    /// dependency-injection integration to decide whether to supply the container's
+    /// <see cref="ILoggerFactory"/> as a fallback without overriding an explicit one.
+    /// </summary>
+    internal ILoggerFactory? CurrentLoggerFactory => _telemetry?.LoggerFactory;
+
+    /// <summary>
     /// Sets the string materialization strategy.
     /// </summary>
     /// <param name="strategy">The materialization strategy.</param>

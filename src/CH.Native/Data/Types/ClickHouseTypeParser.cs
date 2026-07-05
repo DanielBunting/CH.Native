@@ -49,6 +49,29 @@ public static class ClickHouseTypeParser
         }
     }
 
+    /// <summary>
+    /// Whether values of the given ClickHouse type may be NULL, accounting for the transparent
+    /// wrappers <c>LowCardinality(...)</c> and <c>SimpleAggregateFunction(fn, T)</c> which are
+    /// serialized as their inner type. A plain <c>StartsWith("Nullable(")</c> check misses
+    /// <c>LowCardinality(Nullable(X))</c> and <c>SimpleAggregateFunction(fn, Nullable(X))</c>.
+    /// Returns <see langword="false"/> for a type name that cannot be parsed.
+    /// </summary>
+    internal static bool IsEffectivelyNullable(string typeName)
+    {
+        var parsed = TryParse(typeName);
+        return parsed is not null && IsNullable(parsed);
+
+        static bool IsNullable(ClickHouseType t) => t.BaseName switch
+        {
+            "Nullable" => true,
+            // Transparent wrappers: LowCardinality has a single inner type arg; the parser stores
+            // SimpleAggregateFunction's inner type as its sole type arg (function name is elsewhere).
+            "LowCardinality" or "SimpleAggregateFunction" when t.TypeArguments.Count >= 1
+                => IsNullable(t.TypeArguments[^1]),
+            _ => false,
+        };
+    }
+
     private ref struct Parser
     {
         private readonly string _input;
@@ -361,10 +384,20 @@ public static class ClickHouseTypeParser
             while (!IsAtEnd)
             {
                 var c = Peek();
+                // Backslash escape (e.g. a label like 'a\'b' or 'C:\\x' in an Enum(...) type
+                // string): consume the backslash and the escaped character verbatim so the
+                // escaped quote does not terminate the literal.
+                if (c == '\\')
+                {
+                    Advance();
+                    if (!IsAtEnd)
+                        Advance();
+                    continue;
+                }
                 if (c == '\'')
                 {
                     Advance();
-                    // Check for escaped quote ('')
+                    // Check for doubled-quote escape ('')
                     if (!IsAtEnd && Peek() == '\'')
                     {
                         Advance();

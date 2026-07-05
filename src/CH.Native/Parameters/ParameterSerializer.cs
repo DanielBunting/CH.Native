@@ -67,6 +67,13 @@ public static class ParameterSerializer
             // IP addresses - quoted format
             System.Net.IPAddress ip => EscapeStringForParameter(ip.ToString()),
 
+            // .NET enum - bound by its member name, which is the natural Enum8/Enum16 label
+            // (matches the {name:Enum8('a'=1,...)} placeholder the server decodes).
+            Enum en => EscapeStringForParameter(en.ToString()),
+
+            // Tuple / ValueTuple - emitted as a (e1, e2, ...) literal
+            System.Runtime.CompilerServices.ITuple tuple => EscapeStringForParameter(SerializeTupleLiteral(tuple, clickHouseType)),
+
             // Arrays/Collections (but not string which is IEnumerable<char>)
             IEnumerable enumerable when value is not string => SerializeArray(enumerable, clickHouseType),
 
@@ -145,9 +152,12 @@ public static class ParameterSerializer
 
     private static string SerializeNull(string clickHouseType)
     {
-        // For Nullable types, return NULL
-        if (clickHouseType.StartsWith("Nullable(", StringComparison.Ordinal))
-            return "NULL";
+        // For Nullable types (including inside the transparent LowCardinality / SimpleAggregateFunction
+        // wrappers) emit the null marker. The server decodes a parameter value in two passes
+        // (readQuotedString to strip the outer quotes, then escaped-text on the content); escaped-text
+        // NULL is `\N`, so the wire value is a quoted string that unwraps to `\N`.
+        if (Data.Types.ClickHouseTypeParser.IsEffectivelyNullable(clickHouseType))
+            return "'\\\\N'";
 
         throw new InvalidOperationException(
             $"Cannot pass NULL value for non-nullable type '{clickHouseType}'. " +
@@ -274,6 +284,12 @@ public static class ParameterSerializer
             // Guid
             Guid g => $"'{g:D}'",
 
+            // Enum member name, quoted as a label inside the composite literal.
+            Enum en => EscapeStringForArray(en.ToString()),
+
+            // Nested tuple — recurse to produce a (a, b, c) literal.
+            System.Runtime.CompilerServices.ITuple t => SerializeTupleLiteral(t, clickHouseType),
+
             // Nested arrays — recurse to produce a nested literal [a, b, c].
             // String is IEnumerable<char>; the earlier arm handles it first.
             IEnumerable e => SerializeArrayLiteral(e, clickHouseType),
@@ -311,6 +327,48 @@ public static class ParameterSerializer
         }
         sb.Append('\'');
         return sb.ToString();
+    }
+
+    private static string SerializeTupleLiteral(System.Runtime.CompilerServices.ITuple tuple, string clickHouseType)
+    {
+        var elementTypes = ExtractTupleElementTypes(clickHouseType);
+        var elements = new List<string>(tuple.Length);
+        for (int i = 0; i < tuple.Length; i++)
+        {
+            var elementType = i < elementTypes.Count ? elementTypes[i] : "String";
+            elements.Add(SerializeRawValue(tuple[i], elementType));
+        }
+        return $"({string.Join(", ", elements)})";
+    }
+
+    private static List<string> ExtractTupleElementTypes(string tupleType)
+    {
+        // Tuple(Int32, String) -> ["Int32", "String"]; Tuple(Array(Int32), UUID) preserved.
+        // Splits on top-level commas only (nested parentheses are respected). Named-tuple
+        // elements ("x Int32") keep their whole text — SerializeRawValue only consults the
+        // element type for arrays/tuples, so a leading name is harmless for scalars.
+        var result = new List<string>();
+        if (!tupleType.StartsWith("Tuple(", StringComparison.Ordinal) ||
+            !tupleType.EndsWith(")", StringComparison.Ordinal))
+            return result;
+
+        var inner = tupleType[6..^1];
+        var depth = 0;
+        var start = 0;
+        for (int i = 0; i < inner.Length; i++)
+        {
+            var c = inner[i];
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (c == ',' && depth == 0)
+            {
+                result.Add(inner[start..i].Trim());
+                start = i + 1;
+            }
+        }
+        if (start < inner.Length)
+            result.Add(inner[start..].Trim());
+        return result;
     }
 
     private static string ExtractArrayElementType(string arrayType)

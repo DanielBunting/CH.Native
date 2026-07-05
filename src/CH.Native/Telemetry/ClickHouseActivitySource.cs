@@ -52,7 +52,13 @@ public static class ClickHouseActivitySource
             activity.SetTag("db.name", database);
 
         if (settings?.IncludeSqlInTraces != false)
-            activity.SetTag("db.statement", SqlSanitizer.Sanitize(sql));
+        {
+            var statement = SqlSanitizer.Sanitize(sql);
+            var max = settings?.StatementMaxLength;
+            if (max is > 0 && statement.Length > max.Value)
+                statement = statement[..max.Value] + "…";
+            activity.SetTag("db.statement", statement);
+        }
 
         if (queryId != null)
             activity.SetTag("db.clickhouse.query_id", queryId);

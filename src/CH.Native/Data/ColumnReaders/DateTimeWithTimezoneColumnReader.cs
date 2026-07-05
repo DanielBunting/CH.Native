@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using CH.Native.Protocol;
 
@@ -100,7 +101,75 @@ internal sealed class DateTimeWithTimezoneColumnReader : IColumnReader<DateTimeO
             }
         }
 
+        // ClickHouse can present synthetic fixed-offset zone names (e.g. "Fixed/UTC+05:30",
+        // "UTC-08:00") that no OS timezone database contains. Resolve those to a custom
+        // fixed-offset TimeZoneInfo rather than failing the whole column read (driver #370).
+        var fixedOffset = TryParseFixedOffsetTimeZone(timezone);
+        if (fixedOffset is not null)
+            return fixedOffset;
+
         throw new TimeZoneNotFoundException($"Timezone '{timezone}' not found.");
+    }
+
+    /// <summary>
+    /// Parses a synthetic fixed-offset timezone name (optionally "Fixed/"-prefixed, with a
+    /// "UTC"/"GMT" base) of the form <c>±HH[:MM[:SS]]</c> into a custom fixed-offset
+    /// <see cref="TimeZoneInfo"/>. Returns <see langword="null"/> when the input is not a
+    /// recognisable fixed-offset name (so real IANA/Windows zones fall through to lookup).
+    /// A zero offset maps to <see cref="TimeZoneInfo.Utc"/>.
+    /// </summary>
+    internal static TimeZoneInfo? TryParseFixedOffsetTimeZone(string timezone)
+    {
+        if (string.IsNullOrWhiteSpace(timezone))
+            return null;
+
+        var s = timezone.Trim();
+
+        if (s.StartsWith("Fixed/", StringComparison.OrdinalIgnoreCase))
+            s = s["Fixed/".Length..];
+
+        if (s.StartsWith("UTC", StringComparison.OrdinalIgnoreCase))
+            s = s[3..];
+        else if (s.StartsWith("GMT", StringComparison.OrdinalIgnoreCase))
+            s = s[3..];
+
+        // A bare "UTC"/"GMT" with no trailing offset is just UTC.
+        if (s.Length == 0)
+            return TimeZoneInfo.Utc;
+
+        if (s[0] != '+' && s[0] != '-')
+            return null;
+
+        var negative = s[0] == '-';
+        var parts = s[1..].Split(':');
+        if (parts.Length is < 1 or > 3)
+            return null;
+
+        int minutes = 0, seconds = 0;
+        if (!int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var hours))
+            return null;
+        if (parts.Length >= 2 && !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out minutes))
+            return null;
+        if (parts.Length == 3 && !int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out seconds))
+            return null;
+        if (hours > 14 || minutes > 59 || seconds > 59)
+            return null;
+
+        var offset = new TimeSpan(hours, minutes, seconds);
+        if (negative)
+            offset = -offset;
+
+        // TimeZoneInfo only permits base offsets within ±14:00.
+        if (offset > TimeSpan.FromHours(14) || offset < TimeSpan.FromHours(-14))
+            return null;
+        if (offset == TimeSpan.Zero)
+            return TimeZoneInfo.Utc;
+
+        var sign = negative ? "-" : "+";
+        var id = seconds != 0
+            ? $"UTC{sign}{hours:D2}:{minutes:D2}:{seconds:D2}"
+            : $"UTC{sign}{hours:D2}:{minutes:D2}";
+        return TimeZoneInfo.CreateCustomTimeZone(id, offset, id, id);
     }
 
     /// <summary>

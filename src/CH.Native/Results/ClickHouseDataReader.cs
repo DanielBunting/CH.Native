@@ -546,7 +546,7 @@ public sealed class ClickHouseDataReader : DbDataReader
             row["DataType"] = GetFieldType(i);
             var typeName = GetDataTypeName(i);
             row["ProviderType"] = typeName;
-            row["AllowDBNull"] = typeName.StartsWith("Nullable(", StringComparison.Ordinal);
+            row["AllowDBNull"] = Data.Types.ClickHouseTypeParser.IsEffectivelyNullable(typeName);
             table.Rows.Add(row);
         }
 

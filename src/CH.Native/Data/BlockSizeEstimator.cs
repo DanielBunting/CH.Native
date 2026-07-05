@@ -35,6 +35,15 @@ public static class BlockSizeEstimator
     /// </summary>
     private static long GetFixedColumnSize(string type, int rowCount)
     {
+        // SimpleAggregateFunction(fn, T) is a transparent passthrough for T — size it as T so a
+        // fixed inner type (e.g. Nullable(Float64)) is not misreported as variable-length.
+        if (type.StartsWith("SimpleAggregateFunction(", StringComparison.Ordinal))
+        {
+            var parsed = Types.ClickHouseTypeParser.TryParse(type);
+            if (parsed is { BaseName: "SimpleAggregateFunction", TypeArguments.Count: 1 })
+                return GetFixedColumnSize(parsed.TypeArguments[0].OriginalTypeName, rowCount);
+        }
+
         // Handle Nullable wrapper
         if (type.StartsWith("Nullable("))
         {

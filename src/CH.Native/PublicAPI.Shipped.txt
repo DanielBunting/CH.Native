@@ -1082,6 +1082,8 @@ CH.Native.Telemetry.TelemetrySettings.IncludeSqlInTraces.get -> bool
 CH.Native.Telemetry.TelemetrySettings.IncludeSqlInTraces.init -> void
 CH.Native.Telemetry.TelemetrySettings.LoggerFactory.get -> Microsoft.Extensions.Logging.ILoggerFactory?
 CH.Native.Telemetry.TelemetrySettings.LoggerFactory.init -> void
+CH.Native.Telemetry.TelemetrySettings.StatementMaxLength.get -> int?
+CH.Native.Telemetry.TelemetrySettings.StatementMaxLength.init -> void
 abstract CH.Native.Data.ColumnSkippers.FixedSizeColumnSkipper.TypeName.get -> string!
 const CH.Native.Data.Dynamic.ClickHouseDynamic.NullDiscriminator = 255 -> byte
 const CH.Native.Data.Variant.ClickHouseVariant.NullDiscriminator = 255 -> byte
