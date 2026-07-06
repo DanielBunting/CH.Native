@@ -3,9 +3,9 @@ name: System Tests (nightly)
 # Heavyweight system-test categories that need multi-node ClickHouse,
 # Toxiproxy chaos injection, or long stress runs. The fast PR pipeline
 # (build-and-test.yml) covers Allocation/Observability/Cancellation/Security
-# /Linq/Streams/ServerFailures/DependencyInjection. This workflow covers
-# the categories the README marks "1–15 min": Cluster, Chaos, Resilience,
-# Stress, VersionMatrix.
+# /Linq/Streams/ServerFailures/DependencyInjection plus Resilience/Chaos
+# (Toxiproxy). This workflow re-runs Resilience/Chaos for drift and adds the
+# categories too heavy for PRs: Cluster, Stress, VersionMatrix.
 #
 # Soak is opt-in (workflow_dispatch only) — the nightly cadence shouldn't
 # pay for a 10–60 min run on every schedule.
