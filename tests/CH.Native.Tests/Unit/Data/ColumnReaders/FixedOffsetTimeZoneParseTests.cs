@@ -17,6 +17,7 @@ public class FixedOffsetTimeZoneParseTests
     [InlineData("+05:45", 5, 45)]
     [InlineData("-03:00", -3, 0)]
     [InlineData("Fixed/UTC+14:00", 14, 0)]
+    [InlineData("UTC+05:30:00", 5, 30)]   // 3-part form with zero seconds -> whole-minute offset
     public void TryParse_ValidFixedOffsets(string name, int hours, int minutes)
     {
         var tz = DateTimeWithTimezoneColumnReader.TryParseFixedOffsetTimeZone(name);
@@ -38,8 +39,16 @@ public class FixedOffsetTimeZoneParseTests
     [Theory]
     [InlineData("America/New_York")]  // real IANA zone — must fall through to system lookup
     [InlineData("Europe/London")]
-    [InlineData("UTC+15:00")]         // beyond ±14:00
-    [InlineData("UTC+aa:bb")]
+    [InlineData("UTC+15:00")]         // hours beyond ±14
+    [InlineData("UTC+14:30")]         // hours within range but total offset > 14:00
+    [InlineData("UTC+aa:bb")]         // non-numeric hours
+    [InlineData("UTC+05:bb")]         // non-numeric minutes (hours parse ok)
+    [InlineData("UTC+05:30:cc")]      // non-numeric seconds (hours/minutes parse ok)
+    [InlineData("UTC+05:99")]         // minutes out of range
+    [InlineData("UTC+05:30:99")]      // seconds out of range
+    [InlineData("+01:02:03:04")]      // too many components (>3)
+    [InlineData("Fixed/UTC+05:30:15")] // sub-minute offset — not representable by TimeZoneInfo
+    [InlineData("-05:30:15")]
     [InlineData("")]
     [InlineData("   ")]
     public void TryParse_NonFixedOrOutOfRange_ReturnsNull(string name) =>

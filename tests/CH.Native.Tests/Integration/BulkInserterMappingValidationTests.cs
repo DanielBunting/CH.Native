@@ -41,6 +41,14 @@ public class BulkInserterMappingValidationTests
         public string this[int i] => i.ToString();
     }
 
+    private sealed class WriteOnlyPropertyPoco
+    {
+        public int Id { get; set; }
+
+        // Write-only (no getter) -> CanRead == false, so it must be excluded from the mapping.
+        public int WriteOnly { set { } }
+    }
+
     [Fact]
     public async Task DuplicateColumnNames_Throws()
     {
@@ -95,6 +103,29 @@ public class BulkInserterMappingValidationTests
             await using var inserter = connection.CreateBulkInserter<IndexerPoco>(table);
             await inserter.InitAsync();
             await inserter.AddAsync(new IndexerPoco { Id = 1, Name = "ok" });
+            await inserter.CompleteAsync();
+
+            var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {table}");
+            Assert.Equal(1, count);
+        }
+        finally
+        {
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [Fact]
+    public async Task WriteOnlyProperty_IsExcluded_InsertSucceeds()
+    {
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+        var table = $"wo_{Guid.NewGuid():N}";
+        await connection.ExecuteNonQueryAsync($"CREATE TABLE {table} (Id Int32) ENGINE = Memory");
+        try
+        {
+            await using var inserter = connection.CreateBulkInserter<WriteOnlyPropertyPoco>(table);
+            await inserter.InitAsync();
+            await inserter.AddAsync(new WriteOnlyPropertyPoco { Id = 7, WriteOnly = 99 });
             await inserter.CompleteAsync();
 
             var count = await connection.ExecuteScalarAsync<long>($"SELECT count() FROM {table}");

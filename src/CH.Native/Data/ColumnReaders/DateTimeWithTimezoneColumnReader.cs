@@ -165,10 +165,13 @@ internal sealed class DateTimeWithTimezoneColumnReader : IColumnReader<DateTimeO
         if (offset == TimeSpan.Zero)
             return TimeZoneInfo.Utc;
 
+        // TimeZoneInfo base offsets must be whole minutes — a sub-minute (seconds-bearing) offset
+        // cannot be represented, so fall through rather than let CreateCustomTimeZone throw.
+        if (offset.Ticks % TimeSpan.TicksPerMinute != 0)
+            return null;
+
         var sign = negative ? "-" : "+";
-        var id = seconds != 0
-            ? $"UTC{sign}{hours:D2}:{minutes:D2}:{seconds:D2}"
-            : $"UTC{sign}{hours:D2}:{minutes:D2}";
+        var id = $"UTC{sign}{hours:D2}:{minutes:D2}";
         return TimeZoneInfo.CreateCustomTimeZone(id, offset, id, id);
     }
 

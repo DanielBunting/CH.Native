@@ -505,7 +505,7 @@ public sealed class Block
     /// column as its inner type <c>T</c>. Declaring the full <c>SimpleAggregateFunction(...)</c> in the
     /// block header desyncs the server's insert deserializer, corrupting the connection.
     /// </summary>
-    private static string ResolveWireColumnType(string columnType)
+    internal static string ResolveWireColumnType(string columnType)
     {
         if (!columnType.StartsWith("SimpleAggregateFunction(", StringComparison.Ordinal))
             return columnType;
