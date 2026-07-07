@@ -348,7 +348,7 @@ public static class ClickHouseServiceCollectionExtensions
             .WithCompression(s.Compress)
             .WithCompressionMethod(s.CompressionMethod);
 
-        if (s.Password is { Length: > 0 }) b.WithPassword(s.Password);
+        if (s.Password.Length > 0) b.WithPassword(s.Password);
         if (s.UseTls) b.WithTls().WithTlsPort(s.TlsPort);
         if (s.AllowInsecureTls) b.WithAllowInsecureTls();
         if (s.TlsCaCertificatePath is { Length: > 0 }) b.WithTlsCaCertificate(s.TlsCaCertificatePath);
