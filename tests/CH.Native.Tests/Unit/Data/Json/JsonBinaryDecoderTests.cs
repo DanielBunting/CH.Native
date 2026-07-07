@@ -140,4 +140,41 @@ public class JsonBinaryDecoderTests
         });
         Assert.Contains("version 3", ex.Message);
     }
+
+    [Fact]
+    public void DecodeVersion0_FixedWidthScalars_CoverValueArms()
+    {
+        var paths = new[] { "i8", "u8", "i16", "u16", "u32", "u64", "f32", "f64", "flag" };
+        var types = new[] { "Int8", "UInt8", "Int16", "UInt16", "UInt32", "UInt64", "Float32", "Float64", "Bool" };
+
+        using var buffer = new PooledBufferWriter();
+        var writer = new ProtocolWriter(buffer);
+        writer.WriteUInt64((ulong)paths.Length);
+        foreach (var p in paths) writer.WriteString(p);
+        foreach (var t in types) writer.WriteString(t);
+        writer.WriteByte(5);              // Int8 -> sbyte
+        writer.WriteByte(200);            // UInt8 -> byte
+        writer.WriteInt16(-100);          // Int16 -> short
+        writer.WriteUInt16(60000);        // UInt16 -> ushort
+        writer.WriteUInt32(4000000000u);  // UInt32 -> uint
+        writer.WriteUInt64(5000000000UL); // UInt64 -> ulong
+        writer.WriteFloat32(1.5f);        // Float32 -> float
+        writer.WriteFloat64(2.5);         // Float64 -> double
+        writer.WriteByte(1);              // Bool -> true
+
+        var pr = new ProtocolReader(new ReadOnlySequence<byte>(buffer.WrittenMemory));
+        var docs = JsonBinaryDecoder.DecodeVersion0(ref pr, rowCount: 1, ReaderFactory);
+
+        var root = docs[0].RootElement;
+        Assert.Equal(5, root.GetProperty("i8").GetInt32());
+        Assert.Equal(200, root.GetProperty("u8").GetInt32());
+        Assert.Equal(-100, root.GetProperty("i16").GetInt32());
+        Assert.Equal(60000, root.GetProperty("u16").GetInt32());
+        Assert.Equal(4000000000u, root.GetProperty("u32").GetUInt32());
+        Assert.Equal(5000000000UL, root.GetProperty("u64").GetUInt64());
+        Assert.Equal(1.5f, root.GetProperty("f32").GetSingle());
+        Assert.Equal(2.5, root.GetProperty("f64").GetDouble());
+        Assert.True(root.GetProperty("flag").GetBoolean());
+        docs[0].Dispose();
+    }
 }
