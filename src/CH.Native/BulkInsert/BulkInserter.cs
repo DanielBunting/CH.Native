@@ -862,7 +862,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         {
             if (string.IsNullOrWhiteSpace(mapping.ColumnName))
                 throw new InvalidOperationException(
-                    $"Type {typeof(T).Name} maps property '{mapping.Property?.Name}' to an empty or whitespace column name. " +
+                    $"Type {typeof(T).Name} maps property '{mapping.Property!.Name}' to an empty or whitespace column name. " +
                     "Set a non-empty [ClickHouseColumn(Name = \"...\")].");
         }
 
@@ -872,7 +872,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         if (duplicate is not null)
             throw new InvalidOperationException(
                 $"Type {typeof(T).Name} maps multiple properties to column '{duplicate.Key}' " +
-                $"({string.Join(", ", duplicate.Select(m => m.Property?.Name))}). Column names must be unique.");
+                $"({string.Join(", ", duplicate.Select(m => m.Property!.Name))}). Column names must be unique.");
 
         return properties;
     }
