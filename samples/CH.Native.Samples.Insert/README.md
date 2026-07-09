@@ -31,12 +31,13 @@ docker run -d --rm -p 9000:9000 --name ch-sample \
 | `collection` | Order checkout — 10k line items in one batch | `connection.Table<T>(name).InsertAsync(IEnumerable<T>)`; partitioned MergeTree, revenue rollup |
 | `async` | Paginated event ingestion — 10 pages × 1k events | `connection.Table<T>(name).InsertAsync(IAsyncEnumerable<T>)`; bounded-memory streaming |
 | `oneshot` | Sensor telemetry — 100k readings into a partitioned table | `connection.BulkInsertAsync<T>(...)`; perf timing, per-sensor averages |
-| `long-lived` | Hot-path log ingestion — 10 batches × 5k entries | `BulkInserter<T>` (Init / Add / Complete); amortised handshake, per-batch timing |
+| `long-lived` | Hot-path log ingestion — 10 batches × 5k entries | `BulkInserter<T>` (Add / Complete, lazy init); amortised handshake, per-batch timing |
 | `dynamic` | ETL pipeline — three flavors of POCO-less insert | `DynamicBulkInserter` one-shot, granular streaming, and pre-supplied `ColumnTypes` (skips schema probe) |
 | `pooled` | Service-code metric ingest — 8 concurrent workers × 5k rows | `dataSource.Table<T>(name).InsertAsync(rows)`; pool stats after fan-out |
 | `parallel` | Bulk backfill — one 500k-row import fanned across 4 pipes | `dataSource.BulkInsertAsync(...)` one-shot and `ParallelBulkInserter<T>` streaming; `RowsWritten`, pool stats |
 | `cross-db` | Orders + inventory across two databases on one connection | Qualified `db.table` inserts — typed via `Table<T>("db.table")`, dynamic via `(database, tableName)` overload |
 | `sql` | One-off admin / backfill flows | `ClickHouseCommand` — parameterised single-row, multi-row inline VALUES, and `INSERT ... SELECT` table copy |
+| `map` | Feature-flag audit — `Map(String, String)` writes | `Dictionary<K,V>` vs `ClickHouseMap<K,V>` on the writer side — duplicate-key/order preservation trade-off |
 
 ## Picking a path
 

@@ -242,6 +242,47 @@ public class DynamicBulkInsertTests
     }
 
     [Fact]
+    public async Task DynamicBulkInsert_ColumnTypesPartialCoverage_ThrowsAtFirstAdd_ConnectionNotBusy()
+    {
+        var tableName = $"test_dynbulk_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                Id Int32,
+                Name String
+            ) ENGINE = Memory");
+
+        try
+        {
+            var options = new BulkInsertOptions
+            {
+                // Only one of two columns supplied — strict failure, now surfacing
+                // at the lazy init triggered by the first Add.
+                ColumnTypes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Id"] = "Int32",
+                },
+            };
+
+            await using var inserter = connection.CreateBulkInserter(tableName, new[] { "Id", "Name" }, options);
+            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await inserter.AddAsync(new object?[] { 1, "a" }));
+
+            // ColumnTypes validation runs before EnterBusyForBulkInsert, so the
+            // failed lazy init must not leak the busy slot: the same connection
+            // answers a query immediately.
+            var one = await connection.ExecuteScalarAsync<int>("SELECT 1");
+            Assert.Equal(1, one);
+        }
+        finally
+        {
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
     public async Task DynamicBulkInsert_CompositeTypes_ArrayMapTuple_RoundTrips()
     {
         var tableName = $"test_dynbulk_{Guid.NewGuid():N}";

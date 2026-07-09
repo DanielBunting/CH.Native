@@ -94,7 +94,6 @@ internal static class DataEndpoints
                 cancellationToken: ct);
 
             await using var inserter = conn.CreateBulkInserter<EventRow>("sample_events");
-            await inserter.InitAsync(ct);
             var total = 0;
             foreach (var row in rows)
             {

@@ -74,8 +74,6 @@ internal static class DynamicBulkInsertSample
             await using (var inserter = connection.CreateBulkInserter(
                 tableName, columns, new BulkInsertOptions { BatchSize = 1_000 }))
             {
-                await inserter.InitAsync();
-
                 var rng = new Random(7);
                 var eventTypes = new[] { "click", "view", "purchase", "scroll" };
                 for (var i = 0; i < 5_000; i++)

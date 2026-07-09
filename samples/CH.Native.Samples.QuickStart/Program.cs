@@ -2,9 +2,12 @@
 // If you change one, change the other. The doc is the canonical narrative;
 // this file is the executable counterpart.
 //
-//   docker run -d -p 9000:9000 --name ch-qs clickhouse/clickhouse-server
+//   docker run -d -p 9000:9000 --name ch-qs -e CLICKHOUSE_SKIP_USER_SETUP=1 clickhouse/clickhouse-server
 //   dotnet run --project samples/CH.Native.Samples.QuickStart
 //   docker rm -f ch-qs
+//
+// (CLICKHOUSE_SKIP_USER_SETUP keeps the passwordless `default` user — recent
+// images otherwise reject the connection with authentication error 516.)
 //
 // Override the host with CH_HOST / CH_PORT environment variables.
 
@@ -44,7 +47,6 @@ try
 
     await using (var inserter = connection.CreateBulkInserter<User>("quickstart_users"))
     {
-        await inserter.InitAsync();
         await inserter.AddRangeAsync(seed);
         await inserter.CompleteAsync();
     }

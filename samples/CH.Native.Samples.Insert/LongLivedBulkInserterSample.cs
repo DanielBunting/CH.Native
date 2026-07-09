@@ -53,8 +53,6 @@ internal static class LongLivedBulkInserterSample
             await using var inserter = connection.CreateBulkInserter<LogLine>(
                 tableName,
                 new BulkInsertOptions { BatchSize = batchSize });
-            await inserter.InitAsync();
-
             // Simulate batches arriving over time. AddAsync auto-flushes at BatchSize,
             // so each iteration ends with a single network flush. The wire stays
             // open across iterations — only one INSERT handshake total.

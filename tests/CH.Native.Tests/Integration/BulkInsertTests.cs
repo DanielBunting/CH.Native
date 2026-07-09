@@ -628,15 +628,19 @@ public class BulkInsertTests
     }
 
     [Fact]
-    public async Task BulkInsert_NotInitialized_ThrowsException()
+    public async Task BulkInsert_NoInitAsync_FirstAddLazilyInitializes()
     {
         await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
         await connection.OpenAsync();
 
         await using var inserter = connection.CreateBulkInserter<SimpleRow>("any_table");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        // No explicit InitAsync: the first Add initializes lazily, so the
+        // missing-table error surfaces here as the server exception (it used
+        // to be an InvalidOperationException "must be initialized").
+        var ex = await Assert.ThrowsAsync<CH.Native.Exceptions.ClickHouseServerException>(
             () => inserter.AddAsync(new SimpleRow()).AsTask());
+        Assert.Contains("any_table", ex.Message);
     }
 
     [Fact]

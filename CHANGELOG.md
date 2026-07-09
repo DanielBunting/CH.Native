@@ -130,7 +130,23 @@ and this project follows [Semantic Versioning](https://semver.org/).
   longer evicts a healthy idle connection; a failed physical open no longer
   leaks the connection object; pool disposal no longer logs a spurious
   `PrewarmFailed` when it races a warming pool.
-
+- `BulkInserter<T>` and `DynamicBulkInserter` now initialize lazily on first use:
+  the INSERT query, schema resolution, and connection busy-slot claim happen at
+  the first `AddAsync`/`AddRangeAsync`/`AddRangeStreamingAsync` call instead of
+  requiring an explicit `InitAsync()`. `InitAsync` remains available as an
+  optional eager-validation step and is now **idempotent** — calling it twice
+  (or after lazy init) is a no-op instead of throwing `InvalidOperationException`
+  ("already initialized"). Behavioral consequences:
+  - Pre-init `AddAsync`/`FlushAsync`/`CompleteAsync` no longer throw
+    "must be initialized"; initialization errors (missing table, permissions,
+    busy connection, schema mismatch) surface from the first add call when
+    `InitAsync` is not used. Exception types are unchanged.
+  - A failed initialization (explicit or lazy) leaves the inserter retryable.
+  - `CompleteAsync()`/dispose on a never-initialized inserter with zero rows is
+    a silent no-op that never contacts the server (previously threw). The
+    `ClickHouseConnection.BulkInsertAsync` convenience methods still validate
+    the target table even for empty sources.
+  See the "Lazy initialization" section of `docs/bulk-insert.md`.
 - `TypeMapper<T>` rewritten to compile per-property
   `Expression<Action<T, ClickHouseDataReader>>` delegates that call
   `reader.GetFieldValue<TProp>(ordinal)` directly. For well-known primitive
