@@ -1,5 +1,6 @@
 using System.Buffers;
 using CH.Native.Compression;
+using CH.Native.Data.Types;
 using CH.Native.Protocol;
 
 namespace CH.Native.Data;
@@ -489,6 +490,25 @@ public sealed class Block
     }
 
     /// <summary>
+    /// Resolves the type string CH.Native declares (and serializes) for a column in an INSERT block.
+    /// <c>SimpleAggregateFunction(fn, T)</c> is a transparent wrapper: on the wire the client sends the
+    /// column as its inner type <c>T</c>. Declaring the full <c>SimpleAggregateFunction(...)</c> in the
+    /// block header desyncs the server's insert deserializer, corrupting the connection.
+    /// </summary>
+    /// <param name="columnType">The declared ClickHouse column type name.</param>
+    /// <returns>The type name to write on the wire.</returns>
+    internal static string ResolveWireColumnType(string columnType)
+    {
+        if (!columnType.StartsWith("SimpleAggregateFunction(", StringComparison.Ordinal))
+            return columnType;
+
+        var parsed = ClickHouseTypeParser.TryParse(columnType);
+        return parsed is { BaseName: "SimpleAggregateFunction", TypeArguments.Count: 1 }
+            ? parsed.TypeArguments[0].OriginalTypeName
+            : columnType;
+    }
+
+    /// <summary>
     /// Writes a data block with column data to the protocol writer (without message type).
     /// </summary>
     /// <param name="writer">The protocol writer.</param>
@@ -520,8 +540,9 @@ public sealed class Block
         // Write each column
         for (int i = 0; i < columnNames.Length; i++)
         {
+            var wireType = ResolveWireColumnType(columnTypes[i]);
             writer.WriteString(columnNames[i]);
-            writer.WriteString(columnTypes[i]);
+            writer.WriteString(wireType);
 
             // Custom serialization byte: server expects this for protocol >= 54454
             // Write 0 to indicate "no custom serialization"
@@ -533,7 +554,7 @@ public sealed class Block
             // Write column data
             if (rowCount > 0)
             {
-                var columnWriter = writerRegistry.GetWriter(columnTypes[i]);
+                var columnWriter = writerRegistry.GetWriter(wireType);
                 columnWriter.WritePrefix(ref writer);
                 var data = columnData[i].Length == rowCount
                     ? columnData[i]
@@ -582,8 +603,9 @@ public sealed class Block
         // Write each column
         for (int i = 0; i < columnNames.Length; i++)
         {
+            var wireType = ResolveWireColumnType(columnTypes[i]);
             tempWriter.WriteString(columnNames[i]);
-            tempWriter.WriteString(columnTypes[i]);
+            tempWriter.WriteString(wireType);
 
             // Custom serialization byte: server expects this for protocol >= 54454
             // Write 0 to indicate "no custom serialization"
@@ -595,7 +617,7 @@ public sealed class Block
             // Write column data
             if (rowCount > 0)
             {
-                var columnWriter = writerRegistry.GetWriter(columnTypes[i]);
+                var columnWriter = writerRegistry.GetWriter(wireType);
                 columnWriter.WritePrefix(ref tempWriter);
                 var data = columnData[i].Length == rowCount
                     ? columnData[i]

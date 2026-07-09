@@ -817,7 +817,10 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     {
         // Use reflection-based mapping
         var properties = typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .Where(p => p.CanRead)
+            // Indexer properties (this[...]) are not column-mappable — reading one
+            // requires an index argument, so exclude them rather than let them fail
+            // later at getter-compile time.
+            .Where(p => p.CanRead && p.GetIndexParameters().Length == 0)
             .Select(p =>
             {
                 // Check deprecated ColumnAttribute
@@ -851,6 +854,25 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
 
         if (properties.Count == 0)
             throw new InvalidOperationException($"Type {typeof(T).Name} has no readable properties for bulk insert.");
+
+        // Reject unusable column names early with a clear message rather than emitting
+        // an empty backtick identifier or silently double-writing a column. Mirrors the
+        // guard DynamicBulkInserter.ValidateAndCopyColumnNames already applies.
+        foreach (var mapping in properties)
+        {
+            if (string.IsNullOrWhiteSpace(mapping.ColumnName))
+                throw new InvalidOperationException(
+                    $"Type {typeof(T).Name} maps property '{mapping.Property!.Name}' to an empty or whitespace column name. " +
+                    "Set a non-empty [ClickHouseColumn(Name = \"...\")].");
+        }
+
+        var duplicate = properties
+            .GroupBy(m => m.ColumnName, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(g => g.Count() > 1);
+        if (duplicate is not null)
+            throw new InvalidOperationException(
+                $"Type {typeof(T).Name} maps multiple properties to column '{duplicate.Key}' " +
+                $"({string.Join(", ", duplicate.Select(m => m.Property!.Name))}). Column names must be unique.");
 
         return properties;
     }

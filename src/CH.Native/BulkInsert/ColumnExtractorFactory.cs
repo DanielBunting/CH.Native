@@ -33,6 +33,17 @@ public static class ColumnExtractorFactory
         var isNullable = underlyingType != null;
         var baseType = underlyingType ?? propertyType;
 
+        // Strip SimpleAggregateFunction(fn, T) to its inner type T — it is a transparent wire wrapper,
+        // so the column is declared and serialized as T. Must strip before the Nullable check below,
+        // otherwise the inner Nullable(...) is missed and the null-map byte is omitted, desyncing the
+        // block. (Mirrors the LowCardinality strip that follows.)
+        if (clickHouseType.StartsWith("SimpleAggregateFunction(", StringComparison.Ordinal))
+        {
+            var parsed = Data.Types.ClickHouseTypeParser.TryParse(clickHouseType);
+            if (parsed is { BaseName: "SimpleAggregateFunction", TypeArguments.Count: 1 })
+                clickHouseType = parsed.TypeArguments[0].OriginalTypeName;
+        }
+
         // Strip LowCardinality wrapper — client sends raw values with the inner type name,
         // and ClickHouse handles dictionary encoding server-side.
         // Must strip before Nullable check since valid nesting is LowCardinality(Nullable(X)).
@@ -752,6 +763,14 @@ public static class ColumnExtractorFactory
 
             if (value != null)
             {
+                // Validate up front so an over-long value yields a clear, column-scoped
+                // message rather than Encoding's opaque "destination too small". Mirrors
+                // FixedStringColumnWriter.WriteValue (both check UTF-8 byte length).
+                var byteCount = System.Text.Encoding.UTF8.GetByteCount(value);
+                if (byteCount > _length)
+                    throw new ArgumentException(
+                        $"Value for FixedString({_length}) column '{ColumnName}' encodes to {byteCount} UTF-8 " +
+                        $"bytes, exceeding the fixed length {_length}.");
                 System.Text.Encoding.UTF8.GetBytes(value.AsSpan(), buffer);
             }
 

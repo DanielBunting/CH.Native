@@ -126,12 +126,15 @@ jobs:
           path: TestResults/integration/**/*.trx
           if-no-files-found: warn
 
-  # Lightweight system-test categories that complete in <1 min and need only a
-  # single ClickHouse instance. Heavy categories (Cluster/Chaos/Resilience/
-  # Stress/VersionMatrix) run in the nightly system-tests workflow.
+  # System-test categories that run on every PR: the lightweight ones (single
+  # ClickHouse instance) plus Resilience/Chaos (Toxiproxy-backed) so the
+  # connection/resilience layer is exercised and its coverage credited pre-merge.
+  # The remaining heavy categories (Cluster/Stress/VersionMatrix/Soak) run in the
+  # nightly system-tests workflow.
   system-fast:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -150,11 +153,11 @@ jobs:
       - name: Build
         run: dotnet build --no-restore --configuration Release
 
-      - name: System tests (fast categories)
+      - name: System tests (fast + resilience categories)
         run: |
           dotnet test tests/CH.Native.SystemTests/CH.Native.SystemTests.csproj \
             --no-build --configuration Release \
-            --filter "Category=Allocation|Category=Observability|Category=Cancellation|Category=DependencyInjection|Category=Security|Category=Linq|Category=Streams|Category=ServerFailures|Category=Suite" \
+            --filter "Category=Allocation|Category=Observability|Category=Cancellation|Category=DependencyInjection|Category=Security|Category=Linq|Category=Streams|Category=ServerFailures|Category=Suite|Category=Resilience|Category=Chaos" \
             --settings "$COVERAGE_RUNSETTINGS" \
             --collect:"XPlat Code Coverage" \
             --results-directory ./TestResults/system-fast \
@@ -213,6 +216,27 @@ jobs:
             "-targetdir:coverage-report" \
             "-reporttypes:Cobertura;HtmlInline;MarkdownSummaryGithub" \
             "-assemblyfilters:+CH.Native;+CH.Native.Dapper;+CH.Native.DependencyInjection;-*.Tests;-*.SystemTests;-*.SmokeTests"
+
+      - name: Per-project coverage stats
+        if: hashFiles('coverage-artifacts/**/coverage.cobertura.xml') != ''
+        run: |
+          # One report per shipping assembly, plus a combined table in the job summary.
+          {
+            echo "## Per-project coverage"
+            echo ""
+            echo "| Project | Line | Branch |"
+            echo "|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for asm in CH.Native CH.Native.Dapper CH.Native.DependencyInjection; do
+            reportgenerator \
+              "-reports:coverage-artifacts/**/coverage.cobertura.xml" \
+              "-targetdir:coverage-report/by-project/$asm" \
+              "-reporttypes:TextSummary;HtmlInline;MarkdownSummaryGithub" \
+              "-assemblyfilters:+$asm"
+            line=$(grep -m1 'Line coverage:' "coverage-report/by-project/$asm/Summary.txt" | sed 's/.*Line coverage: *//')
+            branch=$(grep -m1 'Branch coverage:' "coverage-report/by-project/$asm/Summary.txt" | sed 's/.*Branch coverage: *//')
+            echo "| \`$asm\` | ${line:-n/a} | ${branch:-n/a} |" >> "$GITHUB_STEP_SUMMARY"
+          done
 
       - name: Publish coverage summary to job
         if: hashFiles('coverage-report/SummaryGithub.md') != ''

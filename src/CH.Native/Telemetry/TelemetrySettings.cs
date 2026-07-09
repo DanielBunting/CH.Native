@@ -23,6 +23,13 @@ public sealed record TelemetrySettings
     public bool IncludeSqlInTraces { get; init; } = true;
 
     /// <summary>
+    /// Maximum length of the sanitized SQL attached to the <c>db.statement</c> trace tag.
+    /// When set, longer statements are truncated (with a trailing ellipsis) so large queries
+    /// do not bloat spans. <see langword="null"/> (the default) attaches the full sanitized SQL.
+    /// </summary>
+    public int? StatementMaxLength { get; init; }
+
+    /// <summary>
     /// Logger factory for creating ILogger instances.
     /// Pass your application's ILoggerFactory for structured logging integration.
     /// </summary>

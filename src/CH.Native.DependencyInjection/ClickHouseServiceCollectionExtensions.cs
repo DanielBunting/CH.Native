@@ -6,6 +6,7 @@ using CH.Native.Exceptions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 
 namespace CH.Native.DependencyInjection;
 
@@ -208,6 +209,15 @@ public static class ClickHouseServiceCollectionExtensions
         {
             var b = builderFactory(sp);
             dsBuilder.ResilienceConfigurator?.Invoke(b);
+            // Supply the container's ILoggerFactory as a fallback so registered logging
+            // reaches CH.Native without an explicit WithLoggerFactory call. An explicitly
+            // configured factory (via the settings/configure overloads) is left untouched.
+            if (b.CurrentLoggerFactory is null)
+            {
+                var loggerFactory = sp.GetService<ILoggerFactory>();
+                if (loggerFactory is not null)
+                    b.WithLoggerFactory(loggerFactory);
+            }
             return b;
         }
 
@@ -338,7 +348,7 @@ public static class ClickHouseServiceCollectionExtensions
             .WithCompression(s.Compress)
             .WithCompressionMethod(s.CompressionMethod);
 
-        if (s.Password is { Length: > 0 }) b.WithPassword(s.Password);
+        if (s.Password.Length > 0) b.WithPassword(s.Password);
         if (s.UseTls) b.WithTls().WithTlsPort(s.TlsPort);
         if (s.AllowInsecureTls) b.WithAllowInsecureTls();
         if (s.TlsCaCertificatePath is { Length: > 0 }) b.WithTlsCaCertificate(s.TlsCaCertificatePath);

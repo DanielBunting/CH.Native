@@ -201,4 +201,46 @@ public class ClickHouseTypeMapperTests
     }
 
     #endregion
+
+    #region Value-level and composite inference
+
+    private enum E8 { A = 1, B = 2 }
+    private enum E16 { A = 1, B = 300 }        // 300 > sbyte range -> Enum16
+    private enum EBad { A = 1, B = 40000 }     // 40000 > short range -> unsupported
+
+    [Fact]
+    public void InferType_DBNull_ReturnsNullableNothing() =>
+        Assert.Equal("Nullable(Nothing)", ClickHouseTypeMapper.InferType(DBNull.Value));
+
+    [Fact]
+    public void InferType_IPv4_ReturnsIPv4() =>
+        Assert.Equal("IPv4", ClickHouseTypeMapper.InferType(System.Net.IPAddress.Parse("192.168.1.1")));
+
+    [Fact]
+    public void InferType_IPv6_ReturnsIPv6() =>
+        Assert.Equal("IPv6", ClickHouseTypeMapper.InferType(System.Net.IPAddress.Parse("2001:db8::1")));
+
+    [Fact]
+    public void InferType_Enum_FittingSByte_ReturnsEnum8() =>
+        Assert.Equal("Enum8('A' = 1, 'B' = 2)", ClickHouseTypeMapper.InferType(E8.A));
+
+    [Fact]
+    public void InferType_Enum_ExceedingSByte_ReturnsEnum16() =>
+        Assert.StartsWith("Enum16(", ClickHouseTypeMapper.InferType(E16.B));
+
+    [Fact]
+    public void InferType_Enum_ExceedingInt16_Throws() =>
+        Assert.Throws<NotSupportedException>(() => ClickHouseTypeMapper.InferType(EBad.B));
+
+    [Fact]
+    public void InferType_Tuple_ReturnsTuple() =>
+        Assert.Equal("Tuple(Int32, String)", ClickHouseTypeMapper.InferType((1, "a")));
+
+    [Fact]
+    public void InferType_EightElementTuple_FlattensTRest() =>
+        Assert.Equal(
+            "Tuple(Int32, Int32, Int32, Int32, Int32, Int32, Int32, Int32)",
+            ClickHouseTypeMapper.InferType((1, 2, 3, 4, 5, 6, 7, 8)));
+
+    #endregion
 }

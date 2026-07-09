@@ -73,6 +73,12 @@ public static class ClickHouseTypeMapper
         if (value is null)
             throw new ArgumentException("Cannot infer type from null value. Provide an explicit ClickHouseType.", nameof(value));
 
+        // Value-level refinements the CLR type alone cannot express:
+        if (value is DBNull)
+            return "Nullable(Nothing)";
+        if (value is System.Net.IPAddress ip)
+            return ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? "IPv4" : "IPv6";
+
         var type = value.GetType();
         return InferTypeFromClrType(type);
     }
@@ -91,6 +97,20 @@ public static class ClickHouseTypeMapper
         // Direct type match
         if (TypeMappings.TryGetValue(underlyingType, out var clickHouseType))
             return clickHouseType;
+
+        // .NET enum -> Enum8/Enum16 built from the enum's members. Enum8 when every value
+        // fits a signed byte, otherwise Enum16 (ClickHouse has no wider enum). The member
+        // name is used as the label, matching how ParameterSerializer emits an enum value.
+        if (underlyingType.IsEnum)
+            return InferEnumType(underlyingType);
+
+        // Tuple / ValueTuple -> Tuple(...). Flattens the >7-element TRest nesting
+        // (ValueTuple<T1..T7, TRest>) so an 8+-element tuple maps to a flat Tuple(...).
+        if (IsTupleType(underlyingType))
+        {
+            var inner = string.Join(", ", FlattenTupleTypes(underlyingType).Select(InferTypeFromClrType));
+            return $"Tuple({inner})";
+        }
 
         // Handle arrays (jagged and rectangular). Rectangular arrays (T[,], T[,,])
         // map to nested Array(...) on the wire — the rank-N rect is unwrapped into
@@ -138,6 +158,49 @@ public static class ClickHouseTypeMapper
         throw new NotSupportedException(
             $"Cannot infer ClickHouse type for .NET type '{type.FullName}'. " +
             "Provide an explicit ClickHouseType.");
+    }
+
+    private static string InferEnumType(Type enumType)
+    {
+        var names = Enum.GetNames(enumType);
+        var values = new long[names.Length];
+        var fitsInt8 = true;
+        for (int i = 0; i < names.Length; i++)
+        {
+            values[i] = Convert.ToInt64(Enum.Parse(enumType, names[i]), System.Globalization.CultureInfo.InvariantCulture);
+            if (values[i] is < sbyte.MinValue or > sbyte.MaxValue)
+                fitsInt8 = false;
+            if (values[i] is < short.MinValue or > short.MaxValue)
+                throw new NotSupportedException(
+                    $"Enum '{enumType.FullName}' has value {values[i]} outside the ClickHouse Enum16 range.");
+        }
+
+        var kind = fitsInt8 ? "Enum8" : "Enum16";
+        var members = new string[names.Length];
+        for (int i = 0; i < names.Length; i++)
+            members[i] = $"'{names[i]}' = {values[i].ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        return $"{kind}({string.Join(", ", members)})";
+    }
+
+    private static bool IsTupleType(Type type) =>
+        type.IsGenericType && typeof(System.Runtime.CompilerServices.ITuple).IsAssignableFrom(type);
+
+    private static IEnumerable<Type> FlattenTupleTypes(Type tupleType)
+    {
+        var args = tupleType.GetGenericArguments();
+        for (int i = 0; i < args.Length; i++)
+        {
+            // Element 8 of a ValueTuple is the TRest continuation holding elements 8+.
+            if (i == 7 && IsTupleType(args[i]))
+            {
+                foreach (var rest in FlattenTupleTypes(args[i]))
+                    yield return rest;
+            }
+            else
+            {
+                yield return args[i];
+            }
+        }
     }
 
     /// <summary>

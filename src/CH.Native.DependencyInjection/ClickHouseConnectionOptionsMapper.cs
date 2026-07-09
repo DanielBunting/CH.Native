@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography.X509Certificates;
 using CH.Native.Connection;
 
@@ -53,7 +54,7 @@ internal static class ClickHouseConnectionOptionsMapper
         return builder;
     }
 
-    private static ClickHouseConnectionSettingsBuilder ApplySettingsToNewBuilder(ClickHouseConnectionSettings s)
+    internal static ClickHouseConnectionSettingsBuilder ApplySettingsToNewBuilder(ClickHouseConnectionSettings s)
     {
         // Best-effort round-trip: copies the fields that the builder exposes. Used
         // only on the ConnectionString path so that provider-driven auth can still
@@ -68,7 +69,7 @@ internal static class ClickHouseConnectionOptionsMapper
             .WithCompression(s.Compress)
             .WithCompressionMethod(s.CompressionMethod);
 
-        if (s.Password is { Length: > 0 }) b.WithPassword(s.Password);
+        if (s.Password.Length > 0) b.WithPassword(s.Password);
         if (s.UseTls) b.WithTls().WithTlsPort(s.TlsPort);
         if (s.AllowInsecureTls) b.WithAllowInsecureTls();
         if (s.TlsCaCertificatePath is { Length: > 0 }) b.WithTlsCaCertificate(s.TlsCaCertificatePath);
@@ -119,6 +120,11 @@ internal static class ClickHouseConnectionOptionsMapper
         return ClickHouseAuthMethod.Password;
     }
 
+    // Loads a client certificate from a PFX file or the OS X509 store. Both paths depend on a real
+    // certificate artifact / cert store, which cannot be provisioned in a unit test — exercised by
+    // integration/manual TLS testing instead. Excluded so the coverage figure isn't gamed by contriving
+    // an OS cert store.
+    [ExcludeFromCodeCoverage]
     private static void ApplyTlsClientCertificate(ClickHouseConnectionSettingsBuilder builder, TlsClientCertificateOptions? tls)
     {
         if (tls is null) return;

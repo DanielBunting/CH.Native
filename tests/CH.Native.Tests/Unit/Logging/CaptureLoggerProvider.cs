@@ -7,9 +7,13 @@ namespace CH.Native.Tests.Unit.Logging;
 /// </summary>
 internal sealed class CaptureLoggerProvider : ILoggerProvider, ILoggerFactory
 {
+    private readonly LogLevel _minLevel;
+
+    public CaptureLoggerProvider(LogLevel minLevel = LogLevel.Trace) => _minLevel = minLevel;
+
     public List<(LogLevel Level, EventId EventId, string Message)> Entries { get; } = new();
 
-    public ILogger CreateLogger(string categoryName) => new Capture(this);
+    public ILogger CreateLogger(string categoryName) => new Capture(this, _minLevel);
 
     public void Dispose() { }
 
@@ -18,10 +22,15 @@ internal sealed class CaptureLoggerProvider : ILoggerProvider, ILoggerFactory
     private sealed class Capture : ILogger
     {
         private readonly CaptureLoggerProvider _parent;
-        public Capture(CaptureLoggerProvider parent) => _parent = parent;
+        private readonly LogLevel _minLevel;
+        public Capture(CaptureLoggerProvider parent, LogLevel minLevel)
+        {
+            _parent = parent;
+            _minLevel = minLevel;
+        }
 
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => true;
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= _minLevel;
 
         public void Log<TState>(
             LogLevel logLevel,
@@ -30,6 +39,8 @@ internal sealed class CaptureLoggerProvider : ILoggerProvider, ILoggerFactory
             Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
+            if (logLevel < _minLevel)
+                return;
             var msg = formatter(state, exception);
             lock (_parent.Entries)
                 _parent.Entries.Add((logLevel, eventId, msg));
