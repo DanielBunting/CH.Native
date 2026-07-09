@@ -490,21 +490,13 @@ public sealed class Block
     }
 
     /// <summary>
-    /// Writes a data block with column data to the protocol writer (without message type).
-    /// </summary>
-    /// <param name="writer">The protocol writer.</param>
-    /// <param name="columnNames">Column names.</param>
-    /// <param name="columnTypes">ClickHouse column type names.</param>
-    /// <param name="columnData">Column data arrays.</param>
-    /// <param name="rowCount">Number of rows.</param>
-    /// <param name="writerRegistry">Column writer registry.</param>
-    /// <param name="protocolVersion">Negotiated protocol version.</param>
-    /// <summary>
     /// Resolves the type string CH.Native declares (and serializes) for a column in an INSERT block.
     /// <c>SimpleAggregateFunction(fn, T)</c> is a transparent wrapper: on the wire the client sends the
     /// column as its inner type <c>T</c>. Declaring the full <c>SimpleAggregateFunction(...)</c> in the
     /// block header desyncs the server's insert deserializer, corrupting the connection.
     /// </summary>
+    /// <param name="columnType">The declared ClickHouse column type name.</param>
+    /// <returns>The type name to write on the wire.</returns>
     internal static string ResolveWireColumnType(string columnType)
     {
         if (!columnType.StartsWith("SimpleAggregateFunction(", StringComparison.Ordinal))
@@ -516,6 +508,16 @@ public sealed class Block
             : columnType;
     }
 
+    /// <summary>
+    /// Writes a data block with column data to the protocol writer (without message type).
+    /// </summary>
+    /// <param name="writer">The protocol writer.</param>
+    /// <param name="columnNames">Column names.</param>
+    /// <param name="columnTypes">ClickHouse column type names.</param>
+    /// <param name="columnData">Column data arrays.</param>
+    /// <param name="rowCount">Number of rows.</param>
+    /// <param name="writerRegistry">Column writer registry.</param>
+    /// <param name="protocolVersion">Negotiated protocol version.</param>
     public static void WriteData(
         ref ProtocolWriter writer,
         string[] columnNames,
