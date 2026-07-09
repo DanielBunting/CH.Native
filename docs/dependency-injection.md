@@ -113,7 +113,6 @@ app.MapGet("/events", async (
 ```csharp
 await using var inserter = await dataSource.CreateBulkInserterAsync<EventRow>(
     "events", cancellationToken: ct);
-await inserter.InitAsync(ct);
 await inserter.AddRangeStreamingAsync(rows, ct);
 await inserter.CompleteAsync(ct);
 ```

@@ -110,7 +110,6 @@ await foreach (var user in connection.QueryStreamAsync<User>("SELECT * FROM user
 var users = new List<User> { /* ... */ };
 
 await using var inserter = connection.CreateBulkInserter<User>("users");
-await inserter.InitAsync();
 await inserter.AddRangeAsync(users);
 await inserter.CompleteAsync();
 ```

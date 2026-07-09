@@ -384,7 +384,6 @@ public class Sample
 
 // Bulk insert.
 await using var inserter = connection.CreateBulkInserter<Sample>("samples");
-await inserter.InitAsync();
 await inserter.AddAsync(new Sample { Id = 1, Grid = new int[2, 3] { { 1, 2, 3 }, { 4, 5, 6 } } });
 await inserter.CompleteAsync();
 
@@ -498,7 +497,6 @@ class Event
 await connection.ExecuteNonQueryAsync("SET flatten_nested = 0");
 
 await using var inserter = connection.CreateBulkInserter<Event>("events");
-await inserter.InitAsync();
 await inserter.AddAsync(new Event
 {
     Id = 1,

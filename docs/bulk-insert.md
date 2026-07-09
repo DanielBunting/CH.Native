@@ -26,11 +26,9 @@ public class Event
 await using var connection = new ClickHouseConnection("Host=localhost;Port=9000");
 await connection.OpenAsync();
 
-// Create the bulk inserter
+// Create the bulk inserter. Initialization (sending the INSERT query and
+// receiving the schema) happens automatically at the first Add.
 await using var inserter = connection.CreateBulkInserter<Event>("events");
-
-// Initialize - sends INSERT query, receives schema from server
-await inserter.InitAsync();
 
 // Add items
 await inserter.AddAsync(new Event
@@ -66,13 +64,13 @@ await connection.BulkInsertAsync("events", events);
 The bulk insert lifecycle:
 
 ```
-CreateBulkInserter<T>() -> InitAsync() -> Add / AddRange / AddRangeStreaming -> [FlushAsync] -> CompleteAsync()
+CreateBulkInserter<T>() -> [InitAsync()] -> Add / AddRange / AddRangeStreaming -> [FlushAsync] -> CompleteAsync()
 ```
 
 | Method | Description |
 |--------|-------------|
 | `CreateBulkInserter<T>(table)` | Creates inserter for table |
-| `InitAsync()` | Sends INSERT query, receives column schema |
+| `InitAsync()` | Optional. Sends INSERT query, receives column schema. Runs automatically at the first add if not called; call it explicitly to surface table/schema errors eagerly. Idempotent |
 | `AddAsync(item)` | Adds single item to buffer |
 | `AddRangeAsync(IEnumerable<T>)` | Adds multiple items to buffer (whole sequence is held by the caller) |
 | `AddRangeStreamingAsync(IAsyncEnumerable<T>)` | Pulls items from an async source, flushing per batch — preferred for large or unbounded inputs |
@@ -81,6 +79,16 @@ CreateBulkInserter<T>() -> InitAsync() -> Add / AddRange / AddRangeStreaming -> 
 | `CompleteAsync()` | Sends final block, receives confirmation |
 
 `AddRangeAsync` accumulates inside the inserter's buffer and only flushes when the batch fills up. `AddRangeStreamingAsync` is the right call when you don't want the source to be held alongside the buffer — it consumes one batch at a time.
+
+### Lazy initialization
+
+The inserter initializes itself — sends the INSERT query, resolves the column schema, and takes exclusive ownership of the connection — at the first add (or at an explicit `InitAsync`). Consequences worth knowing:
+
+- **Error timing.** Without an explicit `InitAsync`, errors that occur at initialization (missing table, permission denied, schema mismatch, connection busy) surface from the *first add call* rather than a dedicated init step. The exception types are unchanged. Call `InitAsync()` explicitly when you want those errors before your row source starts producing.
+- **Failed initialization is retryable.** If the lazy (or explicit) initialization throws, the inserter is left un-initialized with the connection cleaned up; the next add or `InitAsync` retries it.
+- **Zero-row inserters never contact the server.** `CompleteAsync()` or dispose on an inserter that was never initialized and never received a row is a silent no-op — no INSERT is sent, so the table is *not* validated. If you need an empty insert to verify the table exists (as `connection.BulkInsertAsync` does for empty sources), call `InitAsync()` first.
+- **Connection ownership starts at initialization.** The connection is reserved for the inserter from initialization until `CompleteAsync`/dispose; other queries on the same connection throw `ClickHouseConnectionBusyException` during that window. With lazy init, that window starts at the first add instead of at creation time.
+- `InitAsync` is idempotent: calling it on an already-initialized inserter (explicitly or lazily) is a no-op.
 
 ## Configuration
 
@@ -203,7 +211,6 @@ When the row shape isn't known at compile time — generic ETL, schema-driven im
 var columns = new[] { "timestamp", "event_type", "data" };
 
 await using var inserter = connection.CreateBulkInserter("events", columns);
-await inserter.InitAsync();
 
 await inserter.AddAsync(new object?[] { DateTime.UtcNow, "click", "{}" });
 await inserter.AddRangeAsync(rows); // IEnumerable<object?[]> or IAsyncEnumerable<object?[]>
@@ -211,7 +218,7 @@ await inserter.AddRangeAsync(rows); // IEnumerable<object?[]> or IAsyncEnumerabl
 await inserter.CompleteAsync();
 ```
 
-The lifecycle (`InitAsync` → `AddAsync` / `AddRangeAsync` / `FlushAsync` → `CompleteAsync`) and `BatchSize` semantics are identical to `BulkInserter<T>`. A one-shot overload mirrors the typed path:
+The lifecycle (optional `InitAsync` → `AddAsync` / `AddRangeAsync` / `FlushAsync` → `CompleteAsync`), lazy initialization, and `BatchSize` semantics are identical to `BulkInserter<T>`. A one-shot overload mirrors the typed path:
 
 ```csharp
 await connection.BulkInsertAsync("events", columns, rows);
@@ -219,7 +226,7 @@ await connection.BulkInsertAsync("events", columns, rows);
 
 ### Skipping the schema probe with `ColumnTypes`
 
-By default, `DynamicBulkInserter.InitAsync` round-trips to the server to fetch the column schema. When you already know the types — usually because you generated the inserter from a schema you control — pass them via `BulkInsertOptions.ColumnTypes` to skip that probe:
+By default, `DynamicBulkInserter`'s initialization round-trips to the server to fetch the column schema. When you already know the types — usually because you generated the inserter from a schema you control — pass them via `BulkInsertOptions.ColumnTypes` to skip that probe:
 
 ```csharp
 var options = new BulkInsertOptions
@@ -233,7 +240,7 @@ var options = new BulkInsertOptions
 };
 
 await using var inserter = connection.CreateBulkInserter("events", columns, options);
-await inserter.InitAsync(); // no schema probe — types come from ColumnTypes
+await inserter.InitAsync(); // optional eager init — no schema probe, types come from ColumnTypes
 ```
 
 The probe is skipped only when every column in `columnNames` has a matching entry; missing entries fall back to the probe. This is a `DynamicBulkInserter`-only optimisation — the typed `BulkInserter<T>` path always probes.
@@ -264,7 +271,6 @@ Or with manual control via `AddRangeStreamingAsync` — this is what `BulkInsert
 
 ```csharp
 await using var inserter = connection.CreateBulkInserter<Event>("events");
-await inserter.InitAsync();
 
 await inserter.AddRangeStreamingAsync(GenerateEvents());
 
@@ -358,13 +364,13 @@ Bulk insert covers the same type system as the read path. The common .NET → Cl
 
 ### Error Handling
 
-Errors are thrown from `CompleteAsync()`:
+Errors are thrown from `CompleteAsync()`. Calling `InitAsync()` explicitly is optional, but it surfaces setup errors (missing table, permissions, schema mismatch) before you start producing rows:
 
 ```csharp
 try
 {
     await using var inserter = connection.CreateBulkInserter<Event>("events");
-    await inserter.InitAsync();
+    await inserter.InitAsync(); // optional: validate table + schema eagerly
     await inserter.AddRangeAsync(events);
     await inserter.CompleteAsync();
 }

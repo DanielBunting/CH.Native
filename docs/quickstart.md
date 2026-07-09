@@ -10,8 +10,10 @@ Get up and running with CH.Native in minutes.
 **Start ClickHouse with Docker:**
 
 ```bash
-docker run -d -p 9000:9000 -p 8123:8123 clickhouse/clickhouse-server
+docker run -d -p 9000:9000 -p 8123:8123 -e CLICKHOUSE_SKIP_USER_SETUP=1 clickhouse/clickhouse-server
 ```
+
+`CLICKHOUSE_SKIP_USER_SETUP=1` keeps the passwordless `default` user that the examples below connect with — recent ClickHouse images otherwise reject it with authentication error 516.
 
 ## Installation
 
@@ -90,7 +92,6 @@ await using var connection = new ClickHouseConnection("Host=localhost;Port=9000"
 await connection.OpenAsync();
 
 await using var inserter = connection.CreateBulkInserter<User>("users");
-await inserter.InitAsync();
 await inserter.AddRangeAsync(users);
 await inserter.CompleteAsync();
 

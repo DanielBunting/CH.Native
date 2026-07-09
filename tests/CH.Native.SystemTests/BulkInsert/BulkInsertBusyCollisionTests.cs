@@ -117,6 +117,33 @@ public class BulkInsertBusyCollisionTests
     }
 
     [Fact]
+    public async Task SecondBulkInserterDuringActiveBulkInsert_ThrowsBusyAtFirstAdd_LazyPath()
+    {
+        await using var harness = await BulkInsertTableHarness.CreateAsync(() => _fixture.BuildSettings());
+        await using var conn = new ClickHouseConnection(_fixture.BuildSettings());
+        await conn.OpenAsync();
+
+        await using var first = conn.CreateBulkInserter<StandardRow>(harness.TableName,
+            new BulkInsertOptions { BatchSize = 1000 });
+        await first.InitAsync();
+
+        // Lazy-path sibling of ...ThrowsBusyAtInit: the second inserter never
+        // calls InitAsync, so EnterBusyForBulkInsert fires inside the lazy init
+        // triggered by its first AddAsync — and must reject there.
+        await Assert.ThrowsAsync<ClickHouseConnectionBusyException>(async () =>
+        {
+            await using var second = conn.CreateBulkInserter<StandardRow>(harness.TableName,
+                new BulkInsertOptions { BatchSize = 1000 });
+            await second.AddAsync(new StandardRow { Id = 99, Payload = "reject" });
+        });
+
+        // First inserter unaffected — still drives the original wire conversation.
+        await first.AddAsync(new StandardRow { Id = 1, Payload = "x" });
+        await first.CompleteAsync();
+        Assert.Equal(1UL, await harness.CountAsync());
+    }
+
+    [Fact]
     public async Task SlotReleasedAfterCompleteAsync_NextQuerySucceeds()
     {
         // Lock-in: CompleteAsync releases the busy slot before the inserter is

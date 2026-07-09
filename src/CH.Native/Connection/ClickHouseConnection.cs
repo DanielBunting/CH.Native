@@ -299,7 +299,8 @@ public sealed class ClickHouseConnection : DbConnection
 
     /// <summary>
     /// Bulk-insert variant of <see cref="EnterBusy"/>. The bulk-insert path holds
-    /// the wire from <c>InitAsync</c> through <c>CompleteAsync</c>/<c>DisposeAsync</c>,
+    /// the wire from initialization (explicit <c>InitAsync</c> or lazy first-use)
+    /// through <c>CompleteAsync</c>/<c>DisposeAsync</c>,
     /// so the slot must persist across the inserter's lifetime. Internal so
     /// <see cref="BulkInsert.BulkInserter{T}"/> can call it; semantics identical
     /// to <see cref="EnterBusy"/>.
@@ -309,7 +310,7 @@ public sealed class ClickHouseConnection : DbConnection
     /// <summary>
     /// Internal accessor for <see cref="ResolveQueryId"/>. Lets
     /// <see cref="BulkInsert.BulkInserter{T}"/> resolve the effective query id
-    /// once at <c>InitAsync</c> entry — both for <see cref="EnterBusyForBulkInsert"/>
+    /// once at initialization entry — both for <see cref="EnterBusyForBulkInsert"/>
     /// reporting and for the eventual <c>SendInsertQueryAsync</c> call — without
     /// duplicating the GUID-vs-supplied logic.
     /// </summary>
@@ -1566,7 +1567,10 @@ public sealed class ClickHouseConnection : DbConnection
     /// The table name to insert into. May be qualified as <c>database.table</c>.
     /// </param>
     /// <param name="options">Optional bulk insert options.</param>
-    /// <returns>A new bulk inserter instance. Call InitAsync() before use.</returns>
+    /// <returns>
+    /// A new bulk inserter instance. It initializes lazily on first use; call
+    /// InitAsync() to validate the table and schema eagerly.
+    /// </returns>
     public BulkInserter<T> CreateBulkInserter<T>(string tableName, BulkInsertOptions? options = null)
         where T : class
     {
@@ -1697,6 +1701,9 @@ public sealed class ClickHouseConnection : DbConnection
         CancellationToken cancellationToken = default) where T : class
     {
         await using var inserter = CreateBulkInserter<T>(tableName, options);
+        // Explicit init is load-bearing despite lazy first-use init: with an
+        // empty source no Add ever fires, and the INSERT must still reach the
+        // server so missing-table/permission errors surface. Idempotent.
         await inserter.InitAsync(cancellationToken);
 
         // Use streaming path when preferred (default) for reduced GC pressure
@@ -1724,6 +1731,9 @@ public sealed class ClickHouseConnection : DbConnection
         CancellationToken cancellationToken = default) where T : class
     {
         await using var inserter = CreateBulkInserter<T>(tableName, options);
+        // Explicit init is load-bearing despite lazy first-use init: with an
+        // empty source no Add ever fires, and the INSERT must still reach the
+        // server so missing-table/permission errors surface. Idempotent.
         await inserter.InitAsync(cancellationToken);
 
         // Use streaming path when preferred (default) for reduced GC pressure
@@ -1755,6 +1765,9 @@ public sealed class ClickHouseConnection : DbConnection
         CancellationToken cancellationToken = default) where T : class
     {
         await using var inserter = CreateBulkInserter<T>(database, tableName, options);
+        // Explicit init is load-bearing despite lazy first-use init: with an
+        // empty source no Add ever fires, and the INSERT must still reach the
+        // server so missing-table/permission errors surface. Idempotent.
         await inserter.InitAsync(cancellationToken);
 
         if (options?.PreferDirectStreaming ?? true)
@@ -1777,6 +1790,9 @@ public sealed class ClickHouseConnection : DbConnection
         CancellationToken cancellationToken = default) where T : class
     {
         await using var inserter = CreateBulkInserter<T>(database, tableName, options);
+        // Explicit init is load-bearing despite lazy first-use init: with an
+        // empty source no Add ever fires, and the INSERT must still reach the
+        // server so missing-table/permission errors surface. Idempotent.
         await inserter.InitAsync(cancellationToken);
 
         if (options?.PreferDirectStreaming ?? true)
@@ -1813,6 +1829,9 @@ public sealed class ClickHouseConnection : DbConnection
         CancellationToken cancellationToken = default)
     {
         await using var inserter = CreateBulkInserter(tableName, columnNames, options);
+        // Explicit init is load-bearing despite lazy first-use init: with an
+        // empty source no Add ever fires, and the INSERT must still reach the
+        // server so missing-table/permission errors surface. Idempotent.
         await inserter.InitAsync(cancellationToken);
         await inserter.AddRangeAsync(rows, cancellationToken);
         await inserter.CompleteAsync(cancellationToken);
@@ -1830,6 +1849,9 @@ public sealed class ClickHouseConnection : DbConnection
         CancellationToken cancellationToken = default)
     {
         await using var inserter = CreateBulkInserter(tableName, columnNames, options);
+        // Explicit init is load-bearing despite lazy first-use init: with an
+        // empty source no Add ever fires, and the INSERT must still reach the
+        // server so missing-table/permission errors surface. Idempotent.
         await inserter.InitAsync(cancellationToken);
         await inserter.AddRangeAsync(rows, cancellationToken);
         await inserter.CompleteAsync(cancellationToken);
@@ -1848,6 +1870,9 @@ public sealed class ClickHouseConnection : DbConnection
         CancellationToken cancellationToken = default)
     {
         await using var inserter = CreateBulkInserter(database, tableName, columnNames, options);
+        // Explicit init is load-bearing despite lazy first-use init: with an
+        // empty source no Add ever fires, and the INSERT must still reach the
+        // server so missing-table/permission errors surface. Idempotent.
         await inserter.InitAsync(cancellationToken);
         await inserter.AddRangeAsync(rows, cancellationToken);
         await inserter.CompleteAsync(cancellationToken);
@@ -1866,6 +1891,9 @@ public sealed class ClickHouseConnection : DbConnection
         CancellationToken cancellationToken = default)
     {
         await using var inserter = CreateBulkInserter(database, tableName, columnNames, options);
+        // Explicit init is load-bearing despite lazy first-use init: with an
+        // empty source no Add ever fires, and the INSERT must still reach the
+        // server so missing-table/permission errors surface. Idempotent.
         await inserter.InitAsync(cancellationToken);
         await inserter.AddRangeAsync(rows, cancellationToken);
         await inserter.CompleteAsync(cancellationToken);
