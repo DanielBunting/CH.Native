@@ -102,7 +102,6 @@ public sealed class ClickHouseConnection : DbConnection
     private string? _busyOwnerQueryId;
     private string? _currentQueryId;
     private string? _lastQueryId;
-    private volatile bool _cancellationRequested;
     // Set when a ClickHouseProtocolException escapes the read path. The protocol
     // stream is at an unknown offset, so the connection must be discarded — not
     // returned to the pool, not reused for the next query. Read by CanBePooled.
@@ -389,15 +388,6 @@ public sealed class ClickHouseConnection : DbConnection
     /// </summary>
     private ProtocolReader CreateProtocolReader(System.Buffers.ReadOnlySequence<byte> buffer)
         => new(buffer) { MaxStringLengthBytes = Settings.MaxStringLengthBytes };
-
-    /// <summary>
-    /// True between the moment <see cref="SendCancelAsync"/> writes a Cancel packet
-    /// and the next query (which resets the flag). Bulk-insert / read-path catch
-    /// blocks read this to gate the post-OCE drain — without the gate, an OCE
-    /// thrown synchronously before any Cancel was sent would trigger a drain
-    /// against a server that has nothing to drain, hanging until the 5s timeout.
-    /// </summary>
-    internal bool WasCancellationRequested => _cancellationRequested;
 
     /// <summary>
     /// Gets the server information received during handshake.
@@ -3211,7 +3201,6 @@ public sealed class ClickHouseConnection : DbConnection
 
         // Set compression state for response handling
         _compressionEnabled = Settings.Compress;
-        _cancellationRequested = false;
 
         // Build settings dictionary for JSON/Dynamic serialization on CH 25.6+.
         // write_json_as_string keeps JSON columns on the simple String path; the FLATTENED
@@ -3387,7 +3376,6 @@ public sealed class ClickHouseConnection : DbConnection
             // see WriteAndFlushAsync's parameter doc.
             await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken, isCancelPacket: true);
 
-            _cancellationRequested = true;
         }
         catch
         {
@@ -4198,7 +4186,6 @@ public sealed class ClickHouseConnection : DbConnection
         _compressionEnabled = Settings.Compress;
         // Mirror SendQueryAsync (line 1661) — clear stale cancel state from a
         // prior query so the bulk-path drain gate does not mis-trigger.
-        _cancellationRequested = false;
 
         var effectiveQueryId = ResolveQueryId(queryId);
         var queryMessage = QueryMessage.Create(
@@ -4234,13 +4221,6 @@ public sealed class ClickHouseConnection : DbConnection
             Block.WriteEmpty(ref writer);
         }
 
-        // Wire dump for debugging protocol issues
-        var wireDump = Environment.GetEnvironmentVariable("CH_WIRE_DUMP");
-        if (wireDump == "1")
-        {
-            var logPath = "/tmp/ch_wire_dump.log";
-            File.AppendAllText(logPath, $"[CH] INSERT QUERY + INITIAL EMPTY: {bufferWriter.WrittenCount} bytes\n");
-        }
 
         await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
@@ -4255,22 +4235,12 @@ public sealed class ClickHouseConnection : DbConnection
     {
         var registry = _columnReaderRegistry;
 
-        // Wire dump for debugging
-        var wireDump = Environment.GetEnvironmentVariable("CH_WIRE_DUMP");
-        if (wireDump == "1")
-        {
-            File.AppendAllText("/tmp/ch_wire_dump.log", "[CH] ReceiveSchemaBlockAsync: waiting for schema...\n");
-        }
 
         while (true)
         {
             var result = await _pipeReader!.ReadAsync(cancellationToken);
             var buffer = result.Buffer;
 
-            if (wireDump == "1")
-            {
-                File.AppendAllText("/tmp/ch_wire_dump.log", $"[CH] ReceiveSchemaBlockAsync: received {buffer.Length} bytes, IsCompleted={result.IsCompleted}\n");
-            }
 
             if (result.IsCanceled)
                 throw new OperationCanceledException(cancellationToken);
@@ -4283,10 +4253,6 @@ public sealed class ClickHouseConnection : DbConnection
                 var reader = CreateProtocolReader(buffer);
                 var messageType = (ServerMessageType)reader.ReadVarInt();
 
-                if (wireDump == "1")
-                {
-                    File.AppendAllText("/tmp/ch_wire_dump.log", $"[CH] ReceiveSchemaBlockAsync: messageType={messageType}\n");
-                }
 
                 if (messageType == ServerMessageType.Exception)
                 {
@@ -4326,10 +4292,6 @@ public sealed class ClickHouseConnection : DbConnection
                     reader.ReadString(); // columns metadata
                     _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
 
-                    if (wireDump == "1")
-                    {
-                        File.AppendAllText("/tmp/ch_wire_dump.log", "[CH] ReceiveSchemaBlockAsync: skipped TableColumns, waiting for Data...\n");
-                    }
                     continue;
                 }
 
@@ -4401,14 +4363,6 @@ public sealed class ClickHouseConnection : DbConnection
                 NegotiatedProtocolVersion);
         }
 
-        // Wire dump for debugging protocol issues
-        var wireDump = Environment.GetEnvironmentVariable("CH_WIRE_DUMP");
-        if (wireDump == "1")
-        {
-            var logPath = "/tmp/ch_wire_dump.log";
-            File.AppendAllText(logPath, $"[CH] DATA BLOCK: {bufferWriter.WrittenCount} bytes, protocol={NegotiatedProtocolVersion}\n");
-            File.AppendAllText(logPath, $"[CH] HEX: {BitConverter.ToString(bufferWriter.WrittenSpan.ToArray())}\n");
-        }
 
         await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
@@ -4436,14 +4390,6 @@ public sealed class ClickHouseConnection : DbConnection
             Block.WriteEmpty(ref writer);
         }
 
-        // Wire dump for debugging protocol issues
-        var wireDump = Environment.GetEnvironmentVariable("CH_WIRE_DUMP");
-        if (wireDump == "1")
-        {
-            var logPath = "/tmp/ch_wire_dump.log";
-            File.AppendAllText(logPath, $"[CH] EMPTY BLOCK: {bufferWriter.WrittenCount} bytes\n");
-            File.AppendAllText(logPath, $"[CH] HEX: {BitConverter.ToString(bufferWriter.WrittenSpan.ToArray())}\n");
-        }
 
         await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
@@ -4500,14 +4446,6 @@ public sealed class ClickHouseConnection : DbConnection
                 Array.Clear(rowArray, 0, rowCount);
             }
 
-            // Wire dump for debugging protocol issues
-            var wireDump = Environment.GetEnvironmentVariable("CH_WIRE_DUMP");
-            if (wireDump == "1")
-            {
-                var logPath = "/tmp/ch_wire_dump.log";
-                File.AppendAllText(logPath, $"[CH] DATA BLOCK DIRECT: {bufferWriter.WrittenCount} bytes, protocol={NegotiatedProtocolVersion}\n");
-                File.AppendAllText(logPath, $"[CH] HEX: {BitConverter.ToString(bufferWriter.WrittenSpan.ToArray())}\n");
-            }
 
             await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
         }
@@ -4615,22 +4553,12 @@ public sealed class ClickHouseConnection : DbConnection
     {
         var registry = _columnReaderRegistry;
 
-        // Wire dump for debugging
-        var wireDump = Environment.GetEnvironmentVariable("CH_WIRE_DUMP");
-        if (wireDump == "1")
-        {
-            File.AppendAllText("/tmp/ch_wire_dump.log", "[CH] ReceiveEndOfStreamAsync: waiting for EndOfStream...\n");
-        }
 
         while (true)
         {
             var result = await _pipeReader!.ReadAsync(cancellationToken);
             var buffer = result.Buffer;
 
-            if (wireDump == "1")
-            {
-                File.AppendAllText("/tmp/ch_wire_dump.log", $"[CH] ReceiveEndOfStreamAsync: received {buffer.Length} bytes, IsCompleted={result.IsCompleted}\n");
-            }
 
             if (result.IsCanceled)
                 throw new OperationCanceledException(cancellationToken);
@@ -4643,10 +4571,6 @@ public sealed class ClickHouseConnection : DbConnection
                 var reader = CreateProtocolReader(buffer);
                 var messageType = (ServerMessageType)reader.ReadVarInt();
 
-                if (wireDump == "1")
-                {
-                    File.AppendAllText("/tmp/ch_wire_dump.log", $"[CH] ReceiveEndOfStreamAsync: messageType={messageType}\n");
-                }
 
                 switch (messageType)
                 {

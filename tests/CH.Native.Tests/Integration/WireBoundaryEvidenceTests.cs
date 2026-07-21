@@ -75,6 +75,27 @@ public class WireBoundaryEvidenceTests
     }
 
     [Fact]
+    public async Task TypedStream_EarlyBreak_ConnectionReusableWithCorrectResult()
+    {
+        // F8: abandoning a typed stream (break out of await foreach) runs only
+        // finallys — no catch ever sees it. QueryTypedAsync's finally must
+        // Cancel+drain so the un-consumed response can't corrupt the next query.
+        await using var conn = new ClickHouseConnection(_fixture.ConnectionString);
+        await conn.OpenAsync();
+
+        var seen = 0;
+        await foreach (var _ in conn.QueryTypedAsync<ulong>(
+            "SELECT number FROM system.numbers LIMIT 1000000"))
+        {
+            if (++seen >= 10) break; // abandon mid-stream
+        }
+
+        // The follow-up must return ITS OWN result, not a leftover data block.
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
+        Assert.True(conn.BoundaryProven, "Early-break must leave the wire at a proven boundary (drained).");
+    }
+
+    [Fact]
     public async Task CommandTimeout_OnReaderPath_ConnectionReusableWithCorrectResult()
     {
         // F7: the reader's dispose-drain is dead when CommandTimeout fires — the
