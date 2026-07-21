@@ -108,7 +108,16 @@ and this project follows [Semantic Versioning](https://semver.org/).
     "must be initialized"; initialization errors (missing table, permissions,
     busy connection, schema mismatch) surface from the first add call when
     `InitAsync` is not used. Exception types are unchanged.
-  - A failed initialization (explicit or lazy) leaves the inserter retryable.
+  - A failed initialization (explicit or lazy) leaves the inserter retryable
+    on the same connection whenever the failure leaves the wire at a clean
+    protocol boundary — a pre-wire error (busy connection, invalid
+    `ColumnTypes`, a token already cancelled at entry) or a server rejection of
+    the INSERT statement (missing table, permission denied, unknown column,
+    which come back as a clean server-exception envelope). Cancellation *after
+    the INSERT is in flight* is the exception: it cannot cleanly drain the open
+    INSERT, so the connection is marked broken and recovery needs a fresh
+    `ClickHouseConnection` — but even then the inserter is no longer falsely
+    latched as "complete-cancelled".
   - `CompleteAsync()`/dispose on a never-initialized inserter with zero rows is
     a silent no-op that never contacts the server (previously threw). The
     `ClickHouseConnection.BulkInsertAsync` convenience methods still validate

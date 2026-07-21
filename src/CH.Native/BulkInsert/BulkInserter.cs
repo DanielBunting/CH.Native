@@ -291,7 +291,14 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         {
             // SendCancelAsync wrote the Cancel packet; drain the server's
             // response so the wire is realigned for connection reuse.
-            Abort();
+            //
+            // Do NOT call Abort() here. Cancellation *during initialization*
+            // (before _initialized flips) must leave the inserter retryable —
+            // that is the documented lazy-init contract, and the next
+            // AddAsync/InitAsync re-attempts init. Abort() sets _completeStarted,
+            // which would make every subsequent AddAsync throw "cannot accept
+            // more items after a cancelled or failed CompleteAsync" instead.
+            // The buffer is provably empty pre-init, so there is nothing to clear.
             await _connection.DrainAfterCancellationAsync();
             ReleaseSlotIfClaimed();
             throw;
@@ -367,6 +374,10 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     public async ValueTask AddRangeAsync(IEnumerable<T> items, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        // Null validation runs BEFORE lazy init — a null argument is a caller
+        // bug and must not open a wire INSERT or claim the busy slot. Mirrors
+        // DynamicBulkInserter's argument-first ordering.
+        ArgumentNullException.ThrowIfNull(items);
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
         if (_completeStarted)
@@ -403,6 +414,8 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     public async ValueTask AddRangeStreamingAsync(IEnumerable<T> items, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        // Null validation runs BEFORE lazy init — see AddRangeAsync.
+        ArgumentNullException.ThrowIfNull(items);
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
         if (_completeStarted)
@@ -488,6 +501,8 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     public async ValueTask AddRangeStreamingAsync(IAsyncEnumerable<T> items, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        // Null validation runs BEFORE lazy init — see AddRangeAsync.
+        ArgumentNullException.ThrowIfNull(items);
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
         if (_completeStarted)

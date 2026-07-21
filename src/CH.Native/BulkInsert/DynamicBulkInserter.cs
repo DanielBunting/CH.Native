@@ -296,7 +296,13 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
         }
         catch (OperationCanceledException) when (_connection.WasCancellationRequested)
         {
-            Abort();
+            // Do NOT call Abort() here. Cancellation *during initialization*
+            // (before _initialized flips) must leave the inserter retryable —
+            // that is the documented lazy-init contract, and the next
+            // AddAsync/InitAsync re-attempts init. Abort() sets _completeStarted,
+            // which would make every subsequent AddAsync throw "cannot accept
+            // more rows after a cancelled or failed CompleteAsync" instead. The
+            // buffer is provably empty pre-init, so there is nothing to clear.
             await _connection.DrainAfterCancellationAsync();
             ReleaseSlotIfClaimed();
             throw;
