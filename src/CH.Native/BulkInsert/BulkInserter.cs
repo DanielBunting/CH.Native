@@ -588,15 +588,14 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_initialized)
         {
-            // Never initialized: nothing is on the wire, and an empty buffer
-            // means there is nothing to flush — return without opening an
-            // INSERT. Buffered rows without init are unreachable today (the
-            // Add methods initialize at entry), but initialize defensively
-            // rather than silently drop rows if that invariant ever changes.
+            // Never initialized: nothing is on the wire, so there is nothing to
+            // flush. The Add methods always initialize before buffering a row, so
+            // an un-initialized inserter's buffer is provably empty — assert that
+            // invariant rather than carry a dead "initialize then flush" path.
             cancellationToken.ThrowIfCancellationRequested();
-            if (_buffer.Count == 0)
-                return;
-            await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+            Debug.Assert(_buffer.Count == 0,
+                "Un-initialized BulkInserter must have an empty buffer (Add initializes before buffering).");
+            return;
         }
         // No `_completeStarted` guard here: CompleteAsync flips that flag
         // before calling this method internally, and the AddAsync family
@@ -819,10 +818,11 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     /// query was already sent (e.g. explicit <see cref="InitAsync"/> succeeded
     /// but the inserter was abandoned before any <see cref="AddAsync"/>),
     /// Dispose still needs to finalize the server-side protocol state so the
-    /// underlying connection is reusable. A never-initialized inserter never
-    /// touched the wire, so its dispose is a pure no-op. It does so by driving the implicit complete via
-    /// <see cref="CompleteAsync"/>. A failure there still surfaces to the
-    /// caller — a broken wire is not something to swallow.
+    /// underlying connection is reusable. It does so by driving the implicit
+    /// complete via <see cref="CompleteAsync"/>; a failure there still surfaces
+    /// to the caller — a broken wire is not something to swallow. A
+    /// never-initialized inserter never touched the wire, so its dispose is a
+    /// pure no-op.
     /// </para>
     /// </remarks>
     public async ValueTask DisposeAsync()
