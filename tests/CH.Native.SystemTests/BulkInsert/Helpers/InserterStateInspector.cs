@@ -36,4 +36,19 @@ internal static class InserterStateInspector
 
     public static bool Disposed<T>(BulkInserter<T> inserter) where T : class =>
         (bool)Field(inserter, "_disposed").GetValue(inserter)!;
+
+    // DynamicBulkInserter is non-generic, so its fields are reachable directly on
+    // the concrete type — no closed-vs-open generic dance required.
+    private static FieldInfo DynField(DynamicBulkInserter inserter, string name)
+    {
+        return typeof(DynamicBulkInserter).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException(
+                $"DynamicBulkInserter.{name} field moved or renamed.");
+    }
+
+    public static bool Initialized(DynamicBulkInserter inserter) =>
+        (bool)DynField(inserter, "_initialized").GetValue(inserter)!;
+
+    public static bool CompleteStarted(DynamicBulkInserter inserter) =>
+        (bool)DynField(inserter, "_completeStarted").GetValue(inserter)!;
 }

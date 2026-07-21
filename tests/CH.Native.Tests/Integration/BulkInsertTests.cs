@@ -680,6 +680,42 @@ public class BulkInsertTests
     }
 
     [Fact]
+    public async Task BulkInsert_AddRangeStreamingAsync_NullItems_ThrowsArgNull_BeforeContactingServer()
+    {
+        var tableName = $"test_bulk_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                Id Int32,
+                Name String
+            ) ENGINE = Memory");
+
+        try
+        {
+            var inserter = connection.CreateBulkInserter<SimpleRow>(tableName);
+
+            // Both streaming overloads share AddRangeAsync's null-before-init guard.
+            // Casts disambiguate the IEnumerable vs IAsyncEnumerable overloads.
+            await Assert.ThrowsAsync<ArgumentNullException>(
+                () => inserter.AddRangeStreamingAsync((IEnumerable<SimpleRow>)null!).AsTask());
+            await Assert.ThrowsAsync<ArgumentNullException>(
+                () => inserter.AddRangeStreamingAsync((IAsyncEnumerable<SimpleRow>)null!).AsTask());
+
+            // Neither call ran lazy init, so the connection was never claimed for an
+            // INSERT — it answers immediately (no ClickHouseConnectionBusyException).
+            Assert.Equal(1, await connection.ExecuteScalarAsync<int>("SELECT 1"));
+
+            await inserter.DisposeAsync();
+        }
+        finally
+        {
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
     public async Task BulkInsert_AddAfterComplete_ThrowsException()
     {
         var tableName = $"test_bulk_{Guid.NewGuid():N}";
