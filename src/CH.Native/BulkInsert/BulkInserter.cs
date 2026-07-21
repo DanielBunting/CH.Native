@@ -38,6 +38,11 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     // DisposeAsync. Lets DisposeAsync release the busy slot exactly once
     // even when initialization threw before _initialized flipped.
     private bool _slotClaimed;
+    // When true, this inserter owns the connection's lifetime and disposes it in
+    // DisposeAsync. Set only for pooled inserters (DataSource.CreateBulkInserterAsync),
+    // where disposing the connection returns it to the pool. False for the public
+    // constructors, where the caller owns the connection and it must be left open.
+    private bool _ownsConnection;
     private int _totalRowsInserted;
     private bool _usedCachedSchema;
     private SchemaKey _schemaCacheKey;
@@ -125,6 +130,14 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     /// Gets the number of rows currently buffered.
     /// </summary>
     public int BufferedCount => _buffer.Count;
+
+    /// <summary>
+    /// Transfers ownership of the underlying connection to this inserter, so that
+    /// <see cref="DisposeAsync"/> disposes it (returning it to the pool). Called by
+    /// <see cref="Connection.ClickHouseDataSource.CreateBulkInserterAsync{T}(string, BulkInsertOptions, System.Threading.CancellationToken)"/>
+    /// for pooled inserters; the public constructors leave the caller-owned connection alone.
+    /// </summary>
+    internal void OwnConnection() => _ownsConnection = true;
 
     /// <summary>
     /// Suppresses the dispose-time "unflushed rows" failure for callers that
@@ -918,6 +931,15 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             ReturnPooledArrays();
             _buffer.Clear();
             ReleaseSlotIfClaimed();
+            // Pooled inserters own the connection: disposing it fires the pool
+            // return hook so the connection goes back to the pool instead of
+            // leaking as permanently "busy". Best-effort — a return failure must
+            // not mask the primary exception (e.g. unflushed-rows) from the try.
+            if (_ownsConnection)
+            {
+                try { await _connection.DisposeAsync().ConfigureAwait(false); }
+                catch { /* pool-return best-effort */ }
+            }
         }
     }
 

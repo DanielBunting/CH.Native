@@ -65,7 +65,7 @@ public sealed class RestartableSingleNodeFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        await _container.StartAsync();
+        await StartWithRebindRetryAsync();
         await WaitForHandshakeAsync();
     }
 
@@ -107,8 +107,98 @@ public sealed class RestartableSingleNodeFixture : IAsyncLifetime
     /// </summary>
     public async Task StartContainerAsync()
     {
-        await _container.StartAsync();
+        await StartWithRebindRetryAsync();
         await WaitForHandshakeAsync();
+    }
+
+    /// <summary>
+    /// Starts <see cref="_container"/> on the pinned host port, tolerating the
+    /// transient <c>address already in use</c> collision that occurs when the
+    /// previous <c>docker-proxy</c> for that port has not been torn down yet —
+    /// common right after <c>docker stop</c>, and worse after
+    /// <c>docker kill --signal=KILL</c> (no graceful drain). The port is fixed by
+    /// contract (cached settings must stay valid), so we wait for it to free and
+    /// retry the SAME port rather than re-binding a different one.
+    /// </summary>
+    private async Task StartWithRebindRetryAsync()
+    {
+        // Give the prior userland proxy time to release the fixed host port before
+        // the first attempt, so the common case doesn't even need a retry.
+        await WaitForPortFreeAsync(_hostPort, TimeSpan.FromSeconds(15));
+
+        const int maxAttempts = 6;
+        var delay = TimeSpan.FromMilliseconds(500);
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                await _container.StartAsync();
+                return;
+            }
+            catch (Exception ex) when (attempt < maxAttempts && IsPortBindConflict(ex))
+            {
+                // The host port is still held by a lingering proxy. Back off, wait
+                // for it to free, and retry the same fixed port.
+                await Task.Delay(delay);
+                await WaitForPortFreeAsync(_hostPort, TimeSpan.FromSeconds(10));
+                delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, 4000));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Polls until <paramref name="port"/> is bindable on <see cref="IPAddress.Any"/>
+    /// (matching Docker's <c>0.0.0.0</c> publish interface) or the timeout elapses.
+    /// Best-effort: returns on timeout rather than throwing, leaving the actual
+    /// bind outcome to <c>StartAsync</c>.
+    /// </summary>
+    private static async Task WaitForPortFreeAsync(int port, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            if (IsPortBindable(port))
+                return;
+            if (DateTime.UtcNow >= deadline)
+                return;
+            await Task.Delay(200);
+        }
+    }
+
+    private static bool IsPortBindable(int port)
+    {
+        try
+        {
+            using var listener = new TcpListener(IPAddress.Any, port);
+            listener.Start();
+            listener.Stop();
+            return true;
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// True when <paramref name="ex"/> (or any inner exception — Testcontainers may
+    /// wrap the <c>Docker.DotNet.DockerApiException</c>) is a host-port bind
+    /// conflict. Scoped narrowly so genuine container failures surface immediately
+    /// instead of being retried.
+    /// </summary>
+    private static bool IsPortBindConflict(Exception ex)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            var m = e.Message;
+            if (m.Contains("address already in use", StringComparison.OrdinalIgnoreCase)
+                || m.Contains("failed to bind host port", StringComparison.OrdinalIgnoreCase)
+                || m.Contains("port is already allocated", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private async Task WaitForHandshakeAsync()
@@ -130,23 +220,21 @@ public sealed class RestartableSingleNodeFixture : IAsyncLifetime
 
     private static int ProbeFreeHostPort()
     {
-        // Try each candidate by binding a TcpListener; the first one that binds
-        // cleanly is free *right now*. A small race window between probe and the
-        // container's bind is acceptable — Docker will fail container start with
-        // a clear error, and the fixture surface stays simple.
-        for (int port = ProbeRangeStart; port <= ProbeRangeEnd; port++)
+        // Probe on IPAddress.Any (0.0.0.0), matching the interface Docker actually
+        // publishes to. A port that binds here is genuinely free on every interface,
+        // so we don't pick one that's free on loopback but held on 0.0.0.0 by a
+        // lingering docker-proxy. The container's re-bind race is handled separately
+        // by StartWithRebindRetryAsync.
+        //
+        // Start the scan at a randomized offset within the range so repeated fixture
+        // constructions don't all contend on ProbeRangeStart first.
+        int span = ProbeRangeEnd - ProbeRangeStart + 1;
+        int offset = Random.Shared.Next(span);
+        for (int i = 0; i < span; i++)
         {
-            try
-            {
-                using var listener = new TcpListener(IPAddress.Loopback, port);
-                listener.Start();
-                listener.Stop();
+            int port = ProbeRangeStart + ((offset + i) % span);
+            if (IsPortBindable(port))
                 return port;
-            }
-            catch (SocketException)
-            {
-                // Port in use — try next.
-            }
         }
         throw new InvalidOperationException(
             $"No free host port found in [{ProbeRangeStart}, {ProbeRangeEnd}] for RestartableSingleNodeFixture.");

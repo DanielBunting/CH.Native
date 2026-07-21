@@ -50,6 +50,10 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
     private bool _completeStarted;
     private bool _disposed;
     private bool _slotClaimed;
+    // When true, this inserter owns the connection's lifetime and disposes it in
+    // DisposeAsync (returning it to the pool). Set only for pooled inserters
+    // (DataSource.CreateBulkInserterAsync); false for the public constructors.
+    private bool _ownsConnection;
     private int _totalRowsInserted;
     private bool _usedCachedSchema;
     private SchemaKey _schemaCacheKey;
@@ -169,6 +173,14 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
 
     /// <summary>Gets the number of rows currently buffered.</summary>
     public int BufferedCount => _bufferedRows;
+
+    /// <summary>
+    /// Transfers ownership of the underlying connection to this inserter, so that
+    /// <see cref="DisposeAsync"/> disposes it (returning it to the pool). Called by
+    /// the pooled <c>DataSource.CreateBulkInserterAsync</c> factory; the public
+    /// constructors leave the caller-owned connection alone.
+    /// </summary>
+    internal void OwnConnection() => _ownsConnection = true;
 
     /// <summary>
     /// Suppresses the dispose-time "unflushed rows" failure for callers that
@@ -686,6 +698,13 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
             ReturnPooledArrays();
             _bufferedRows = 0;
             ReleaseSlotIfClaimed();
+            // Pooled inserters own the connection: disposing it returns it to the
+            // pool instead of leaking it as permanently "busy". Best-effort.
+            if (_ownsConnection)
+            {
+                try { await _connection.DisposeAsync().ConfigureAwait(false); }
+                catch { /* pool-return best-effort */ }
+            }
         }
     }
 

@@ -391,7 +391,9 @@ public sealed class ClickHouseDataSource : DbDataSource
             // Ownership transfers to the BulkInserter. When the caller disposes
             // the inserter, the inserter's DisposeAsync disposes the connection,
             // which triggers the pool-return hook (installed by OpenConnectionAsync).
-            return new BulkInserter<T>(conn, tableName, options);
+            var inserter = new BulkInserter<T>(conn, tableName, options);
+            inserter.OwnConnection();
+            return inserter;
         }
         catch
         {
@@ -416,7 +418,9 @@ public sealed class ClickHouseDataSource : DbDataSource
         var conn = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return new BulkInserter<T>(conn, database, tableName, options);
+            var inserter = new BulkInserter<T>(conn, database, tableName, options);
+            inserter.OwnConnection();
+            return inserter;
         }
         catch
         {
@@ -437,7 +441,9 @@ public sealed class ClickHouseDataSource : DbDataSource
         var conn = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return new DynamicBulkInserter(conn, tableName, columnNames, options);
+            var inserter = new DynamicBulkInserter(conn, tableName, columnNames, options);
+            inserter.OwnConnection();
+            return inserter;
         }
         catch
         {
@@ -461,7 +467,9 @@ public sealed class ClickHouseDataSource : DbDataSource
         var conn = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            return new DynamicBulkInserter(conn, database, tableName, columnNames, options);
+            var inserter = new DynamicBulkInserter(conn, database, tableName, columnNames, options);
+            inserter.OwnConnection();
+            return inserter;
         }
         catch
         {
