@@ -107,6 +107,32 @@ public sealed class ClickHouseConnection : DbConnection
     // stream is at an unknown offset, so the connection must be discarded — not
     // returned to the pool, not reused for the next query. Read by CanBePooled.
     private volatile bool _protocolFatal;
+
+    // ── Wire-conversation evidence ─────────────────────────────────────────────
+    // Together these derive "is the wire at a protocol boundary?" instead of
+    // trusting method-exit bookkeeping:
+    //   _conversationWrote  — this conversation put non-cancel bytes on the wire.
+    //   _boundaryProven     — since the last non-cancel byte we sent, a full
+    //                         response terminator (EndOfStream, or a completely
+    //                         consumed server-exception envelope) was consumed.
+    // Set/cleared in WriteAndFlushAsync; proven only at terminator-consumption
+    // sites; reset at EnterBusy. Consumed by ExitBusyResolve's pessimistic gate.
+    private volatile bool _conversationWrote;
+    private volatile bool _boundaryProven;
+
+    /// <summary>
+    /// True when the current conversation has put non-cancel bytes on the wire.
+    /// Consumed by the cancellation-drain gate and (from the pessimism step)
+    /// ExitBusyResolve; internal for test assertions.
+    /// </summary>
+    internal bool ConversationWrote => _conversationWrote;
+
+    /// <summary>
+    /// True when a full response terminator has been consumed since the last
+    /// non-cancel write — i.e., the server owes us nothing. Internal for test
+    /// assertions until ExitBusyResolve consumes it.
+    /// </summary>
+    internal bool BoundaryProven => _boundaryProven;
     private X509Certificate2? _customCaCertificate;
 
     // Role-sync state: tracks what we last sent via SET ROLE on this session.
@@ -234,6 +260,14 @@ public sealed class ClickHouseConnection : DbConnection
             }
             _busy = true;
             _busyOwnerQueryId = queryIdForOwner;
+            // Fresh conversation, fresh evidence. Deliberately AFTER the reject
+            // guards: a losing contender (busy-collision) must not wipe the
+            // winning conversation's in-flight evidence. Belt-and-braces — the
+            // write-clears-proof rule in WriteAndFlushAsync is the load-bearing
+            // reset; this keeps a no-write conversation from inheriting stale
+            // "wrote" state from its predecessor.
+            _conversationWrote = false;
+            _boundaryProven = false;
         }
     }
 
@@ -648,11 +682,34 @@ public sealed class ClickHouseConnection : DbConnection
     /// detached cancellation callback — from racing with an in-flight query or
     /// bulk-insert write and corrupting the wire.
     /// </summary>
-    private async Task WriteAndFlushAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
+    /// <param name="data">The bytes to write.</param>
+    /// <param name="cancellationToken">Cancellation token; a cancellation during the
+    /// lock wait leaves no conversation evidence (nothing was sent).</param>
+    /// <param name="isCancelPacket">
+    /// True only for <see cref="SendCancelAsync"/>. A Cancel packet must not touch
+    /// the conversation evidence: it can race in from the detached cancellation
+    /// callback AFTER the response terminator was already consumed, and un-proving
+    /// a clean boundary there would spuriously poison a healthy connection. The
+    /// server ignores Cancel packets received in the idle state, so a proven
+    /// boundary stays valid. Excluding cancel also keeps all evidence transitions
+    /// conversation-sequential (no concurrent writers).
+    /// </param>
+    private async Task WriteAndFlushAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken, bool isCancelPacket = false)
     {
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // Evidence is stamped after the lock wait succeeds but BEFORE the
+            // write: once we attempt WriteAsync, bytes may be on the wire even if
+            // the flush later faults — the conversation must count as "wrote".
+            // A write invalidates any prior boundary proof: from this point the
+            // server owes us a response again (this also correctly handles nested
+            // conversations, e.g. role-sync running inside an outer busy span).
+            if (!isCancelPacket)
+            {
+                _conversationWrote = true;
+                _boundaryProven = false;
+            }
             await _pipeWriter!.WriteAsync(data, cancellationToken).ConfigureAwait(false);
             await _pipeWriter.FlushAsync(cancellationToken).ConfigureAwait(false);
         }
@@ -730,7 +787,17 @@ public sealed class ClickHouseConnection : DbConnection
                 await ConnectTcpAsync(cancellationToken);
                 await PerformHandshakeAsync(cancellationToken);
             }
-            lock (_queryLock) { _isOpen = true; }
+            lock (_queryLock)
+            {
+                _isOpen = true;
+                // Handshake boundary proof is set EXPLICITLY (the handshake does
+                // not run through the query pumps, and its final action is a
+                // response-less addendum write, so terminator-site rules alone can
+                // never prove it). Placed with _isOpen inside the lock, BEFORE
+                // OnStateChange/telemetry — those can throw after the connection
+                // is nominally open, and the failure path closes (benign).
+                _boundaryProven = true;
+            }
             OnStateChange(new System.Data.StateChangeEventArgs(
                 System.Data.ConnectionState.Connecting, System.Data.ConnectionState.Open));
 
@@ -2358,6 +2425,10 @@ public sealed class ClickHouseConnection : DbConnection
                     if (message is EndOfStreamMessage)
                     {
                         _pipeReader.AdvanceTo(buffer.Start);
+                        // Terminator consumed — boundary proven. (Trailing-bytes
+                        // parity with the untyped pump is added in the pessimism
+                        // step; proof here matches current accepted behavior.)
+                        _boundaryProven = true;
                         yield break;
                     }
 
@@ -2499,6 +2570,10 @@ public sealed class ClickHouseConnection : DbConnection
                     var exceptionMessage = ExceptionMessage.Read(ref parseReader);
                     buffer = bodyBuffer.Slice(parseReader.Consumed);
                     _pipeReader!.AdvanceTo(buffer.Start);
+                    // Envelope fully consumed and advanced past: the server-side
+                    // exception IS this response's terminator — boundary proven.
+                    // Proof must stay colocated with the AdvanceTo above.
+                    _boundaryProven = true;
                     throw ClickHouseServerException.FromExceptionMessage(exceptionMessage);
                 }
 
@@ -3202,7 +3277,9 @@ public sealed class ClickHouseConnection : DbConnection
             var writer = new ProtocolWriter(bufferWriter);
             CancelMessage.Write(ref writer);
 
-            await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
+            // isCancelPacket: this write must not touch conversation evidence —
+            // see WriteAndFlushAsync's parameter doc.
+            await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken, isCancelPacket: true);
 
             _cancellationRequested = true;
         }
@@ -3258,6 +3335,9 @@ public sealed class ClickHouseConnection : DbConnection
                     if (message is EndOfStreamMessage)
                     {
                         _pipeReader.AdvanceTo(buffer.Start);
+                        // Drain reached the terminator — boundary proven; the
+                        // connection is salvageable after the cancellation.
+                        _boundaryProven = true;
                         return;
                     }
                 }
@@ -3266,12 +3346,17 @@ public sealed class ClickHouseConnection : DbConnection
 
                 if (result.IsCompleted)
                     break;
+                // NOTE (intentional): the two `break` exits above fall through
+                // WITHOUT boundary proof — the socket died mid-drain, so under
+                // the pessimistic resolve the conversation correctly classifies
+                // as broken. Do not "fix" them by adding proof here.
             }
         }
         catch (ClickHouseServerException)
         {
-            // Expected - server sends exception for cancelled query
-            // Connection is now in clean state
+            // Expected - server sends exception for cancelled query.
+            // TryReadMessage's exception arm consumed the envelope (and set
+            // boundary proof) before throwing — connection is in a clean state.
         }
         catch
         {
@@ -3353,6 +3438,9 @@ public sealed class ClickHouseConnection : DbConnection
                         }
 
                         _pipeReader.AdvanceTo(buffer.Start);
+                        // Terminator consumed cleanly (trailing-bytes check above
+                        // passed): the server owes us nothing — boundary proven.
+                        _boundaryProven = true;
                         yield return message;
                         yield break;
                     }
@@ -3496,6 +3584,10 @@ public sealed class ClickHouseConnection : DbConnection
                     var exceptionMessage = ExceptionMessage.Read(ref parseReader);
                     buffer = bodyBuffer.Slice(parseReader.Consumed);
                     _pipeReader!.AdvanceTo(buffer.Start);
+                    // Envelope fully consumed and advanced past: the server-side
+                    // exception IS this response's terminator — boundary proven.
+                    // Proof must stay colocated with the AdvanceTo above.
+                    _boundaryProven = true;
                     throw ClickHouseServerException.FromExceptionMessage(exceptionMessage);
                 }
 
@@ -4084,6 +4176,10 @@ public sealed class ClickHouseConnection : DbConnection
                 {
                     var exceptionMessage = ExceptionMessage.Read(ref reader);
                     _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
+                    // Bulk-init failure (e.g. table missing): envelope consumed —
+                    // boundary proven, so the connection stays reusable/retryable
+                    // (pinned by BulkInserterInitFailureCleanupTests).
+                    _boundaryProven = true;
                     throw ClickHouseServerException.FromExceptionMessage(exceptionMessage);
                 }
 
@@ -4462,6 +4558,9 @@ public sealed class ClickHouseConnection : DbConnection
                         // bulk insert leaves _currentQueryId set and CanBePooledBeforeReset
                         // stays false, so the pool discards every bulk connection.
                         lock (_queryLock) { _currentQueryId = null; }
+                        // Terminator consumed cleanly (trailing check above passed)
+                        // — boundary proven.
+                        _boundaryProven = true;
                         return;
                     }
 
@@ -4484,6 +4583,8 @@ public sealed class ClickHouseConnection : DbConnection
                         var parseReader = CreateProtocolReader(bodyBuffer);
                         var exceptionMessage = ExceptionMessage.Read(ref parseReader);
                         _pipeReader.AdvanceTo(bodyBuffer.GetPosition(parseReader.Consumed));
+                        // INSERT rejected: envelope consumed — boundary proven.
+                        _boundaryProven = true;
                         throw ClickHouseServerException.FromExceptionMessage(exceptionMessage);
                     }
 
