@@ -297,7 +297,11 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     {
         if (!_slotClaimed) return;
         _slotClaimed = false;
-        _connection.ExitBusy();
+        // Owner-gated resolve: evidence decides health. A completed insert proved
+        // its boundary at ReceiveEndOfStreamAsync; an init failure whose server
+        // exception envelope was consumed proved it there; a mid-INSERT abort
+        // without a terminator correctly convicts as protocol-fatal.
+        _connection.ExitBusyResolve(_effectiveQueryId);
     }
 
     /// <summary>

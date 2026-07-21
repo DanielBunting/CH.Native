@@ -580,7 +580,10 @@ public sealed class ClickHouseDataReader : DbDataReader
     {
         if (_isCompleted) return;
         _isCompleted = true;
-        _connection?.ExitBusy();
+        // Owner-gated: after this resolves, a successor query may claim the slot
+        // before the reader is disposed; the dispose safety-net's resolve then
+        // no-ops instead of clobbering (or poisoning) the successor.
+        _connection?.ExitBusyResolve(QueryId);
     }
 
     /// <summary>
@@ -703,10 +706,12 @@ public sealed class ClickHouseDataReader : DbDataReader
 
             _activity?.Dispose();
 
-            // Safety net: release the connection's busy slot if natural
-            // completion didn't fire (e.g. DisposeAsync called before any
-            // ReadAsync, or drain threw). ExitBusy is idempotent.
-            _connection?.ExitBusy();
+            // Safety net: resolve the conversation if natural completion didn't
+            // fire (e.g. DisposeAsync called before any ReadAsync, or the drain
+            // threw). Owner-gated on OUR QueryId: if MarkCompleted already
+            // resolved and a successor query holds the slot, this no-ops rather
+            // than releasing — or poisoning — the successor's conversation.
+            _connection?.ExitBusyResolve(QueryId);
 
             // ADO lifetime hooks set by ClickHouseCommand.ExecuteDbDataReaderAsync.
             _timeoutCts?.Dispose();

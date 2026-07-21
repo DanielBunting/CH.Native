@@ -235,7 +235,7 @@ public sealed class ClickHouseConnection : DbConnection
     /// (or the OpenAsync handshake) is already in flight; otherwise sets
     /// <see cref="_busy"/> = true and records the owner's query id for the
     /// exception message that any subsequent concurrent caller would see.
-    /// Pair every successful call with <see cref="ExitBusy"/> in a finally.
+    /// Pair every successful call with <see cref="ExitBusyResolve"/> in a finally.
     /// </summary>
     /// <param name="queryIdForOwner">
     /// The query id (or <see cref="ClickHouseConnectionBusyException.HandshakeSentinel"/>)
@@ -322,12 +322,43 @@ public sealed class ClickHouseConnection : DbConnection
     /// Internal so <see cref="Results.ClickHouseDataReader"/> can release the
     /// slot when its enumerator naturally completes.
     /// </summary>
-    internal void ExitBusy()
+    /// <summary>
+    /// Ends the busy conversation owned by <paramref name="ownerQueryId"/> and
+    /// resolves the connection's health from the conversation evidence.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Owner-gated:</b> a no-op unless the slot is held AND (when an owner
+    /// id is supplied) held by that owner. This makes double-resolution safe and —
+    /// critically — stops a stale caller from resolving a SUCCESSOR's conversation:
+    /// the reader releases the slot at EOS (<c>MarkCompleted</c>) precisely so a new
+    /// query can start before the reader is disposed; the dispose safety-net must
+    /// not then evaluate (and poison) the new query's mid-flight evidence.</para>
+    /// <para><b>Pessimistic:</b> if this conversation put non-cancel bytes on the
+    /// wire and no response terminator was consumed since, the wire position is
+    /// unknown — the connection is marked protocol-fatal rather than being allowed
+    /// to look reusable. Every legitimate completion path ends at a proof site
+    /// (EOS, consumed server-exception envelope, drain success, handshake success),
+    /// so only genuinely indeterminate exits convict. The <c>_isOpen</c> gate keeps
+    /// failed handshakes and already-classified (closed) connections benign.</para>
+    /// <para>The query id is cleared here unconditionally on a matched exit: the id
+    /// lifecycle IS the conversation lifecycle, in both directions — a completed
+    /// conversation must never leave an id behind (that blocked pooling after bulk
+    /// inserts), and an abnormal exit needs no id latch because the pessimistic
+    /// gate carries the verdict.</para>
+    /// </remarks>
+    internal void ExitBusyResolve(string? ownerQueryId)
     {
         lock (_queryLock)
         {
+            if (!_busy)
+                return; // already resolved (e.g. MarkCompleted ran; safety-net no-ops)
+            if (ownerQueryId is not null && _busyOwnerQueryId is not null && _busyOwnerQueryId != ownerQueryId)
+                return; // slot belongs to a successor conversation — not ours to resolve
             _busy = false;
             _busyOwnerQueryId = null;
+            _currentQueryId = null;
+            if (_isOpen && _conversationWrote && !_boundaryProven)
+                _protocolFatal = true;
         }
     }
 
@@ -830,7 +861,10 @@ public sealed class ClickHouseConnection : DbConnection
                 if (_currentQueryId == ClickHouseConnectionBusyException.HandshakeSentinel)
                     _currentQueryId = null;
             }
-            ExitBusy();
+            // Handshake conversation: success set boundary proof next to
+            // _isOpen = true; failure paths run with _isOpen still false, so the
+            // pessimistic gate stays benign for them.
+            ExitBusyResolve(ClickHouseConnectionBusyException.HandshakeSentinel);
         }
     }
 
@@ -1244,11 +1278,25 @@ public sealed class ClickHouseConnection : DbConnection
 
         // Defensive copy so callers can't mutate the pinned reference after pinning.
         IReadOnlyList<string>? toPin = roles is null ? null : roles.ToArray();
-        await EnsureRolesResolvedAsync(toPin, cancellationToken);
 
-        // Commit the sticky override only after the server accepted the change.
-        _pinnedRoles = toPin;
-        _pinnedRolesSet = true;
+        // This runs a full wire conversation (SET ROLE), so it must hold the busy
+        // slot like every other public entry point — previously it ran outside the
+        // busy pairing entirely, able to interleave with a running query and, on
+        // failure, leave the wire indeterminate with nobody to convict.
+        var effectiveQueryId = ResolveQueryId(null);
+        EnterBusy(effectiveQueryId);
+        try
+        {
+            await EnsureRolesResolvedAsync(toPin, cancellationToken);
+
+            // Commit the sticky override only after the server accepted the change.
+            _pinnedRoles = toPin;
+            _pinnedRolesSet = true;
+        }
+        finally
+        {
+            ExitBusyResolve(effectiveQueryId);
+        }
     }
 
     /// <summary>
@@ -1967,7 +2015,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            ExitBusy();
+            ExitBusyResolve(effectiveQueryId);
         }
     }
 
@@ -2087,7 +2135,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            ExitBusy();
+            ExitBusyResolve(effectiveQueryId);
         }
     }
 
@@ -2223,7 +2271,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            if (!slotReleased) ExitBusy();
+            if (!slotReleased) ExitBusyResolve(effectiveQueryId);
         }
     }
 
@@ -2416,7 +2464,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            ExitBusy();
+            ExitBusyResolve(effectiveQueryId);
         }
     }
 
@@ -2458,10 +2506,20 @@ public sealed class ClickHouseConnection : DbConnection
 
                     if (message is EndOfStreamMessage)
                     {
+                        // Parity with the untyped pump: EndOfStream must be the
+                        // last byte of this read. Trailing bytes in the SAME
+                        // segment mean the stream is out of sync — pin the
+                        // failure here rather than blessing a corrupt boundary.
+                        if (!buffer.IsEmpty)
+                        {
+                            var trailingLength = buffer.Length;
+                            _pipeReader.AdvanceTo(buffer.End);
+                            _protocolFatal = true;
+                            throw new ClickHouseProtocolException(
+                                $"Server sent {trailingLength} byte(s) after EndOfStream; protocol stream is out of sync.");
+                        }
                         _pipeReader.AdvanceTo(buffer.Start);
-                        // Terminator consumed — boundary proven. (Trailing-bytes
-                        // parity with the untyped pump is added in the pessimism
-                        // step; proof here matches current accepted behavior.)
+                        // Terminator consumed cleanly — boundary proven.
                         _boundaryProven = true;
                         yield break;
                     }
@@ -2976,7 +3034,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            ExitBusy();
+            ExitBusyResolve(effectiveQueryId);
         }
     }
 
@@ -3068,7 +3126,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            ExitBusy();
+            ExitBusyResolve(effectiveQueryId);
         }
     }
 
@@ -3122,7 +3180,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            if (!slotReleased) ExitBusy();
+            if (!slotReleased) ExitBusyResolve(effectiveQueryId);
         }
     }
 
@@ -3382,6 +3440,16 @@ public sealed class ClickHouseConnection : DbConnection
                 {
                     if (message is EndOfStreamMessage)
                     {
+                        // Same trailing-bytes discipline as the pumps: the drain
+                        // is the path that CERTIFIES a connection as salvageable
+                        // after cancellation, so trailing garbage after its EOS
+                        // must poison, not be blessed as a clean boundary.
+                        if (!buffer.IsEmpty)
+                        {
+                            _pipeReader.AdvanceTo(buffer.End);
+                            _protocolFatal = true;
+                            return;
+                        }
                         _pipeReader.AdvanceTo(buffer.Start);
                         // Drain reached the terminator — boundary proven; the
                         // connection is salvageable after the cancellation.

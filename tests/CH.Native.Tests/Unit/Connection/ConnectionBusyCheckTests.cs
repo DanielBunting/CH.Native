@@ -232,7 +232,7 @@ public class ConnectionBusyCheckTests
         SetField(conn, "_currentQueryId", null);
 
         var enterBusy = conn.GetType().GetMethod("EnterBusy", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var exitBusy = conn.GetType().GetMethod("ExitBusy", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var exitBusy = conn.GetType().GetMethod("ExitBusyResolve", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
         enterBusy.Invoke(conn, new object?[] { "owner-q" });
         Assert.True(GetField<bool>(conn, "_busy"));
@@ -243,13 +243,13 @@ public class ConnectionBusyCheckTests
         var busyEx = Assert.IsType<ClickHouseConnectionBusyException>(tie.InnerException);
         Assert.Equal("owner-q", busyEx.InFlightQueryId);
 
-        exitBusy.Invoke(conn, null);
+        exitBusy.Invoke(conn, new object?[] { null });
         Assert.False(GetField<bool>(conn, "_busy"));
         Assert.Null(GetField<string>(conn, "_busyOwnerQueryId"));
 
         // After release, EnterBusy succeeds again.
         enterBusy.Invoke(conn, new object?[] { "next-q" });
-        exitBusy.Invoke(conn, null);
+        exitBusy.Invoke(conn, new object?[] { null });
 
         await Task.CompletedTask;
     }
@@ -298,7 +298,7 @@ public class ConnectionBusyCheckTests
         SetField(conn, "_currentQueryId", null);
 
         var enterBusy = conn.GetType().GetMethod("EnterBusy", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var exitBusy = conn.GetType().GetMethod("ExitBusy", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var exitBusy = conn.GetType().GetMethod("ExitBusyResolve", BindingFlags.Instance | BindingFlags.NonPublic)!;
 
         // Deterministic contention: all 32 tasks block on a barrier and
         // attempt EnterBusy in lockstep. Exactly one wins; the other 31 must
@@ -348,7 +348,7 @@ public class ConnectionBusyCheckTests
                     }
                     finally
                     {
-                        exitBusy.Invoke(conn, null);
+                        exitBusy.Invoke(conn, new object?[] { null });
                     }
                 });
             }
