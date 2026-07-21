@@ -74,18 +74,43 @@ public static class ClickHouseTypeParser
 
     private ref struct Parser
     {
+        // Bounds recursion depth. A column type name comes from the server and is
+        // only length-capped, so a pathologically nested type (e.g. Array(Array(...)))
+        // would recurse ParseType→ParseArguments→ParseType unbounded and throw an
+        // uncatchable StackOverflowException. Real ClickHouse types nest only a few
+        // levels; 100 is generous headroom while keeping the stack bounded. The same
+        // cap protects the reader/skipper factories, which recurse on the parsed tree.
+        private const int MaxDepth = 100;
+
         private readonly string _input;
         private int _pos;
+        private int _depth;
 
         public Parser(string input)
         {
             _input = input;
             _pos = 0;
+            _depth = 0;
         }
 
         public bool IsAtEnd => _pos >= _input.Length;
 
         public ClickHouseType ParseType()
+        {
+            if (++_depth > MaxDepth)
+                throw new FormatException(
+                    $"Type nesting depth exceeds the maximum of {MaxDepth} in '{_input}'.");
+            try
+            {
+                return ParseTypeCore();
+            }
+            finally
+            {
+                _depth--;
+            }
+        }
+
+        private ClickHouseType ParseTypeCore()
         {
             var startPos = _pos;
             var baseName = ParseIdentifier();

@@ -2338,7 +2338,16 @@ public sealed class ClickHouseConnection : DbConnection
                     throw new OperationCanceledException(cancellationToken);
 
                 if (buffer.IsEmpty && result.IsCompleted)
+                {
+                    // Server closed the socket mid-response — the connection is dead.
+                    // Mark it fatal so the finally below tears it down and the pool's
+                    // CanBePooled gate discards it. Without this, a connection with no
+                    // dirty session state to reset passes every pool health check
+                    // (_isOpen stays true, ResetSessionStateAsync does no I/O) and is
+                    // re-pooled dead — wedging recovery until idle/lifetime timeout.
+                    _protocolFatal = true;
                     throw new ClickHouseConnectionException("Server closed connection unexpectedly");
+                }
 
                 bool messageRead = false;
                 bool advancedInLoop = false;
@@ -2369,7 +2378,13 @@ public sealed class ClickHouseConnection : DbConnection
                 }
 
                 if (result.IsCompleted && !messageRead)
+                {
+                    // Truncated response (socket EOF mid-stream) — connection is dead.
+                    // Mark fatal so the pool discards it rather than re-pooling it (see
+                    // the server-closed case above).
+                    _protocolFatal = true;
                     throw new ClickHouseConnectionException("Incomplete response from server");
+                }
             }
         }
         finally
@@ -2407,11 +2422,16 @@ public sealed class ClickHouseConnection : DbConnection
         message = null;
         typedBlock = null;
 
-        if (buffer.IsEmpty)
-            return false;
-
         try
         {
+            // Iterate rather than tail-recurse on skip-and-continue message types
+            // (ProfileInfo / ProfileEvents). A single response can carry many
+            // consecutive profiling blocks; recursing once per block overflowed
+            // the stack and crashed the process.
+        restart:
+            if (buffer.IsEmpty)
+                return false;
+
             var reader = CreateProtocolReader(buffer);
             var messageType = (ServerMessageType)reader.ReadVarInt();
 
@@ -2513,7 +2533,7 @@ public sealed class ClickHouseConnection : DbConnection
                     var parseReader = CreateProtocolReader(bodyBuffer);
                     SkipProfileInfo(ref parseReader);
                     buffer = bodyBuffer.Slice(parseReader.Consumed);
-                    return TryReadTypedMessage(ref buffer, registry, out message, out typedBlock);
+                    goto restart; // continue reading; iterative to avoid stack overflow
                 }
 
                 case ServerMessageType.ProfileEvents:
@@ -2534,7 +2554,7 @@ public sealed class ClickHouseConnection : DbConnection
                     var profileEventsMsg = ReadDataMessage(ref reader, registry);
                     profileEventsMsg.Block.Dispose();
                     buffer = buffer.Slice(reader.Consumed);
-                    return TryReadTypedMessage(ref buffer, registry, out message, out typedBlock);
+                    goto restart; // continue reading; iterative to avoid stack overflow
 
                 case ServerMessageType.Totals:
                 case ServerMessageType.Extremes:
@@ -3289,7 +3309,16 @@ public sealed class ClickHouseConnection : DbConnection
                     throw new OperationCanceledException(cancellationToken);
 
                 if (buffer.IsEmpty && result.IsCompleted)
+                {
+                    // Server closed the socket mid-response — the connection is dead.
+                    // Mark it fatal so the finally below tears it down and the pool's
+                    // CanBePooled gate discards it. Without this, a connection with no
+                    // dirty session state to reset passes every pool health check
+                    // (_isOpen stays true, ResetSessionStateAsync does no I/O) and is
+                    // re-pooled dead — wedging recovery until idle/lifetime timeout.
+                    _protocolFatal = true;
                     throw new ClickHouseConnectionException("Server closed connection unexpectedly");
+                }
 
                 bool messageRead = false;
                 bool advancedInLoop = false;
@@ -3345,7 +3374,13 @@ public sealed class ClickHouseConnection : DbConnection
                 }
 
                 if (result.IsCompleted && !messageRead)
+                {
+                    // Truncated response (socket EOF mid-stream) — connection is dead.
+                    // Mark fatal so the pool discards it rather than re-pooling it (see
+                    // the server-closed case above).
+                    _protocolFatal = true;
                     throw new ClickHouseConnectionException("Incomplete response from server");
+                }
             }
         }
         finally
@@ -3382,11 +3417,16 @@ public sealed class ClickHouseConnection : DbConnection
     {
         message = null!;
 
-        if (buffer.IsEmpty)
-            return false;
-
         try
         {
+            // Iterate rather than tail-recurse on skip-and-continue message types
+            // (ProfileInfo / ProfileEvents). A single response — or a cancellation
+            // drain — can carry many consecutive profiling blocks; recursing once
+            // per block overflowed the stack and crashed the process.
+        restart:
+            if (buffer.IsEmpty)
+                return false;
+
             var reader = CreateProtocolReader(buffer);
             var messageType = (ServerMessageType)reader.ReadVarInt();
 
@@ -3491,8 +3531,7 @@ public sealed class ClickHouseConnection : DbConnection
                     var parseReader = CreateProtocolReader(bodyBuffer);
                     SkipProfileInfo(ref parseReader);
                     buffer = bodyBuffer.Slice(parseReader.Consumed);
-                    // Continue reading next message
-                    return TryReadMessage(ref buffer, registry, out message);
+                    goto restart; // continue reading; iterative to avoid stack overflow
                 }
 
                 case ServerMessageType.ProfileEvents:
@@ -3514,8 +3553,7 @@ public sealed class ClickHouseConnection : DbConnection
                     var profileEventsBlock = ReadDataMessage(ref reader, registry);
                     profileEventsBlock.Block.Dispose();
                     buffer = buffer.Slice(reader.Consumed);
-                    // Continue reading next message
-                    return TryReadMessage(ref buffer, registry, out message);
+                    goto restart; // continue reading; iterative to avoid stack overflow
 
                 case ServerMessageType.Totals:
                 case ServerMessageType.Extremes:
@@ -4418,6 +4456,12 @@ public sealed class ClickHouseConnection : DbConnection
                                 $"Server sent {trailingLength} byte(s) after EndOfStream during INSERT; protocol stream is out of sync.");
                         }
                         _pipeReader.AdvanceTo(afterEos);
+                        // INSERT completed: clear the query id so the connection is
+                        // pool-eligible again (the bulk path bypasses ReadServerMessagesAsync,
+                        // whose finally would otherwise clear it). Without this a successful
+                        // bulk insert leaves _currentQueryId set and CanBePooledBeforeReset
+                        // stays false, so the pool discards every bulk connection.
+                        lock (_queryLock) { _currentQueryId = null; }
                         return;
                     }
 
