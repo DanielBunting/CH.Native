@@ -187,7 +187,7 @@ public sealed class DapperDataSourceIntegrationGapsTests
         await using var sp = BuildServices();
         var ds = sp.GetRequiredService<ClickHouseDataSource>();
         await using var conn = await ds.OpenConnectionAsync();
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
     }
 
     // =========================================================================

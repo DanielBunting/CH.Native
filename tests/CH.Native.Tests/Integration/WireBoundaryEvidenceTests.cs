@@ -33,7 +33,7 @@ public class WireBoundaryEvidenceTests
         await using var conn = new ClickHouseConnection(_fixture.ConnectionString);
         await conn.OpenAsync();
 
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
         Assert.True(conn.BoundaryProven, "Completed query must leave the boundary proven.");
 
         // Force a Cancel packet onto the idle wire (what the detached callback
@@ -71,7 +71,7 @@ public class WireBoundaryEvidenceTests
             $"Pre-cancelled token took {sw.Elapsed} — it must fail fast, not drain.");
         Assert.False(conn.ConversationWrote,
             "Nothing was written; the conversation must carry no write evidence.");
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
     }
 
     [Fact]

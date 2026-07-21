@@ -90,7 +90,7 @@ public class ErrorCodeMappingTests
 
             await using var userConn = new ClickHouseConnection(userSettings);
             await userConn.OpenAsync();
-            Assert.Equal(1, await userConn.ExecuteScalarAsync<int>("SELECT 1"));
+            Assert.Equal(4242, await userConn.ExecuteScalarAsync<int>("SELECT 4242"));
 
             await admin.ExecuteNonQueryAsync($"DROP USER {user}");
 

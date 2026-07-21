@@ -29,4 +29,13 @@ internal static class Categories
     /// nightly CI opts in by selecting <c>Category=LongBoundary</c>.
     /// </summary>
     public const string LongBoundary = "LongBoundary";
+
+    /// <summary>
+    /// Tests whose failure modes are timing/race-dependent (cancellation windows,
+    /// restart re-binds, contention). CI can loop these systematically via
+    /// <c>--filter "Category=RaceSensitive"</c> instead of relying on single-shot
+    /// runs to surface intermittent regressions. Applied IN ADDITION to the
+    /// test's functional category (xUnit supports repeated trait keys).
+    /// </summary>
+    public const string RaceSensitive = "RaceSensitive";
 }

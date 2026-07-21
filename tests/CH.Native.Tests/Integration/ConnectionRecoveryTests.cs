@@ -314,7 +314,7 @@ public class ConnectionRecoveryTests
             () => conn.ExecuteScalarAsync<int>("SELECT this_function_does_not_exist()"));
 
         // Same connection, follow-up query must succeed.
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
     }
 
     [Fact]
@@ -326,7 +326,7 @@ public class ConnectionRecoveryTests
         await Assert.ThrowsAsync<ClickHouseServerException>(
             () => conn.ExecuteScalarAsync<int>("SELECT * FROM no_such_table_xyz"));
 
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
     }
 
     [Fact]
@@ -417,7 +417,7 @@ public class ConnectionRecoveryTests
             await foreach (var _ in conn.QueryTypedAsync<int>("SELECT * FROM no_such_table_xyz")) { }
         });
 
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
     }
 
     [Fact]
