@@ -644,6 +644,42 @@ public class BulkInsertTests
     }
 
     [Fact]
+    public async Task BulkInsert_AddRangeAsync_NullItems_ThrowsArgNull_BeforeContactingServer()
+    {
+        var tableName = $"test_bulk_{Guid.NewGuid():N}";
+        await using var connection = new ClickHouseConnection(_fixture.ConnectionString);
+        await connection.OpenAsync();
+
+        await connection.ExecuteNonQueryAsync($@"
+            CREATE TABLE {tableName} (
+                Id Int32,
+                Name String
+            ) ENGINE = Memory");
+
+        try
+        {
+            var inserter = connection.CreateBulkInserter<SimpleRow>(tableName);
+
+            // A null items argument is a caller bug: it must be rejected with
+            // ArgumentNullException BEFORE lazy init runs. Previously the lazy
+            // init fired first — opening an INSERT and claiming the busy slot —
+            // and the null only surfaced later as a NullReferenceException.
+            await Assert.ThrowsAsync<ArgumentNullException>(
+                () => inserter.AddRangeAsync(null!).AsTask());
+
+            // Because init never ran, the connection was never claimed for an
+            // INSERT: it answers a query immediately (no ClickHouseConnectionBusyException).
+            Assert.Equal(1, await connection.ExecuteScalarAsync<int>("SELECT 1"));
+
+            await inserter.DisposeAsync();
+        }
+        finally
+        {
+            await connection.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {tableName}");
+        }
+    }
+
+    [Fact]
     public async Task BulkInsert_AddAfterComplete_ThrowsException()
     {
         var tableName = $"test_bulk_{Guid.NewGuid():N}";
