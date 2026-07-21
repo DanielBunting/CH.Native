@@ -2026,7 +2026,14 @@ public sealed class ClickHouseConnection : DbConnection
 
             return default;
         }
-        catch (OperationCanceledException ex) when (_cancellationRequested)
+        // Gate on write EVIDENCE, not on "did the detached callback finish sending
+        // Cancel" (_cancellationRequested) — that flag is set at the END of a
+        // fire-and-forget task and routinely loses the race with this OCE, which
+        // used to skip the drain and leave the response bytes to corrupt the next
+        // query. If this conversation wrote, a response exists (or is owed) and
+        // draining is both safe and required; if it never wrote, there is nothing
+        // to drain and draining would hang against a silent server.
+        catch (OperationCanceledException ex) when (_conversationWrote)
         {
             ClickHouseActivitySource.SetError(activity, ex);
             // Server cancellation was requested - drain remaining messages to reset connection state
@@ -2132,7 +2139,14 @@ public sealed class ClickHouseConnection : DbConnection
 
             return totalRows;
         }
-        catch (OperationCanceledException ex) when (_cancellationRequested)
+        // Gate on write EVIDENCE, not on "did the detached callback finish sending
+        // Cancel" (_cancellationRequested) — that flag is set at the END of a
+        // fire-and-forget task and routinely loses the race with this OCE, which
+        // used to skip the drain and leave the response bytes to corrupt the next
+        // query. If this conversation wrote, a response exists (or is owed) and
+        // draining is both safe and required; if it never wrote, there is nothing
+        // to drain and draining would hang against a silent server.
+        catch (OperationCanceledException ex) when (_conversationWrote)
         {
             ClickHouseActivitySource.SetError(activity, ex);
             // Server cancellation was requested - drain remaining messages to reset connection state
@@ -2372,6 +2386,26 @@ public sealed class ClickHouseConnection : DbConnection
             }
             finally
             {
+                // Wire realignment for EVERY abnormal exit of the typed stream.
+                // This lives in a finally (not a catch) because `yield return`
+                // forbids an enclosing catch, and because iterator ABANDONMENT
+                // (caller breaks out of `await foreach`) runs only finallys —
+                // a catch would miss it entirely. Covers: cancellation (OCE from
+                // the pump), consumer exceptions between yields, and early break.
+                // Without this, the un-consumed response bytes are read by the
+                // next query on this connection as its own response — silent
+                // wrong results. Skipped when the terminator was already consumed
+                // (boundary proven) or nothing was written.
+                if (!success && _isOpen && _conversationWrote && !_boundaryProven)
+                {
+                    // Tell the server to stop producing before draining what's
+                    // in flight (mirrors ClickHouseDataReader.DisposeAsync). A
+                    // duplicate Cancel (token registration may have already sent
+                    // one) is tolerated by the server.
+                    try { await SendCancelAsync(); } catch { /* best effort */ }
+                    try { await DrainAfterCancellationAsync(); } catch { /* drain marks fatal on failure */ }
+                }
+
                 stopwatch.Stop();
                 ClickHouseMeter.RecordQuery(Settings.Database, stopwatch.Elapsed, totalRows, success);
                 if (success)
@@ -2911,7 +2945,14 @@ public sealed class ClickHouseConnection : DbConnection
 
                 return default;
             }
-            catch (OperationCanceledException ex) when (_cancellationRequested)
+            // Gate on write EVIDENCE, not on "did the detached callback finish sending
+        // Cancel" (_cancellationRequested) — that flag is set at the END of a
+        // fire-and-forget task and routinely loses the race with this OCE, which
+        // used to skip the drain and leave the response bytes to corrupt the next
+        // query. If this conversation wrote, a response exists (or is owed) and
+        // draining is both safe and required; if it never wrote, there is nothing
+        // to drain and draining would hang against a silent server.
+        catch (OperationCanceledException ex) when (_conversationWrote)
             {
                 ClickHouseActivitySource.SetError(activity, ex);
                 await DrainAfterCancellationAsync();
@@ -2996,7 +3037,14 @@ public sealed class ClickHouseConnection : DbConnection
 
                 return totalRows;
             }
-            catch (OperationCanceledException ex) when (_cancellationRequested)
+            // Gate on write EVIDENCE, not on "did the detached callback finish sending
+        // Cancel" (_cancellationRequested) — that flag is set at the END of a
+        // fire-and-forget task and routinely loses the race with this OCE, which
+        // used to skip the drain and leave the response bytes to corrupt the next
+        // query. If this conversation wrote, a response exists (or is owed) and
+        // draining is both safe and required; if it never wrote, there is nothing
+        // to drain and draining would hang against a silent server.
+        catch (OperationCanceledException ex) when (_conversationWrote)
             {
                 ClickHouseActivitySource.SetError(activity, ex);
                 await DrainAfterCancellationAsync();
