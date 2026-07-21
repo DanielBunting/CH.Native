@@ -96,7 +96,7 @@ public class QualifiedTableNameTests
         });
 
         // The connection should still be usable after the server-side rejection.
-        Assert.Equal(1, await connection.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await connection.ExecuteScalarAsync<int>("SELECT 4242"));
         Assert.NotNull(ex);
     }
 

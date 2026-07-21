@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/).
 
-## [1.2.0] - 2026-06-28
+## [1.2.0] - 2026-07-21
 
 ### Added
 
@@ -97,6 +97,40 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Connection reusability is now derived from protocol evidence** instead of
+  per-path bookkeeping. Every wire conversation tracks two facts — "did we
+  write non-cancel bytes?" and "have we consumed a full response terminator
+  since?" — and a conversation that ends without proof of a terminator marks
+  the connection broken rather than letting it look reusable. Consequences:
+  - Dead sockets (server FIN/RST, truncation, network drops mid-query) are
+    reliably discarded by the pool instead of being re-issued to the next
+    caller; abandoned response bytes can never be read by a later query as its
+    own result (previously possible after cancellation/timeouts — silent wrong
+    answers).
+  - Cancelling a query now drains the wire to the server's response terminator
+    BEFORE the `OperationCanceledException` reaches the caller, on every entry
+    point (previously only the scalar/non-query paths, behind a race-prone
+    guard). For queries the server aborts promptly this adds milliseconds; for
+    non-interruptible server work the cancellation surfaces when the server
+    responds. `QueryTypedAsync<T>` also realigns on early `break` and on
+    consumer exceptions.
+  - A `CommandTimeout` on the reader path now leaves the connection genuinely
+    reusable (previously the next query could read the timed-out query's
+    response).
+  - Server-side errors are unaffected: a consumed exception envelope still
+    leaves the connection reusable.
+  - `ChangeRolesAsync` now claims the connection's busy slot like every other
+    entry point; calling it concurrently with a running query throws
+    `ClickHouseConnectionBusyException` instead of interleaving writes.
+- Wire-declared block header counts are validated against the bytes actually
+  available before any count-sized allocation, closing a path where a corrupt
+  or hostile stream could trigger multi-GB allocations from a 5-byte varint.
+- Pool hardening: a connection returned concurrently with `DataSource`
+  disposal can no longer leak as an undisposed socket; a cancelled rent no
+  longer evicts a healthy idle connection; a failed physical open no longer
+  leaks the connection object; pool disposal no longer logs a spurious
+  `PrewarmFailed` when it races a warming pool.
+
 - `TypeMapper<T>` rewritten to compile per-property
   `Expression<Action<T, ClickHouseDataReader>>` delegates that call
   `reader.GetFieldValue<TProp>(ordinal)` directly. For well-known primitive
@@ -131,6 +165,11 @@ and this project follows [Semantic Versioning](https://semver.org/).
   `Octonica.ClickHouseClient` 1,530 ms / 28 MB. Allocations for CH.Native are
   higher than its pooled-small-batch default by design — a single 1M-row batch
   buffers every column at once. See `docs/performance-comparison.md`.
+
+### Removed
+
+- The `CH_WIRE_DUMP` debug hook (env-gated hex dumps of insert traffic to a
+  hardcoded `/tmp` path).
 
 ### Fixed
 

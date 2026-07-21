@@ -76,7 +76,7 @@ public class BulkInsertCancellationContractTests
         // Connection still usable — the existing poisoning test asserts this in
         // the integration sense; we re-assert it under the state-inspector
         // contract.
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
     }
 
     [Fact]
@@ -307,7 +307,7 @@ public class BulkInsertCancellationContractTests
 
         try { await inserter.DisposeAsync(); } catch { /* expected: clean dispose */ }
 
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
         Assert.Equal(10UL, await harness.CountAsync());
     }
 

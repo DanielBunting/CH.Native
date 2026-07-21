@@ -170,7 +170,7 @@ public class PoolWaitCancellationTests
             try { await busy1; } catch { }
 
             await using var fresh = await ds.OpenConnectionAsync();
-            Assert.Equal(1, await fresh.ExecuteScalarAsync<int>("SELECT 1"));
+            Assert.Equal(4242, await fresh.ExecuteScalarAsync<int>("SELECT 4242"));
         }
         finally
         {

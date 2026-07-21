@@ -53,7 +53,7 @@ public class RoleSwitchingTests
 
                 await using var conn = new ClickHouseConnection(settings);
                 await conn.OpenAsync();
-                Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+                Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
 
                 // currentUser() returns the connection-level user.
                 await using (var cmd = conn.CreateCommand("SELECT currentUser()"))

@@ -49,4 +49,27 @@ internal static class ProtocolGuards
                 $"({rowCount} × {elementSize}); protocol stream is malformed or hostile.");
         return rowCount * elementSize;
     }
+
+    /// <summary>
+    /// Validates that a wire-declared item count is plausible for the bytes
+    /// actually available: each item costs at least
+    /// <paramref name="minBytesPerItem"/> on the wire, so a count whose minimum
+    /// footprint exceeds <paramref name="remaining"/> is malformed or hostile.
+    /// The gate exists because a varint costs the sender ~5 bytes regardless of
+    /// magnitude — without it, a corrupt or adversarial stream can declare ~2^31
+    /// items and drive count-sized allocations (multi-GB arrays / pool rentals)
+    /// before any per-item read underruns. The compressed read path has no
+    /// pre-scan, so this is its only defense. Conservative by construction:
+    /// <paramref name="remaining"/> may include bytes beyond the current message
+    /// (uncompressed path), which can only make the gate more permissive — it
+    /// never rejects a well-formed block.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void ValidateCountAgainstRemaining(int count, int minBytesPerItem, long remaining, string fieldName)
+    {
+        if (count > 0 && (long)count * minBytesPerItem > remaining)
+            throw new ClickHouseProtocolException(
+                $"Wire value {fieldName} = {count} requires at least {(long)count * minBytesPerItem} bytes " +
+                $"but only {remaining} are available; protocol stream is malformed or hostile.");
+    }
 }

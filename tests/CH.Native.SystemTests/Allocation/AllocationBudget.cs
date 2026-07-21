@@ -11,6 +11,15 @@ internal sealed class AllocationBudget
     private const string RecordEnvVar = "CHNATIVE_ALLOC_RECORD";
     private const double TolerancePct = 0.25; // 25% headroom — wide enough to absorb GC/JIT jitter.
 
+    // Absolute slack on top of the relative headroom. Measurements are BIMODAL
+    // between runs in 256 KiB steps: a pool/pipe segment gets (or doesn't get)
+    // allocated inside the measured window depending on process start state, and
+    // because it then stays constant for the whole run, the probe's min-of-7
+    // cannot strip it. Two quanta cover baseline-recorded-low + observed-high.
+    // This costs no meaningful sensitivity for a tripwire: a real per-op
+    // regression on the x100/10k scenarios is megabytes, not half of one.
+    private const long QuantumSlackBytes = 512 * 1024;
+
     private readonly string _path;
     private readonly Dictionary<string, long> _budgets;
 
@@ -58,7 +67,7 @@ internal sealed class AllocationBudget
                 $"Run with {RecordEnvVar}=1 to record one, then commit {Path.GetFileName(_path)}.");
         }
 
-        var ceiling = (long)(baseline * (1.0 + TolerancePct));
+        var ceiling = (long)(baseline * (1.0 + TolerancePct)) + QuantumSlackBytes;
         if (observedBytes > ceiling)
         {
             throw new Xunit.Sdk.XunitException(

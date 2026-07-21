@@ -147,7 +147,7 @@ public class BulkInsertBackpressureTests : IAsyncLifetime
             // A fresh connection still works against the same table.
             await using var fresh = new ClickHouseConnection(_proxy.BuildSettings());
             await fresh.OpenAsync();
-            Assert.Equal(1, await fresh.ExecuteScalarAsync<int>("SELECT 1"));
+            Assert.Equal(4242, await fresh.ExecuteScalarAsync<int>("SELECT 4242"));
 
             // No half-committed insert: the count is whatever the server saw before
             // cancel, which for a streaming insert that didn't hit CompleteAsync

@@ -32,7 +32,10 @@ public sealed class ClickHouseDataSource : DbDataSource
     private long _totalRentsServed;
     private long _totalCreated;
     private long _totalEvicted;
-    private bool _disposed;
+    // Volatile: read by in-flight returns on other threads (ReturnAsync's entry
+    // check and post-push re-check); a stale read widens the dispose race the
+    // re-check exists to close.
+    private volatile bool _disposed;
 
     /// <summary>
     /// Creates a DataSource from a connection string. Uses default pool knobs.
@@ -245,6 +248,16 @@ public sealed class ClickHouseDataSource : DbDataSource
                 }
                 if (_options.ValidateOnRent && !await PingAsync(entry.Connection, cancellationToken).ConfigureAwait(false))
                 {
+                    // Distinguish "connection is dead" from "the CALLER's token
+                    // fired during the ping" — PingAsync swallows both into
+                    // false. A cancelled rent must not evict a healthy idle
+                    // connection: push it back and surface the cancellation
+                    // (the catch below releases this rent's permit).
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        _idle.Push(entry);
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
                     await DiscardInternalAsync(entry.Connection).ConfigureAwait(false);
                     continue;
                 }
@@ -256,7 +269,18 @@ public sealed class ClickHouseDataSource : DbDataSource
             // No idle available — create a fresh physical connection.
             var settings = await _settingsFactory(cancellationToken).ConfigureAwait(false);
             var conn = new ClickHouseConnection(settings);
-            await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await conn.OpenAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                // OpenAsync's own failure path closes the socket, but the object
+                // (write-lock semaphore, pipes) was never handed to anyone who
+                // would dispose it — do it here rather than leaking to the GC.
+                await conn.DisposeAsync().ConfigureAwait(false);
+                throw;
+            }
             Interlocked.Increment(ref _total);
             Interlocked.Increment(ref _totalCreated);
             Interlocked.Increment(ref _totalRentsServed);
@@ -695,6 +719,25 @@ public sealed class ClickHouseDataSource : DbDataSource
         }
 
         _idle.Push(new PoolEntry(conn, createdAt, DateTime.UtcNow));
+
+        // Close the dispose race: the _disposed check at entry can be arbitrarily
+        // stale by now — ResetSessionStateAsync above does real network I/O when
+        // session state is dirty, and DisposeAsyncCore drains _idle exactly once
+        // without waiting for in-flight returns. If disposal committed while we
+        // were mid-return, our push landed on a drained stack and the connection
+        // would leak as a live socket nobody ever disposes. Re-check AFTER the
+        // push and drain whatever is there (ConcurrentStack makes the double-
+        // drain race with DisposeAsyncCore benign — each entry pops exactly once).
+        if (_disposed)
+        {
+            while (_idle.TryPop(out var lateEntry))
+            {
+                try { await DiscardInternalAsync(lateEntry.Connection).ConfigureAwait(false); }
+                catch { /* best-effort teardown */ }
+            }
+            return;
+        }
+
         // Release the permit the renter was holding — this is what wakes
         // any waiter parked in OpenConnectionAsync, who will then pop the
         // idle entry we just pushed.
@@ -760,6 +803,15 @@ public sealed class ClickHouseDataSource : DbDataSource
             catch (OperationCanceledException) when (_disposeCts.IsCancellationRequested)
             {
                 // Pool was disposed mid-prewarm; nothing to log.
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                // A prewarm rent parked on the gate at dispose time surfaces as
+                // ObjectDisposedException (OpenConnectionAsync converts the
+                // dispose-cancellation for its callers). Same clean-shutdown case
+                // as above — not a prewarm failure, so no spurious PrewarmFailed
+                // log on every shutdown that raced a warming pool.
                 return;
             }
             catch (Exception ex)

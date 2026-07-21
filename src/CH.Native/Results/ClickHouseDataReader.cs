@@ -580,7 +580,10 @@ public sealed class ClickHouseDataReader : DbDataReader
     {
         if (_isCompleted) return;
         _isCompleted = true;
-        _connection?.ExitBusy();
+        // Owner-gated: after this resolves, a successor query may claim the slot
+        // before the reader is disposed; the dispose safety-net's resolve then
+        // no-ops instead of clobbering (or poisoning) the successor.
+        _connection?.ExitBusyResolve(QueryId);
     }
 
     /// <summary>
@@ -609,7 +612,11 @@ public sealed class ClickHouseDataReader : DbDataReader
             }
         }
 
-        // Drain remaining messages to keep connection in clean state
+        // Drain remaining messages to keep connection in clean state. The outer
+        // try owns the cleanup finally; the inner try/catch swallows drain
+        // failures so dispose never throws from the drain itself.
+        try
+        {
         try
         {
             while (!_isCompleted)
@@ -631,6 +638,44 @@ public sealed class ClickHouseDataReader : DbDataReader
         {
             // Don't throw from dispose
             _failed = true;
+        }
+
+        // The enumerator drain above is DEAD when the pump already faulted or
+        // finished abnormally — most notably CommandTimeout: the pump enumerator
+        // carries the timeout token, throws OCE, and its iterator is finished, so
+        // MoveNextAsync above returns false immediately and drains NOTHING. The
+        // abandoned response bytes would then be read by the NEXT query on this
+        // connection as its own response (observed live: `SELECT 42` returning
+        // the timed-out sleep query's 0). Fall back to the connection-level drain,
+        // which reads the raw pipe to the response terminator (bounded, 30s) so
+        // the wire is genuinely realigned — matching the scalar/non-query
+        // timeout paths.
+        // Gated on the connection's conversation evidence: only drain when bytes
+        // went out AND no response terminator has been consumed. A server
+        // exception, for instance, terminates the response (envelope consumed —
+        // boundary proven) with the server back at idle; draining there would
+        // read against a silent server until the 30s cap and wrongly poison.
+        if (!_isCompleted
+            && _connection is { IsOpen: true }
+            && _connection.ConversationWrote
+            && !_connection.BoundaryProven)
+        {
+            try
+            {
+                await _connection.DrainAfterCancellationAsync();
+                // Wire is back at a boundary (or the drain marked it fatal).
+                // MarkCompleted (not a raw flag) so the busy slot is released via
+                // the standard completion path; the query metric still records
+                // failure because ReadCoreAsync set _failed before propagating.
+                MarkCompleted();
+            }
+            catch
+            {
+                // Best effort — the drain marks the connection protocol-fatal on
+                // failure; nothing more to do from dispose.
+                _failed = true;
+            }
+        }
         }
         finally
         {
@@ -661,10 +706,12 @@ public sealed class ClickHouseDataReader : DbDataReader
 
             _activity?.Dispose();
 
-            // Safety net: release the connection's busy slot if natural
-            // completion didn't fire (e.g. DisposeAsync called before any
-            // ReadAsync, or drain threw). ExitBusy is idempotent.
-            _connection?.ExitBusy();
+            // Safety net: resolve the conversation if natural completion didn't
+            // fire (e.g. DisposeAsync called before any ReadAsync, or the drain
+            // threw). Owner-gated on OUR QueryId: if MarkCompleted already
+            // resolved and a successor query holds the slot, this no-ops rather
+            // than releasing — or poisoning — the successor's conversation.
+            _connection?.ExitBusyResolve(QueryId);
 
             // ADO lifetime hooks set by ClickHouseCommand.ExecuteDbDataReaderAsync.
             _timeoutCts?.Dispose();
