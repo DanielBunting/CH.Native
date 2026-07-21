@@ -134,28 +134,89 @@ public class DynamicBulkInserterTests
         Assert.Equal(0, inserter.BufferedCount);
     }
 
+    // Lazy-initialization contract: the first mutating call initializes the
+    // inserter (sends the INSERT query). On an unopened connection that init
+    // attempt fails inside SendInsertQueryAsync with "Connection is not open."
+    // — proving init fired — while pre-init validation and no-op paths must
+    // NOT touch the wire at all.
+
     [Fact]
-    public async Task AddAsync_BeforeInit_Throws()
+    public async Task AddAsync_BeforeInit_LazilyInitializes_ThrowsNotOpen()
+    {
+        var conn = NewUnopenedConnection();
+        await using var inserter = new DynamicBulkInserter(conn, "t", new[] { "id" });
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await inserter.AddAsync(new object?[] { 1 }));
+        // "not open" (not "must be initialized") proves the lazy init path ran.
+        Assert.Contains("not open", ex.Message);
+    }
+
+    [Fact]
+    public async Task AddAsync_AfterFailedLazyInit_RetriesInit_NotBusy()
     {
         var conn = NewUnopenedConnection();
         await using var inserter = new DynamicBulkInserter(conn, "t", new[] { "id" });
         await Assert.ThrowsAsync<InvalidOperationException>(async () =>
             await inserter.AddAsync(new object?[] { 1 }));
+
+        // A failed lazy init must release the busy slot and leave the inserter
+        // retryable: the second Add re-attempts init and fails the same way —
+        // not with ClickHouseConnectionBusyException (slot leak) and not with
+        // "must be initialized" (latched dead).
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await inserter.AddAsync(new object?[] { 1 }));
+        Assert.Contains("not open", ex.Message);
     }
 
     [Fact]
-    public async Task FlushAsync_BeforeInit_Throws()
+    public async Task AddAsync_BeforeInit_CancelledToken_ThrowsPlainOCE()
     {
         var conn = NewUnopenedConnection();
         await using var inserter = new DynamicBulkInserter(conn, "t", new[] { "id" });
-        await Assert.ThrowsAsync<InvalidOperationException>(() => inserter.FlushAsync());
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        // Pre-init, a cancelled token must be a plain throw BEFORE any wire
+        // activity. On this unopened connection any wire attempt would surface
+        // as InvalidOperationException instead — so seeing OCE proves ordering.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await inserter.AddAsync(new object?[] { 1 }, cts.Token));
     }
 
     [Fact]
-    public async Task CompleteAsync_BeforeInit_Throws()
+    public async Task FlushAsync_BeforeInit_EmptyBuffer_IsNoOp()
     {
         var conn = NewUnopenedConnection();
         await using var inserter = new DynamicBulkInserter(conn, "t", new[] { "id" });
-        await Assert.ThrowsAsync<InvalidOperationException>(() => inserter.CompleteAsync());
+        // Nothing buffered and never initialized: nothing to flush, no wire
+        // activity — must succeed even though the connection was never opened.
+        await inserter.FlushAsync();
+    }
+
+    [Fact]
+    public async Task CompleteAsync_BeforeInit_IsNoOp_AndSubsequentAddThrowsCompleted()
+    {
+        var conn = NewUnopenedConnection();
+        await using var inserter = new DynamicBulkInserter(conn, "t", new[] { "id" });
+        // Never initialized, nothing added: complete is a no-op that never
+        // contacts the server.
+        await inserter.CompleteAsync();
+
+        // But it still latches the completed state, so a late Add fails loudly
+        // instead of lazily opening a fresh INSERT.
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await inserter.AddAsync(new object?[] { 1 }));
+        Assert.Contains("completed", ex.Message);
+    }
+
+    [Fact]
+    public async Task AddAsync_ArityMismatch_BeforeInit_ThrowsArgumentException()
+    {
+        var conn = NewUnopenedConnection();
+        await using var inserter = new DynamicBulkInserter(conn, "t", new[] { "id" });
+        // Row validation runs before lazy init: a malformed row must not
+        // trigger any initialization (which would throw "not open" here).
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await inserter.AddAsync(new object?[] { 1, 2 }));
     }
 }

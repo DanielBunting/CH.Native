@@ -1,4 +1,5 @@
 using CH.Native.Connection;
+using CH.Native.SystemTests.BulkInsertFailures.Helpers;
 using CH.Native.SystemTests.Fixtures;
 using Xunit;
 using Xunit.Abstractions;
@@ -66,10 +67,13 @@ public class CancelDuringRoundTripTests : IAsyncLifetime
                 cts.Cancel();
             });
 
+            // Hoisted out of the try so its state can be inspected after the
+            // cancelled InitAsync (explicit-path sibling of the lazy state pin in
+            // BulkInsert_LazyInitCancelledDuringSchemaWait_DoesNotLatchAsCompleteCancelled).
+            await using var inserter = conn.CreateBulkInserter<Row>(table,
+                new BulkInsert.BulkInsertOptions { BatchSize = 1000 });
             try
             {
-                await using var inserter = conn.CreateBulkInserter<Row>(table,
-                    new BulkInsert.BulkInsertOptions { BatchSize = 1000 });
                 await inserter.InitAsync(cts.Token);
             }
             catch (OperationCanceledException ex) { observedCancel = true; thrown = ex; }
@@ -87,6 +91,14 @@ public class CancelDuringRoundTripTests : IAsyncLifetime
 
             Assert.True(observedCancel, "Cancel never propagated out of InitAsync.");
 
+            // A cancelled InitAsync must not latch the inserter: init never
+            // completed and no CompleteAsync ran, so both flags stay false.
+            // Regression guard for the dropped Abort() in EnsureInitializedAsync.
+            Assert.False(InserterStateInspector.Initialized(inserter),
+                "A cancelled InitAsync must not mark the inserter initialized.");
+            Assert.False(InserterStateInspector.CompleteStarted(inserter),
+                "A cancelled InitAsync must not latch _completeStarted — no Complete was attempted.");
+
             // Server health: a fresh connection works, the table is empty (no data
             // was ever sent), and no orphaned query lingers in system.processes.
             await using var fresh = new ClickHouseConnection(_proxy.BuildSettings());
@@ -95,6 +107,155 @@ public class CancelDuringRoundTripTests : IAsyncLifetime
 
             var rows = await fresh.ExecuteScalarAsync<ulong>($"SELECT count() FROM {table}");
             Assert.Equal(0UL, rows);
+        }
+        finally
+        {
+            await setup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [Fact]
+    public async Task BulkInsert_LazyInitCancelledDuringSchemaWait_DoesNotLatchAsCompleteCancelled()
+    {
+        // Contract under audit: a cancel that lands while the FIRST AddAsync is
+        // driving lazy init (awaiting the schema block) must NOT latch the inserter
+        // as "complete cancelled". Init never ran a Complete, so setting
+        // _completeStarted is a lie: it makes the *next* AddAsync throw the
+        // misleading "cannot accept more items after a cancelled or failed
+        // CompleteAsync" (which points the caller at the wrong recovery) instead of
+        // the truthful init/connection error.
+        //
+        // Pre-fix, EnsureInitializedAsync's OCE catch called Abort(), setting
+        // _completeStarted=true. This test pins _completeStarted=false after a
+        // cancelled lazy init. (Same-connection *retry* is out of scope here:
+        // cancelling an INSERT mid-schema-wait poisons the wire — the drain flips
+        // _protocolFatal — so recovery requires a fresh connection regardless.)
+        var table = $"cancel_lazyinit_state_{Guid.NewGuid():N}";
+        await using var setup = new ClickHouseConnection(_proxy.BuildSettings());
+        await setup.OpenAsync();
+        await setup.ExecuteNonQueryAsync(
+            $"CREATE TABLE {table} (id Int32, payload String) ENGINE = Memory");
+
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            bool observedCancel = false;
+
+            await using var conn = new ClickHouseConnection(_proxy.BuildSettings());
+            await conn.OpenAsync();
+
+            await using var inserter = conn.CreateBulkInserter<Row>(table,
+                new BulkInsert.BulkInsertOptions { BatchSize = 1000 });
+
+            // Delay only the InitAsync roundtrip (triggered lazily by the first Add).
+            await _proxy.Client.AddToxicAsync(ToxiproxyFixture.ProxyName, "latency", "downstream",
+                new() { ["latency"] = LatencyMs, ["jitter"] = 0 });
+
+            var canceller = Task.Run(async () =>
+            {
+                await Task.Delay(CancelAfterMs);
+                cts.Cancel();
+            });
+
+            try
+            {
+                // No explicit InitAsync: this first Add drives lazy init, whose
+                // schema wait lands in the latency window when the cancel fires.
+                await inserter.AddAsync(new Row { Id = 1, Payload = "cancelled" }, cts.Token);
+            }
+            catch (OperationCanceledException) { observedCancel = true; }
+            catch (Exception ex) when (ex is not Xunit.Sdk.XunitException) { observedCancel = true; }
+            finally
+            {
+                await canceller;
+                await _proxy.Client.RemoveAllToxicsAsync(ToxiproxyFixture.ProxyName);
+            }
+
+            Assert.True(observedCancel, "Cancel never propagated out of the lazy init.");
+
+            // The fix's pin: a cancelled *init* leaves the inserter un-latched.
+            // Pre-fix these are (Initialized=false, CompleteStarted=true).
+            Assert.False(InserterStateInspector.Initialized(inserter),
+                "A cancelled init must not mark the inserter initialized.");
+            Assert.False(InserterStateInspector.CompleteStarted(inserter),
+                "A cancelled init must not latch _completeStarted — no Complete was ever attempted.");
+
+            // User-visible consequence: the next AddAsync must not report the
+            // misleading complete-cancelled error. (The wire is poisoned, so it
+            // surfaces a truthful 'Connection is broken' instead.)
+            var retryEx = await Record.ExceptionAsync(
+                () => inserter.AddAsync(new Row { Id = 2, Payload = "retry" }).AsTask());
+            _output.WriteLine($"Lazy-init cancel: observedCancel={observedCancel}, retryEx={retryEx?.GetType().Name}: {retryEx?.Message}");
+            Assert.NotNull(retryEx);
+            Assert.DoesNotContain("cancelled or failed CompleteAsync", retryEx!.Message);
+        }
+        finally
+        {
+            await setup.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [Fact]
+    public async Task DynamicBulkInsert_LazyInitCancelledDuringSchemaWait_DoesNotLatchAsCompleteCancelled()
+    {
+        // DynamicBulkInserter sibling of
+        // BulkInsert_LazyInitCancelledDuringSchemaWait_DoesNotLatchAsCompleteCancelled.
+        // DynamicBulkInserter.EnsureInitializedAsync had the same Abort()-in-OCE-catch
+        // bug and the same fix, but the typed test does not exercise this code path —
+        // the two init cores are independent. A cancel while the first AddAsync drives
+        // the schema probe must leave _completeStarted=false (pre-fix it was true).
+        var table = $"cancel_dyn_lazyinit_state_{Guid.NewGuid():N}";
+        await using var setup = new ClickHouseConnection(_proxy.BuildSettings());
+        await setup.OpenAsync();
+        await setup.ExecuteNonQueryAsync(
+            $"CREATE TABLE {table} (id Int32, payload String) ENGINE = Memory");
+
+        try
+        {
+            using var cts = new CancellationTokenSource();
+            bool observedCancel = false;
+
+            await using var conn = new ClickHouseConnection(_proxy.BuildSettings());
+            await conn.OpenAsync();
+
+            // No ColumnTypes: init round-trips to probe the schema, so the cancel
+            // lands in the schema-wait latency window (same trigger as the typed test).
+            await using var inserter = conn.CreateBulkInserter(table, new[] { "id", "payload" },
+                new BulkInsert.BulkInsertOptions { BatchSize = 1000 });
+
+            await _proxy.Client.AddToxicAsync(ToxiproxyFixture.ProxyName, "latency", "downstream",
+                new() { ["latency"] = LatencyMs, ["jitter"] = 0 });
+
+            var canceller = Task.Run(async () =>
+            {
+                await Task.Delay(CancelAfterMs);
+                cts.Cancel();
+            });
+
+            try
+            {
+                await inserter.AddAsync(new object?[] { 1, "cancelled" }, cts.Token);
+            }
+            catch (OperationCanceledException) { observedCancel = true; }
+            catch (Exception ex) when (ex is not Xunit.Sdk.XunitException) { observedCancel = true; }
+            finally
+            {
+                await canceller;
+                await _proxy.Client.RemoveAllToxicsAsync(ToxiproxyFixture.ProxyName);
+            }
+
+            Assert.True(observedCancel, "Cancel never propagated out of the lazy init.");
+
+            Assert.False(InserterStateInspector.Initialized(inserter),
+                "A cancelled init must not mark the dynamic inserter initialized.");
+            Assert.False(InserterStateInspector.CompleteStarted(inserter),
+                "A cancelled init must not latch _completeStarted — no Complete was ever attempted.");
+
+            var retryEx = await Record.ExceptionAsync(
+                () => inserter.AddAsync(new object?[] { 2, "retry" }).AsTask());
+            _output.WriteLine($"Dynamic lazy-init cancel: observedCancel={observedCancel}, retryEx={retryEx?.GetType().Name}: {retryEx?.Message}");
+            Assert.NotNull(retryEx);
+            Assert.DoesNotContain("cancelled or failed CompleteAsync", retryEx!.Message);
         }
         finally
         {

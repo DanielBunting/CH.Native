@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is loosely based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/).
 
-## [1.2.0] - 2026-06-28
+## [1.2.0] - 2026-07-09
 
 ### Added
 
@@ -97,6 +97,32 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `BulkInserter<T>` and `DynamicBulkInserter` now initialize lazily on first use:
+  the INSERT query, schema resolution, and connection busy-slot claim happen at
+  the first `AddAsync`/`AddRangeAsync`/`AddRangeStreamingAsync` call instead of
+  requiring an explicit `InitAsync()`. `InitAsync` remains available as an
+  optional eager-validation step and is now **idempotent** — calling it twice
+  (or after lazy init) is a no-op instead of throwing `InvalidOperationException`
+  ("already initialized"). Behavioral consequences:
+  - Pre-init `AddAsync`/`FlushAsync`/`CompleteAsync` no longer throw
+    "must be initialized"; initialization errors (missing table, permissions,
+    busy connection, schema mismatch) surface from the first add call when
+    `InitAsync` is not used. Exception types are unchanged.
+  - A failed initialization (explicit or lazy) leaves the inserter retryable
+    on the same connection whenever the failure leaves the wire at a clean
+    protocol boundary — a pre-wire error (busy connection, invalid
+    `ColumnTypes`, a token already cancelled at entry) or a server rejection of
+    the INSERT statement (missing table, permission denied, unknown column,
+    which come back as a clean server-exception envelope). Cancellation *after
+    the INSERT is in flight* is the exception: it cannot cleanly drain the open
+    INSERT, so the connection is marked broken and recovery needs a fresh
+    `ClickHouseConnection` — but even then the inserter is no longer falsely
+    latched as "complete-cancelled".
+  - `CompleteAsync()`/dispose on a never-initialized inserter with zero rows is
+    a silent no-op that never contacts the server (previously threw). The
+    `ClickHouseConnection.BulkInsertAsync` convenience methods still validate
+    the target table even for empty sources.
+  See the "Lazy initialization" section of `docs/bulk-insert.md`.
 - `TypeMapper<T>` rewritten to compile per-property
   `Expression<Action<T, ClickHouseDataReader>>` delegates that call
   `reader.GetFieldValue<TProp>(ordinal)` directly. For well-known primitive

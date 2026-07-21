@@ -13,6 +13,8 @@ namespace CH.Native.BulkInsert;
 
 /// <summary>
 /// Provides high-performance bulk insert operations using the ClickHouse native protocol.
+/// Initialization (sending the INSERT query and resolving the table schema) happens lazily
+/// on first use; call <see cref="InitAsync"/> to perform it eagerly.
 /// </summary>
 /// <typeparam name="T">The POCO type representing a row. Must be a class with a parameterless constructor.</typeparam>
 public sealed class BulkInserter<T> : IAsyncDisposable where T : class
@@ -34,7 +36,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     private bool _disposed;
     // True between EnterBusyForBulkInsert and the matching ExitBusy in
     // DisposeAsync. Lets DisposeAsync release the busy slot exactly once
-    // even when InitAsync threw before _initialized flipped.
+    // even when initialization threw before _initialized flipped.
     private bool _slotClaimed;
     private int _totalRowsInserted;
     private bool _usedCachedSchema;
@@ -139,7 +141,8 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     /// </summary>
     /// <remarks>
     /// Replaces <c>cancellationToken.ThrowIfCancellationRequested()</c> in
-    /// methods that run after <see cref="InitAsync"/> has put the wire into
+    /// methods that run after initialization (explicit <see cref="InitAsync"/>
+    /// or lazy first-use) has put the wire into
     /// INSERT state. A bare <c>ThrowIfCancellationRequested</c> here would
     /// poison the connection: the server is waiting for the terminator block,
     /// the client has thrown OCE without sending Cancel, and the next query on
@@ -184,6 +187,10 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
 
     /// <summary>
     /// Initializes the bulk inserter by sending the INSERT query and receiving the schema.
+    /// Calling this is optional: the inserter initializes itself lazily on first use
+    /// (<see cref="AddAsync"/> and the other add/flush methods). Call it explicitly to
+    /// surface table/schema errors eagerly, before any rows are produced.
+    /// Idempotent — calling it on an already-initialized inserter is a no-op.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <remarks>
@@ -197,8 +204,18 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_initialized)
-            throw new InvalidOperationException("BulkInserter is already initialized.");
+            return;
 
+        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The initialization core shared by <see cref="InitAsync"/> and the lazy first-use
+    /// path in the add/flush methods. On failure <c>_initialized</c> stays false and the
+    /// busy slot is released, so a subsequent call may retry initialization.
+    /// </summary>
+    private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
+    {
         // Pre-INSERT: nothing on the wire yet, so a cancelled token at entry
         // is a plain throw — no Cancel packet to send, no drain to perform.
         // Must check before the registration is set up: Register on an already-
@@ -274,7 +291,14 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         {
             // SendCancelAsync wrote the Cancel packet; drain the server's
             // response so the wire is realigned for connection reuse.
-            Abort();
+            //
+            // Do NOT call Abort() here. Cancellation *during initialization*
+            // (before _initialized flips) must leave the inserter retryable —
+            // that is the documented lazy-init contract, and the next
+            // AddAsync/InitAsync re-attempts init. Abort() sets _completeStarted,
+            // which would make every subsequent AddAsync throw "cannot accept
+            // more items after a cancelled or failed CompleteAsync" instead.
+            // The buffer is provably empty pre-init, so there is nothing to clear.
             await _connection.DrainAfterCancellationAsync();
             ReleaseSlotIfClaimed();
             throw;
@@ -308,8 +332,6 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     public async ValueTask AddAsync(T item, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_initialized)
-            throw new InvalidOperationException("BulkInserter must be initialized before adding items.");
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
         // After a cancelled or failed CompleteAsync, the wire's INSERT context
@@ -320,6 +342,13 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             throw new InvalidOperationException(
                 "BulkInserter cannot accept more items after a cancelled or failed CompleteAsync. " +
                 "Create a new BulkInserter to retry.");
+
+        // Lazy init MUST run before ObserveCancellationAsync: pre-init there is
+        // no query on the wire, so a cancelled token must be a plain throw
+        // (EnsureInitializedAsync's entry check handles it) — Observe's
+        // Cancel-packet-plus-drain would poison an idle wire.
+        if (!_initialized)
+            await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         // Honor cancellation at the boundary so a cancelled token reliably
         // aborts the in-progress insert. Without this, AddAsync is purely
@@ -345,14 +374,20 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     public async ValueTask AddRangeAsync(IEnumerable<T> items, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_initialized)
-            throw new InvalidOperationException("BulkInserter must be initialized before adding items.");
+        // Null validation runs BEFORE lazy init — a null argument is a caller
+        // bug and must not open a wire INSERT or claim the busy slot. Mirrors
+        // DynamicBulkInserter's argument-first ordering.
+        ArgumentNullException.ThrowIfNull(items);
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
         if (_completeStarted)
             throw new InvalidOperationException(
                 "BulkInserter cannot accept more items after a cancelled or failed CompleteAsync. " +
                 "Create a new BulkInserter to retry.");
+
+        // Lazy init before ObserveCancellationAsync — ordering rationale in AddAsync.
+        if (!_initialized)
+            await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
 
@@ -379,14 +414,20 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     public async ValueTask AddRangeStreamingAsync(IEnumerable<T> items, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_initialized)
-            throw new InvalidOperationException("BulkInserter must be initialized before adding items.");
+        // Null validation runs BEFORE lazy init — see AddRangeAsync.
+        ArgumentNullException.ThrowIfNull(items);
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
         if (_completeStarted)
             throw new InvalidOperationException(
                 "BulkInserter cannot accept more items after a cancelled or failed CompleteAsync. " +
                 "Create a new BulkInserter to retry.");
+
+        // Lazy init before ObserveCancellationAsync — ordering rationale in AddAsync.
+        // Also required here so _useDirectPath/_extractors are populated before
+        // the path selection below.
+        if (!_initialized)
+            await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
 
@@ -460,14 +501,20 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     public async ValueTask AddRangeStreamingAsync(IAsyncEnumerable<T> items, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_initialized)
-            throw new InvalidOperationException("BulkInserter must be initialized before adding items.");
+        // Null validation runs BEFORE lazy init — see AddRangeAsync.
+        ArgumentNullException.ThrowIfNull(items);
         if (_completed)
             throw new InvalidOperationException("BulkInserter has been completed and cannot accept more items.");
         if (_completeStarted)
             throw new InvalidOperationException(
                 "BulkInserter cannot accept more items after a cancelled or failed CompleteAsync. " +
                 "Create a new BulkInserter to retry.");
+
+        // Lazy init before ObserveCancellationAsync — ordering rationale in AddAsync.
+        // Also required here so _useDirectPath/_extractors are populated before
+        // the path selection below.
+        if (!_initialized)
+            await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
 
@@ -540,7 +587,16 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_initialized)
-            throw new InvalidOperationException("BulkInserter must be initialized before flushing.");
+        {
+            // Never initialized: nothing is on the wire, so there is nothing to
+            // flush. The Add methods always initialize before buffering a row, so
+            // an un-initialized inserter's buffer is provably empty — assert that
+            // invariant rather than carry a dead "initialize then flush" path.
+            cancellationToken.ThrowIfCancellationRequested();
+            Debug.Assert(_buffer.Count == 0,
+                "Un-initialized BulkInserter must have an empty buffer (Add initializes before buffering).");
+            return;
+        }
         // No `_completeStarted` guard here: CompleteAsync flips that flag
         // before calling this method internally, and the AddAsync family
         // already prevents new rows from landing post-cancel — so the
@@ -636,8 +692,6 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     public async Task CompleteAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_initialized)
-            throw new InvalidOperationException("BulkInserter must be initialized before completing.");
         // Idempotent: a successful complete short-circuits future calls (the
         // wire is back to idle), and a previously-attempted-but-cancelled
         // complete must NOT re-run the wire sequence — the server already
@@ -647,6 +701,18 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
         // the same convention (skips re-complete when _completeStarted is set).
         if (_completed || _completeStarted)
             return;
+        if (!_initialized)
+        {
+            // Never initialized: no INSERT was sent, so there is nothing to
+            // flush or terminate — the server was never contacted (no table
+            // validation happens on this path). Mark completed so a later Add
+            // throws the standard "has been completed" error instead of lazily
+            // opening a fresh INSERT after the caller believes this insert is
+            // finished.
+            cancellationToken.ThrowIfCancellationRequested();
+            _completed = true;
+            return;
+        }
 
         // ClickHouse's native protocol commits an INSERT only when the empty
         // terminator block lands. If the caller passed a cancelled token, we
@@ -748,13 +814,15 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
     /// a fresh table on failure.
     /// </para>
     /// <para>
-    /// If the caller did not call <see cref="CompleteAsync"/> but also never
-    /// added rows (e.g. <see cref="InitAsync"/> threw, or the inserter was
-    /// abandoned before any <see cref="AddAsync"/>), Dispose still needs to
-    /// finalize the server-side protocol state so the underlying connection
-    /// is reusable. It does so by driving the implicit complete via
-    /// <see cref="CompleteAsync"/>. A failure there still surfaces to the
-    /// caller — a broken wire is not something to swallow.
+    /// If the caller did not call <see cref="CompleteAsync"/> but the INSERT
+    /// query was already sent (e.g. explicit <see cref="InitAsync"/> succeeded
+    /// but the inserter was abandoned before any <see cref="AddAsync"/>),
+    /// Dispose still needs to finalize the server-side protocol state so the
+    /// underlying connection is reusable. It does so by driving the implicit
+    /// complete via <see cref="CompleteAsync"/>; a failure there still surfaces
+    /// to the caller — a broken wire is not something to swallow. A
+    /// never-initialized inserter never touched the wire, so its dispose is a
+    /// pure no-op.
     /// </para>
     /// </remarks>
     public async ValueTask DisposeAsync()
