@@ -283,7 +283,7 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
 
             _initialized = true;
         }
-        catch (OperationCanceledException) when (_connection.WasCancellationRequested)
+        catch (OperationCanceledException) when (_connection.ConversationWrote)
         {
             Abort();
             await _connection.DrainAfterCancellationAsync();
@@ -500,7 +500,7 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
                 new KeyValuePair<string, object?>("db.clickhouse.database", _resolvedDatabase),
                 new KeyValuePair<string, object?>("db.clickhouse.table", _resolvedTable));
         }
-        catch (OperationCanceledException ex) when (_connection.WasCancellationRequested)
+        catch (OperationCanceledException ex) when (_connection.ConversationWrote)
         {
             ClickHouseActivitySource.SetError(activity, ex);
             Abort();
@@ -561,7 +561,7 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
             ClickHouseActivitySource.SetError(activity, ex);
             throw;
         }
-        catch (OperationCanceledException ex) when (_connection.WasCancellationRequested)
+        catch (OperationCanceledException ex) when (_connection.ConversationWrote)
         {
             ClickHouseActivitySource.SetError(activity, ex);
             Abort();

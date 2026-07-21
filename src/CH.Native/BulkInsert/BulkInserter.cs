@@ -270,7 +270,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
 
             _initialized = true;
         }
-        catch (OperationCanceledException) when (_connection.WasCancellationRequested)
+        catch (OperationCanceledException) when (_connection.ConversationWrote)
         {
             // SendCancelAsync wrote the Cancel packet; drain the server's
             // response so the wire is realigned for connection reuse.
@@ -441,7 +441,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
                     cancellationToken);
             }
         }
-        catch (OperationCanceledException) when (_connection.WasCancellationRequested)
+        catch (OperationCanceledException) when (_connection.ConversationWrote)
         {
             Abort();
             await _connection.DrainAfterCancellationAsync();
@@ -523,7 +523,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
                     cancellationToken);
             }
         }
-        catch (OperationCanceledException) when (_connection.WasCancellationRequested)
+        catch (OperationCanceledException) when (_connection.ConversationWrote)
         {
             Abort();
             await _connection.DrainAfterCancellationAsync();
@@ -605,7 +605,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
                 new KeyValuePair<string, object?>("db.clickhouse.database", _resolvedDatabase),
                 new KeyValuePair<string, object?>("db.clickhouse.table", _resolvedTable));
         }
-        catch (OperationCanceledException ex) when (_connection.WasCancellationRequested)
+        catch (OperationCanceledException ex) when (_connection.ConversationWrote)
         {
             ClickHouseActivitySource.SetError(activity, ex);
             Abort();
@@ -702,7 +702,7 @@ public sealed class BulkInserter<T> : IAsyncDisposable where T : class
             ClickHouseActivitySource.SetError(activity, ex);
             throw;
         }
-        catch (OperationCanceledException ex) when (_connection.WasCancellationRequested)
+        catch (OperationCanceledException ex) when (_connection.ConversationWrote)
         {
             ClickHouseActivitySource.SetError(activity, ex);
             // FlushAsync's own catch may have already drained; if so, draining
