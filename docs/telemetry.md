@@ -219,25 +219,29 @@ warn: CH.Native[0]
       Retry 1/3 after 100ms: Connection refused
 ```
 
-## Wire Dump Debugging
+## Wire-level protocol debugging
 
-For low-level protocol debugging, enable wire dump logging:
+The `CH_WIRE_DUMP` environment hook (hex dumps of insert traffic to a hardcoded
+`/tmp` path) was **removed in 1.2.0**. For wire-level detail, set the logger to
+`Trace` — the `Trace` level covers protocol message flow through the same
+`CH.Native` category as everything else:
 
-```bash
-CH_WIRE_DUMP=1 dotnet run
+```csharp
+var loggerFactory = LoggerFactory.Create(builder =>
+{
+    builder
+        .SetMinimumLevel(LogLevel.Trace)
+        .AddConsole();
+});
+
+var settings = ClickHouseConnectionSettings.CreateBuilder()
+    .WithHost("localhost")
+    .WithLoggerFactory(loggerFactory)
+    .Build();
 ```
 
-This writes hex dumps to `/tmp/ch_wire_dump.log`:
-
-```
-[2024-01-15 10:30:45.123] SEND (23 bytes):
-00000000  00 0a 43 48 2e 4e 61 74  69 76 65 00 15 d4 00 00  |..CH.Native.....|
-00000010  07 64 65 66 61 75 6c 74                           |.default|
-
-[2024-01-15 10:30:45.125] RECV (45 bytes):
-00000000  00 0a 43 6c 69 63 6b 48  6f 75 73 65 18 2e 31 2e  |..ClickHouse.1.|
-...
-```
+For raw byte-level capture, use an external packet capture (`tcpdump`,
+Wireshark) against port 9000 with compression and TLS disabled.
 
 ## Full Observability Example
 

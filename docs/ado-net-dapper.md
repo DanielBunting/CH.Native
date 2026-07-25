@@ -6,18 +6,23 @@ CH.Native provides a standard ADO.NET provider for compatibility with existing .
 
 ### Classes
 
-| Class | Base Class | Description |
-|-------|------------|-------------|
-| `ClickHouseConnection` | DbConnection | Database connection |
-| `ClickHouseCommand` | DbCommand | SQL command |
-| `ClickHouseDataReader` | DbDataReader | Forward-only result reader |
-| `ClickHouseDbParameter` | DbParameter | Query parameter |
-| `ClickHouseDbParameterCollection` | DbParameterCollection | Parameter collection |
+| Class | Namespace | Base Class | Description |
+|-------|-----------|------------|-------------|
+| `ClickHouseConnection` | `CH.Native.Connection` | DbConnection | Database connection |
+| `ClickHouseCommand` | `CH.Native.Commands` | DbCommand | SQL command |
+| `ClickHouseDataReader` | `CH.Native.Results` | DbDataReader | Forward-only result reader |
+| `ClickHouseDbParameter` | `CH.Native.Ado` | DbParameter | Query parameter |
+| `ClickHouseDbParameterCollection` | `CH.Native.Ado` | DbParameterCollection | Parameter collection |
+| `ClickHouseProviderFactory` | `CH.Native.Ado` | DbProviderFactory | Provider factory |
+
+The ADO.NET surface is spread across the namespaces the types naturally belong to
+rather than gathered under `CH.Native.Ado` — that namespace holds only the parameter
+and factory types.
 
 ### Basic Usage
 
 ```csharp
-using CH.Native.Ado;
+using CH.Native.Connection;
 
 await using var connection = new ClickHouseConnection("Host=localhost;Port=9000");
 await connection.OpenAsync();
@@ -107,7 +112,7 @@ mapper pays for value-type columns — typically **30-40% lower allocations** on
 ### Setup
 
 ```csharp
-using CH.Native.Ado;
+using CH.Native.Connection;
 using CH.Native.Dapper;
 // `using Dapper;` is fine alongside CH.Native.Dapper — they no longer collide
 // on row-shaped methods.
@@ -271,10 +276,13 @@ var users = await connection.QueryAsync<User>(
 await using var native = new ClickHouseConnection(ConnectionString);
 await native.OpenAsync();
 
-var users = await native.QueryStreamAsync<User>(
+var users = new List<User>();
+await foreach (var user in native.QueryStreamAsync<User>(
     "SELECT * FROM users WHERE id IN @ids",
-    new { ids = new[] { 1, 2, 3 } }
-).ToListAsync();
+    new { ids = new[] { 1, 2, 3 } }))
+{
+    users.Add(user);
+}
 ```
 
 Or build the `IN` list manually on the ADO.NET path:

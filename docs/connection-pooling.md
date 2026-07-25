@@ -40,11 +40,14 @@ builder.Services.AddClickHouse(builder.Configuration.GetSection("ClickHouse"));
 app.MapGet("/users/{id}", async (int id, ClickHouseDataSource ds, CancellationToken ct) =>
 {
     await using var conn = await ds.OpenConnectionAsync(ct);
-    var row = await conn.QueryStreamAsync<User>(
+    await foreach (var row in conn.QueryStreamAsync<User>(
         "SELECT * FROM users WHERE id = {id:UInt32}",
         new { id },
-        cancellationToken: ct).FirstAsync(ct);
-    return Results.Ok(row);
+        cancellationToken: ct))
+    {
+        return Results.Ok(row);
+    }
+    return Results.NotFound();
 });
 ```
 

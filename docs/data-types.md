@@ -474,9 +474,12 @@ CREATE TABLE events (
 ```
 
 ```csharp
-var rows = await connection.QueryStreamAsync(
-    "SELECT items.name, items.quantity FROM events"
-).ToListAsync();
+await foreach (var row in connection.QueryStreamAsync(
+    "SELECT items.name, items.quantity FROM events"))
+{
+    var names = row.GetFieldValue<string[]>("items.name");
+    var quantities = row.GetFieldValue<uint[]>("items.quantity");
+}
 ```
 
 You can also project each subcolumn directly (`items.name`, `items.quantity`) and read it as `string[]` / `uint[]` — that is usually the more ergonomic shape and is what most queries against `Nested` use in practice.

@@ -114,8 +114,12 @@ Setup complete. Artifacts written to: $(pwd)
 Next:
   docker compose up -d
   # (from the sample root, i.e. one directory up)
-  dotnet run -- password demo_user demo
-  dotnet run -- ssh      ssh_user  docker/generated/keys/ssh_user
-  dotnet run -- cert     cert_user docker/generated/certs/client.pfx testpass --insecure
-  dotnet run -- jwt      eyJhbGciOiJIUzI1NiJ9.e30.fake    # expected failure (Cloud-only)
+  dotnet run
+
+Then exercise the endpoints (default port shown by the host on startup):
+  curl localhost:5xxx/auth/password
+  curl 'localhost:5xxx/auth/password?role=admin_role'
+  curl 'localhost:5xxx/auth/ssh?role=admin_role'
+  curl 'localhost:5xxx/auth/cert?role=analyst'
+  curl localhost:5xxx/auth/jwt      # expected failure (JWT is Cloud-only)
 EOF

@@ -82,10 +82,12 @@ await connection.ExecuteNonQueryAsync("CREATE TABLE IF NOT EXISTS users (id UInt
 ### Query with Parameters
 
 ```csharp
-var users = await connection.QueryStreamAsync<User>(
+await foreach (var user in connection.QueryStreamAsync<User>(
     "SELECT * FROM users WHERE age > @minAge",
-    new { minAge = 18 }
-).ToListAsync();
+    new { minAge = 18 }))
+{
+    Console.WriteLine(user.Name);
+}
 ```
 
 ### Typed Results
@@ -119,9 +121,10 @@ await inserter.CompleteAsync();
 
 ```csharp
 // Use CH.Native.Dapper for the fast-path Dapper-shaped API on top of CH.Native.
+using CH.Native.Connection;
 using CH.Native.Dapper;
 
-await using var connection = new ClickHouseDbConnection("Host=localhost;Port=9000");
+await using var connection = new ClickHouseConnection("Host=localhost;Port=9000");
 await connection.OpenAsync();
 
 // QueryAsync<T> here is CH.Native.Dapper's fast-path extension — routes
@@ -129,9 +132,10 @@ await connection.OpenAsync();
 var users = await connection.QueryAsync<User>("SELECT * FROM users");
 ```
 
-For DI scenarios where the connection is typed as `IDbConnection`, replace
-`using Dapper;` with `using CH.Native.Dapper;` to opt into the fast path
-automatically. See [ADO.NET & Dapper](docs/ado-net-dapper.md) for the full
+The fast path is exposed on the concrete `ClickHouseConnection` type. In DI
+scenarios where the connection is typed as `IDbConnection`, assign it to a
+`ClickHouseConnection` local first to opt into it — otherwise Dapper's classic
+(boxing) path wins. See [ADO.NET & Dapper](docs/ado-net-dapper.md) for the full
 story.
 
 ## Documentation
@@ -170,11 +174,15 @@ The tables below cover the headline workloads. **For the full benchmark matrix**
 
 ### Small queries (latency)
 
+At this size the three clients are within noise of each other on time — the run-to-run
+spread exceeds the gaps below. The durable difference is allocation, where the native
+protocol's lack of an HTTP envelope shows up as a ~40× gap against the Driver.
+
 | Workload | CH.Native | ClickHouse.Driver | Octonica |
 |---|---|---|---|
-| `SELECT 1` | **586 μs** | 978 μs | 878 μs |
-| `SELECT count(*) FROM <1M>` | **992 μs** | 1,408 μs | 1,041 μs |
-| `SELECT 100 rows` | **660 μs** | 1,183 μs | 710 μs |
+| `SELECT 1` | 687 μs / **13 KB** | 707 μs / 537 KB | **665 μs** / 23 KB |
+| `SELECT count() FROM <1M>` | 815 μs / **13 KB** | 898 μs / 546 KB | **759 μs** / 21 KB |
+| `SELECT 100 rows` | 1,125 μs / **20 KB** | 944 μs / 549 KB | **832 μs** / 31 KB |
 
 ### Streaming reads — 1M rows
 

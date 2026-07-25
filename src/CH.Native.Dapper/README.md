@@ -23,7 +23,9 @@ ClickHouseDapperIntegration.Register();
 Then use array parameters as you would expect:
 
 ```csharp
-using var connection = new ClickHouseDbConnection("Host=localhost;Database=default");
+using CH.Native.Connection;
+
+await using var connection = new ClickHouseConnection("Host=localhost;Database=default");
 await connection.OpenAsync();
 
 var ids = new[] { 1, 2, 3, 4, 5 };
@@ -42,4 +44,4 @@ Without this package, Dapper would rewrite `@ids` into `(@ids1, @ids2, ...)`. Wi
 
 ## License
 
-MIT
+Apache-2.0
