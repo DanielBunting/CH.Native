@@ -189,9 +189,9 @@ public sealed class ClickHouseDataSource : DbDataSource
 
         // Gate semantics: each permit represents the right to hold a rented
         // connection. Permits = MaxPoolSize - busy. Acquired here on rent,
-        // released in ReturnAsync (normal return) or DiscardAsync (dispose /
-        // expiry). Idle connections sitting in _idle do NOT hold a permit,
-        // which is what lets a returned connection wake a parked waiter.
+        // released in ReturnAsync (normal return) or on the discard paths
+        // (dispose / expiry). Idle connections sitting in _idle do NOT hold a
+        // permit, which is what lets a returned connection wake a parked waiter.
         //
         // Link the caller's token with _disposeCts so a concurrent DisposeAsync
         // wakes parked waiters immediately instead of leaving them stuck on a
@@ -251,11 +251,23 @@ public sealed class ClickHouseDataSource : DbDataSource
                     // Distinguish "connection is dead" from "the CALLER's token
                     // fired during the ping" — PingAsync swallows both into
                     // false. A cancelled rent must not evict a healthy idle
-                    // connection: push it back and surface the cancellation
-                    // (the catch below releases this rent's permit).
+                    // connection: run it back through the same return pipeline
+                    // ReturnAsync uses (eligibility → session reset → push) and
+                    // surface the cancellation. TryRepoolAsync resets BEFORE the
+                    // CanBePooled check, so the SET ROLE the ping issued on a
+                    // role-configured pool no longer causes the connection to be
+                    // discarded, and it pushes a fresh entry so the connection
+                    // isn't culled as idle-expired on the next rent. Whatever the
+                    // outcome, the outer catch releases this rent's permit when we
+                    // rethrow.
                     if (cancellationToken.IsCancellationRequested)
                     {
-                        _idle.Push(entry);
+                        // Bound the salvage reset: link to pool disposal and cap
+                        // at 5s so a wedged server can't strand this cancelled
+                        // rent on an uncancellable SET ROLE DEFAULT read.
+                        using var resetCts = CancellationTokenSource.CreateLinkedTokenSource(_disposeCts.Token);
+                        resetCts.CancelAfter(TimeSpan.FromSeconds(5));
+                        await TryRepoolAsync(entry.Connection, entry.CreatedAt, resetCts.Token).ConfigureAwait(false);
                         cancellationToken.ThrowIfCancellationRequested();
                     }
                     await DiscardInternalAsync(entry.Connection).ConfigureAwait(false);
@@ -679,16 +691,54 @@ public sealed class ClickHouseDataSource : DbDataSource
             return;
         }
 
+        var outcome = await TryRepoolAsync(conn, createdAt).ConfigureAwait(false);
+        if (outcome == RepoolOutcome.DisposedDrained)
+        {
+            // Disposal drained our push away; the gate is being torn down, so
+            // there is nothing to release or wake.
+            return;
+        }
+
+        // Release the permit the renter was holding. On Pooled this wakes a
+        // waiter parked in OpenConnectionAsync (who pops the entry we just
+        // pushed); on Discarded it restores capacity. Exactly one release per
+        // return either way.
+        try { _gate.Release(); }
+        catch (ObjectDisposedException) { /* raced with DisposeAsync */ }
+    }
+
+    private enum RepoolOutcome
+    {
+        /// <summary>The connection now sits in <c>_idle</c> for reuse.</summary>
+        Pooled,
+        /// <summary>The connection failed eligibility (or reset) and was disposed.</summary>
+        Discarded,
+        /// <summary>The push landed but a concurrent disposal drained it away.</summary>
+        DisposedDrained,
+    }
+
+    /// <summary>
+    /// Runs a connection through the return pipeline — age/fatal eligibility,
+    /// session-state reset, final eligibility, then the dispose-race-safe idle
+    /// push — WITHOUT touching the gate permit (callers own that). Shared by
+    /// <see cref="ReturnAsync"/> and the cancelled-rent push-back so the
+    /// reset-BEFORE-CanBePooled ordering and the post-push drain live in one
+    /// place. The ordering matters: the ping on a role-configured pool issues
+    /// SET ROLE and latches <c>_rolesExplicitlySet</c>, so gating on
+    /// <see cref="ClickHouseConnection.CanBePooled"/> before the reset would
+    /// discard every such connection — the reset clears the latch via SET ROLE
+    /// DEFAULT first.
+    /// </summary>
+    private async ValueTask<RepoolOutcome> TryRepoolAsync(ClickHouseConnection conn, DateTime createdAt, CancellationToken resetToken = default)
+    {
         var age = DateTime.UtcNow - createdAt;
         // Cheap pre-checks that reset can't fix: protocol-fatal, busy, etc.
         // Role state (_rolesExplicitlySet) is intentionally not gated here
-        // because ResetSessionStateAsync below clears it via SET ROLE DEFAULT;
-        // checking CanBePooled before reset would discard every connection
-        // that ever issued SET ROLE (the audit's high-severity finding #1).
+        // because ResetSessionStateAsync below clears it via SET ROLE DEFAULT.
         if (age > _options.ConnectionLifetime || !conn.CanBePooledBeforeReset)
         {
-            await DiscardAsync(conn).ConfigureAwait(false);
-            return;
+            await DiscardInternalAsync(conn).ConfigureAwait(false);
+            return RepoolOutcome.Discarded;
         }
 
         // Reset session-scoped state (SET settings, USE database, temp
@@ -696,17 +746,21 @@ public sealed class ClickHouseDataSource : DbDataSource
         // persists these for the session; without reset, the next renter
         // inherits the previous renter's state. Best-effort: a reset
         // failure discards the connection rather than leaking state to the
-        // next renter.
+        // next renter. The cancelled-rent push-back passes a bounded
+        // resetToken so a server that answered the ping-cancel but then wedges
+        // on SET ROLE DEFAULT trips into Discarded instead of stranding the
+        // cancelling caller on an uncancellable read; the normal return path
+        // passes CancellationToken.None (unchanged).
         if (_options.ResetSessionStateOnReturn)
         {
             try
             {
-                await conn.ResetSessionStateAsync().ConfigureAwait(false);
+                await conn.ResetSessionStateAsync(resetToken).ConfigureAwait(false);
             }
             catch
             {
-                await DiscardAsync(conn).ConfigureAwait(false);
-                return;
+                await DiscardInternalAsync(conn).ConfigureAwait(false);
+                return RepoolOutcome.Discarded;
             }
         }
 
@@ -714,20 +768,23 @@ public sealed class ClickHouseDataSource : DbDataSource
         // failed to clear.
         if (!conn.CanBePooled)
         {
-            await DiscardAsync(conn).ConfigureAwait(false);
-            return;
+            await DiscardInternalAsync(conn).ConfigureAwait(false);
+            return RepoolOutcome.Discarded;
         }
 
+        // Refresh LastUsedAt so the entry is not culled as idle-expired on the
+        // next rent for time spent in validation/return.
         _idle.Push(new PoolEntry(conn, createdAt, DateTime.UtcNow));
 
-        // Close the dispose race: the _disposed check at entry can be arbitrarily
-        // stale by now — ResetSessionStateAsync above does real network I/O when
-        // session state is dirty, and DisposeAsyncCore drains _idle exactly once
-        // without waiting for in-flight returns. If disposal committed while we
-        // were mid-return, our push landed on a drained stack and the connection
-        // would leak as a live socket nobody ever disposes. Re-check AFTER the
-        // push and drain whatever is there (ConcurrentStack makes the double-
-        // drain race with DisposeAsyncCore benign — each entry pops exactly once).
+        // Close the dispose race: the _disposed check at the caller can be
+        // arbitrarily stale by now — ResetSessionStateAsync above does real
+        // network I/O when session state is dirty, and DisposeAsyncCore drains
+        // _idle exactly once without waiting for in-flight returns. If disposal
+        // committed while we were mid-return, our push landed on a drained stack
+        // and the connection would leak as a live socket nobody ever disposes.
+        // Re-check AFTER the push and drain whatever is there (ConcurrentStack
+        // makes the double-drain race with DisposeAsyncCore benign — each entry
+        // pops exactly once).
         if (_disposed)
         {
             while (_idle.TryPop(out var lateEntry))
@@ -735,23 +792,10 @@ public sealed class ClickHouseDataSource : DbDataSource
                 try { await DiscardInternalAsync(lateEntry.Connection).ConfigureAwait(false); }
                 catch { /* best-effort teardown */ }
             }
-            return;
+            return RepoolOutcome.DisposedDrained;
         }
 
-        // Release the permit the renter was holding — this is what wakes
-        // any waiter parked in OpenConnectionAsync, who will then pop the
-        // idle entry we just pushed.
-        try { _gate.Release(); }
-        catch (ObjectDisposedException) { /* raced with DisposeAsync */ }
-    }
-
-    // Full discard: dispose, decrement _total, release the renter's gate permit.
-    // Call this from the return path where the caller owns a permit.
-    private async ValueTask DiscardAsync(ClickHouseConnection conn)
-    {
-        await DiscardInternalAsync(conn).ConfigureAwait(false);
-        try { _gate.Release(); }
-        catch (ObjectDisposedException) { /* raced with DisposeAsync */ }
+        return RepoolOutcome.Pooled;
     }
 
     // Discard without touching the gate. Used (a) while the rent path is culling
@@ -805,13 +849,17 @@ public sealed class ClickHouseDataSource : DbDataSource
                 // Pool was disposed mid-prewarm; nothing to log.
                 return;
             }
-            catch (ObjectDisposedException)
+            catch (ObjectDisposedException) when (_disposed)
             {
                 // A prewarm rent parked on the gate at dispose time surfaces as
                 // ObjectDisposedException (OpenConnectionAsync converts the
                 // dispose-cancellation for its callers). Same clean-shutdown case
                 // as above — not a prewarm failure, so no spurious PrewarmFailed
-                // log on every shutdown that raced a warming pool.
+                // log on every shutdown that raced a warming pool. Gated on
+                // _disposed: an ObjectDisposedException from user-supplied open
+                // code (a disposed certificate, a faulty ConnectionFactory)
+                // while the pool is alive is a genuine prewarm failure and
+                // falls through to the logging catch below.
                 return;
             }
             catch (Exception ex)

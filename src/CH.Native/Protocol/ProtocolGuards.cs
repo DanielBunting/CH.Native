@@ -62,14 +62,46 @@ internal static class ProtocolGuards
     /// pre-scan, so this is its only defense. Conservative by construction:
     /// <paramref name="remaining"/> may include bytes beyond the current message
     /// (uncompressed path), which can only make the gate more permissive — it
-    /// never rejects a well-formed block.
+    /// never rejects a well-formed block. On a fully-buffered (pre-scanned)
+    /// message a violation is terminal — <see cref="ClickHouseProtocolException"/>
+    /// — but the compressed accumulate loops parse after each decompressed
+    /// chunk, where "count exceeds available" is the expected state of a
+    /// legitimate large block; they pass <paramref name="retryable"/> to get
+    /// the internal <see cref="ClickHouseCountGuardException"/> signal instead.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static void ValidateCountAgainstRemaining(int count, int minBytesPerItem, long remaining, string fieldName)
+    public static void ValidateCountAgainstRemaining(int count, int minBytesPerItem, long remaining, string fieldName, bool retryable = false)
     {
         if (count > 0 && (long)count * minBytesPerItem > remaining)
-            throw new ClickHouseProtocolException(
+        {
+            var message =
                 $"Wire value {fieldName} = {count} requires at least {(long)count * minBytesPerItem} bytes " +
-                $"but only {remaining} are available; protocol stream is malformed or hostile.");
+                $"but only {remaining} are available; protocol stream is malformed or hostile.";
+            if (retryable)
+                throw new ClickHouseCountGuardException(message, deficitBytes: (long)count * minBytesPerItem - remaining);
+            throw new ClickHouseProtocolException(message);
+        }
+    }
+
+    /// <summary>
+    /// Composed guard for a block header's declared counts, shared by every
+    /// block-read path so the minimum-footprint cost model lives in one place:
+    /// each column costs at least 2 bytes (name + type length prefixes), each
+    /// value at least 1 byte per row per column. A 5-byte varint can otherwise
+    /// declare ~2^31 items and force multi-GB array allocations from a handful
+    /// of wire bytes; this runs BEFORE any count-sized allocation and is the
+    /// compressed path's only defense (no pre-scan). A violation is terminal
+    /// (<see cref="ClickHouseProtocolException"/>) unless the caller passes
+    /// <paramref name="retryable"/> — the compressed accumulate loops do, and
+    /// catch the resulting <see cref="ClickHouseCountGuardException"/> to
+    /// distinguish "counts exceed the chunks decompressed so far" from other
+    /// protocol errors.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void ValidateBlockHeaderCounts(int columnCount, int rowCount, long remaining, bool retryable = false)
+    {
+        ValidateCountAgainstRemaining(columnCount, minBytesPerItem: 2, remaining, "block column count", retryable);
+        if (rowCount > 0)
+            ValidateCountAgainstRemaining(rowCount, minBytesPerItem: columnCount, remaining, "block rowCount", retryable);
     }
 }

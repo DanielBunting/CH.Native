@@ -105,6 +105,56 @@ public class DictionaryEncodedColumnTests
     }
 
     [Fact]
+    public void ValueType_NullableWithIndexZero_IsNullTrue_GetValueNull()
+    {
+        // LowCardinality(Nullable(Int64)) — index 0 is the null sentinel and
+        // the null dictionary slot holds default(long)=0. Regression: without an
+        // IsNull override, ITypedColumn.IsNull falls back to `GetValue(i) is null`,
+        // and GetValue returned the boxed 0 — so a genuine NULL reported IsNull=false
+        // and materialised as 0 (a long? property got 0 instead of null).
+        var dictionary = new long[] { 0L, 42L }; // slot 0 = null placeholder, slot 1 = real value
+        var indices = ArrayPool<int>.Shared.Rent(3);
+        indices[0] = 0; // null
+        indices[1] = 1; // 42
+        indices[2] = 0; // null again
+
+        using var column = new DictionaryEncodedColumn<long>(
+            dictionary,
+            indices,
+            count: 3,
+            indicesPool: ArrayPool<int>.Shared,
+            isNullable: true);
+
+        Assert.True(column.IsNull(0));
+        Assert.Null(column.GetValue(0));
+        Assert.False(column.IsNull(1));
+        Assert.Equal(42L, column.GetValue(1));
+        Assert.True(column.IsNull(2));
+        Assert.Null(column.GetValue(2));
+    }
+
+    [Fact]
+    public void ValueType_NonNullable_RealZero_IsNotNull()
+    {
+        // A non-nullable LowCardinality(Int64) column whose value is genuinely 0
+        // must NOT be reported as null — the null sentinel only applies when
+        // isNullable is set.
+        var dictionary = new long[] { 0L };
+        var indices = ArrayPool<int>.Shared.Rent(1);
+        indices[0] = 0;
+
+        using var column = new DictionaryEncodedColumn<long>(
+            dictionary,
+            indices,
+            count: 1,
+            indicesPool: ArrayPool<int>.Shared,
+            isNullable: false);
+
+        Assert.False(column.IsNull(0));
+        Assert.Equal(0L, column.GetValue(0));
+    }
+
+    [Fact]
     public void Indexer_OutOfRangeCount_ThrowsArgumentOutOfRange()
     {
         var dictionary = new[] { "a" };

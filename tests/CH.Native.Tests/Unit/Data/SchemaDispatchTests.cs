@@ -140,6 +140,22 @@ public class SchemaDispatchTests
     }
 
     [Theory]
+    // LowCardinality(Nullable(value-type)) must expose the NULLABLE element CLR
+    // type so composites carry it (the `is IColumnReader<T?>` guard passes) and
+    // GetFieldType reports the nullable type. Pre-fix these were the non-nullable
+    // base types (long / long[] / Dictionary<string,long>), dropping NULLs.
+    [InlineData("LowCardinality(Nullable(Int64))", typeof(long?))]
+    [InlineData("Array(LowCardinality(Nullable(Int64)))", typeof(long?[]))]
+    [InlineData("Map(String, LowCardinality(Nullable(Int64)))", typeof(System.Collections.Generic.Dictionary<string, long?>))]
+    [InlineData("LowCardinality(Nullable(Enum8('a' = 1, 'b' = 2)))", typeof(sbyte?))]
+    public void Reader_LowCardinalityNullableValue_ExposesNullableClrType(string typeName, Type expectedClrType)
+    {
+        var reader = ColumnReaderRegistry.Default.GetReader(typeName);
+        Assert.NotNull(reader);
+        Assert.Equal(expectedClrType, reader.ClrType);
+    }
+
+    [Theory]
     [InlineData("Map(String, Int32)")]
     [InlineData("Map(String, String)")]
     [InlineData("Map(String, Array(Int32))")]

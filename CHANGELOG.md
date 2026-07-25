@@ -173,6 +173,98 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`LowCardinality(Nullable(value-type))` no longer drops NULLs.** A NULL in a
+  `LowCardinality(Nullable(Int64 / Date / Enum8 / …))` column read back as
+  `default(T)` (`0`, epoch) with `IsDBNull` returning false — so a `long?`
+  property got `0` instead of `null` and a real `0` was indistinguishable from a
+  lost NULL. The top-level/Tuple read path now returns a null-aware
+  `DictionaryEncodedColumn` (`IsNull`/`GetValue` honor the index-0 null
+  sentinel), and — because composite readers (Array/Map/Nested) build element
+  storage from the element reader's CLR type — a new internal
+  `LowCardinalityNullableColumnReader<T>` (genuinely `IColumnReader<T?>`) is used
+  for the value-type case so nested `Array(LowCardinality(Nullable(Int64)))`,
+  `Map(String, LowCardinality(Nullable(Date)))`, etc. carry NULLs and
+  `GetFieldType` reports the nullable CLR type. `LowCardinality(Nullable(String))`
+  and non-nullable `LowCardinality` are unchanged.
+- **Compressed multi-chunk blocks no longer rejected as malformed.** The
+  block-header count guard threw `ClickHouseProtocolException` inside the
+  compressed accumulate loop, whose "need more decompressed data" retry
+  contract is `catch (InvalidOperationException)` — so a legitimate block
+  whose minimum footprint (rows × columns) exceeded the first ~1MB
+  decompressed chunk (e.g. default 65,409-row blocks with 17+ columns)
+  failed the query and condemned the connection. The guard now throws an
+  internal `ClickHouseCountGuardException` (a plain internal exception, **not**
+  part of the public `ClickHouseProtocolException` hierarchy, which stays
+  `sealed`); when a caller passes `retryable: true` the accumulate loops catch
+  it and read the next chunk, so the count-sized allocation stays deferred
+  until real bytes back the declared count while pre-scanned (uncompressed)
+  paths keep failing fast with the terminal `ClickHouseProtocolException`. The
+  guard also carries its byte deficit so the loop skips re-parse attempts until
+  enough new chunks have accumulated, instead of throwing once per chunk.
+- **Compressed blocks fragmented mid-chunk are no longer mis-condemned.** The
+  compressed pre-scan validates only that the *first* chunk is fully buffered,
+  so the pipe can hand the parser a buffer ending 0–16 bytes into a later
+  chunk under ordinary TCP fragmentation. The accumulate loop then exited into
+  a terminal `InvalidDataException` (recognising a chunk header needs ≥17
+  bytes) and condemned a healthy connection. A sub-chunk tail is now treated as
+  need-more-data (retried once more bytes arrive); only a proven non-chunk tail
+  is terminal. Both compressed read paths were deduplicated into a single
+  `ReadCompressedTypedBlock` helper so the retry contract lives in one place.
+- **Cancellation no longer drains against a server that owes nothing.** The
+  post-`OperationCanceledException` drain gates checked only "did this
+  conversation write" — a cancel landing after a nested role-sync round trip
+  proved the boundary (or after a write faulted mid-flight, leaving the
+  server without a complete query) drained a silent wire for the full 30 s
+  cap and then wrongly poisoned a healthy connection. All abnormal-exit
+  decisions now consume one shared predicate, `WireIndeterminate`
+  (`_isOpen && _conversationWrote && !_boundaryProven && !_protocolFatal`),
+  and a faulted/cancelled non-cancel write marks the connection
+  protocol-fatal immediately so those exits fail fast.
+- **Cancelled bulk-insert flush no longer stalls or masks the cancellation
+  at dispose.** The inserters' post-`OperationCanceledException` cleanup gated
+  on `WireIndeterminate`, which is false once a faulted write has marked the
+  connection protocol-fatal — so `Abort()` never ran, `DisposeAsync` then sent
+  an empty block and performed an *uncancellable* end-of-stream read on the
+  truncated wire (stalling until the server timed out) and threw "rows are
+  LOST" over the caller's cancellation. Cleanup now gates on the wider
+  `WriteNeedsCancelCleanup` (wrote bytes, no proven boundary — regardless of
+  the fatal latch), so `Abort()` always runs and dispose never touches a
+  condemned wire; the drain remains a no-op on a fatal connection. Applies to
+  both `BulkInserter<T>` and `DynamicBulkInserter`.
+- **Cancelling a bulk insert during `CompleteAsync` no longer discards a
+  healthy connection.** When the token fired inside `CompleteAsync`'s internal
+  flush, the cancel-drain often proved a clean boundary (the server acked the
+  Cancel with `EndOfStream`), yet the resulting `OperationCanceledException`
+  fell through to the generic catch that calls `MarkProtocolFatal`, condemning
+  a connection the drain had just certified reusable. `CompleteAsync` now
+  rethrows a non-indeterminate cancellation without poisoning, so the
+  connection returns to the pool. Applies to both inserters.
+- **Cancelled validate-on-rent no longer strands, evicts, or churns
+  connections.** The pool's cancelled-rent push-back now runs the connection
+  through the same `TryRepoolAsync` pipeline as `ReturnAsync`: session state is
+  reset *before* the `CanBePooled` check — so a role-configured pool no longer
+  discards every connection on which the validate ping issued `SET ROLE`
+  (`_rolesExplicitlySet` latches `CanBePooled` false until reset) — a fresh
+  `LastUsedAt` is stamped so the connection isn't immediately culled as
+  idle-expired on the next rent, and `_disposed` is re-checked after the push
+  so an entry that raced pool disposal is drained rather than stranded as a
+  live socket. The push-and-drain race close now lives in one shared helper.
+  The salvage reset on this cancelled path is bounded (linked to pool disposal,
+  5 s cap) so a wedged server can't strand the cancelling caller on an
+  uncancellable `SET ROLE DEFAULT` read.
+- **Reused caller-supplied query ids can no longer poison a successor
+  query.** `ExitBusyResolve` owner-gating was query-id string equality, so
+  disposing a completed reader while a later query reused the same explicit
+  `queryId` released the successor's busy slot mid-flight and convicted its
+  in-flight evidence. Conversations now carry a monotonic epoch captured at
+  `EnterBusy`; readers and bulk inserters resolve with their epoch and a
+  mismatch no-ops.
+- **Prewarm failures from user-supplied open code are logged again.** The
+  prewarm loop's `catch (ObjectDisposedException)` (added for the
+  clean-shutdown race) swallowed genuine failures — e.g. a disposed client
+  certificate or a faulty `ConnectionFactory` — leaving the pool silently
+  unseeded. The catch is now gated `when (_disposed)`; everything else
+  falls through to the `PrewarmFailed` logging catch.
 - `DateTime` columns with an explicit timezone (e.g. `DateTime('UTC')`) no
   longer silently materialise as `default(DateTime)` when mapped to a
   non-nullable `DateTime` property via `QueryStreamAsync<T>`. The typed

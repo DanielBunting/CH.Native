@@ -144,4 +144,87 @@ public class LowCardinalityColumnReaderTests
         Assert.Throws<ArgumentException>(() =>
             new LowCardinalityColumnReader<string>((IColumnReader)new Int32ColumnReader()));
     }
+
+    // ── LowCardinality(Nullable(value-type)) via LowCardinalityNullableColumnReader ──
+    // The base LowCardinalityColumnReader<long> collapses the index-0 null sentinel
+    // to default(long)=0 on its generic path; the nullable-value reader must surface
+    // a genuine long? null so composites (Array/Map/Nested) preserve NULLs.
+
+    private static byte[] BuildLcInt64Column(long[] dictionary, int[] indices)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+        writer.WriteUInt64(0);                        // flags: UInt8 index width
+        writer.WriteUInt64((ulong)dictionary.Length);
+        foreach (var v in dictionary) writer.WriteInt64(v);
+        writer.WriteUInt64((ulong)indices.Length);
+        foreach (var idx in indices) writer.WriteByte((byte)idx);
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    [Fact]
+    public void NullableValue_Int64_GenericPath_PreservesNulls()
+    {
+        // dict slot 0 = null placeholder (value irrelevant), slot 1 = 42, slot 2 = 7.
+        var dict = new long[] { 0, 42, 7 };
+        var indices = new[] { 0, 1, 0, 2 };
+        var bytes = BuildLcInt64Column(dict, indices);
+
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+        var sut = new LowCardinalityNullableColumnReader<long>(new Int64ColumnReader());
+        using TypedColumn<long?> column = sut.ReadTypedColumn(ref reader, indices.Length);
+
+        Assert.Null(column[0]);
+        Assert.Equal(42L, column[1]);
+        Assert.Null(column[2]);
+        Assert.Equal(7L, column[3]);
+
+        Assert.True(column.IsNull(0));
+        Assert.False(column.IsNull(1));
+        Assert.True(column.IsNull(2));
+    }
+
+    [Fact]
+    public void NullableValue_Int64_ReportsNullableMetadata()
+    {
+        var sut = new LowCardinalityNullableColumnReader<long>(new Int64ColumnReader());
+
+        Assert.Equal(typeof(long?), sut.ClrType);
+        Assert.Equal("LowCardinality(Nullable(Int64))", sut.TypeName);
+
+        // Non-generic path must report the nullable element type (drives GetFieldType).
+        var bytes = BuildLcInt64Column(new long[] { 0, 5 }, new[] { 0, 1 });
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+        using var column = ((IColumnReader)sut).ReadTypedColumn(ref reader, 2);
+        Assert.Equal(typeof(long?), column.ElementType);
+        Assert.True(column.IsNull(0));
+        Assert.Equal(5L, column.GetValue(1));
+    }
+
+    [Fact]
+    public void NullableValue_Enum8_PreservesNulls()
+    {
+        // Enum8 reads as sbyte, so LC(Nullable(Enum8)) → sbyte?.
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+        writer.WriteUInt64(0);                 // flags: UInt8 index width
+        writer.WriteUInt64(3);                 // dict size
+        writer.WriteByte(0);                   // slot 0: null placeholder
+        writer.WriteByte(1);                   // slot 1: enum value 1
+        writer.WriteByte(2);                   // slot 2: enum value 2
+        writer.WriteUInt64(3);                 // index count
+        writer.WriteByte(0);                   // null
+        writer.WriteByte(2);                   // 2
+        writer.WriteByte(1);                   // 1
+        var bytes = buffer.WrittenSpan.ToArray();
+
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+        var sut = new LowCardinalityNullableColumnReader<sbyte>(new Enum8ColumnReader());
+        Assert.Equal(typeof(sbyte?), sut.ClrType);
+        using TypedColumn<sbyte?> column = sut.ReadTypedColumn(ref reader, 3);
+
+        Assert.Null(column[0]);
+        Assert.Equal((sbyte)2, column[1]);
+        Assert.Equal((sbyte)1, column[2]);
+    }
 }

@@ -53,6 +53,9 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
     private bool _usedCachedSchema;
     private SchemaKey _schemaCacheKey;
     private string? _effectiveQueryId;
+    // Conversation epoch captured at EnterBusyForBulkInsert; scopes the
+    // owner-gated resolve to THIS conversation (query-id strings are reusable).
+    private long _conversationEpoch;
 
     /// <summary>
     /// Creates a new dynamic bulk inserter for the specified table.
@@ -206,7 +209,9 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
         // its boundary at ReceiveEndOfStreamAsync; an init failure whose server
         // exception envelope was consumed proved it there; a mid-INSERT abort
         // without a terminator correctly convicts as protocol-fatal.
-        _connection.ExitBusyResolve(_effectiveQueryId);
+        // Epoch-gated: a stale dispose after a successor conversation claimed
+        // the slot (even with a reused caller-supplied query id) must no-op.
+        _connection.ExitBusyResolve(_effectiveQueryId, _conversationEpoch);
     }
 
     /// <summary>
@@ -230,7 +235,7 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
 
         var effectiveQueryId = ClickHouseConnection.ResolveQueryIdInternal(_options.QueryId);
         _effectiveQueryId = effectiveQueryId;
-        _connection.EnterBusyForBulkInsert(effectiveQueryId);
+        _conversationEpoch = _connection.EnterBusyForBulkInsert(effectiveQueryId);
         _slotClaimed = true;
 
         using var registration = RegisterCancelHook(cancellationToken);
@@ -283,7 +288,7 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
 
             _initialized = true;
         }
-        catch (OperationCanceledException) when (_connection.ConversationWrote)
+        catch (OperationCanceledException) when (_connection.WireIndeterminate)
         {
             Abort();
             await _connection.DrainAfterCancellationAsync();
@@ -292,7 +297,7 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
         }
         catch
         {
-            _connection.ClearOwnedQueryId(effectiveQueryId);
+            _connection.ClearOwnedQueryId(effectiveQueryId, _conversationEpoch);
             ReleaseSlotIfClaimed();
             throw;
         }
@@ -500,9 +505,14 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
                 new KeyValuePair<string, object?>("db.clickhouse.database", _resolvedDatabase),
                 new KeyValuePair<string, object?>("db.clickhouse.table", _resolvedTable));
         }
-        catch (OperationCanceledException ex) when (_connection.ConversationWrote)
+        catch (OperationCanceledException ex) when (_connection.WriteNeedsCancelCleanup)
         {
             ClickHouseActivitySource.SetError(activity, ex);
+            // WriteNeedsCancelCleanup (not WireIndeterminate): a flush write that
+            // faulted on cancellation condemns the connection, making
+            // WireIndeterminate false. Abort() must still run so DisposeAsync sees
+            // _completeStarted and never drives SendEmptyBlock / an uncancellable
+            // EndOfStream read on the truncated wire. Drain no-ops when fatal.
             Abort();
             await _connection.DrainAfterCancellationAsync();
             throw;
@@ -561,11 +571,21 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
             ClickHouseActivitySource.SetError(activity, ex);
             throw;
         }
-        catch (OperationCanceledException ex) when (_connection.ConversationWrote)
+        catch (OperationCanceledException ex) when (_connection.WireIndeterminate)
         {
             ClickHouseActivitySource.SetError(activity, ex);
             Abort();
             await _connection.DrainAfterCancellationAsync();
+            throw;
+        }
+        catch (OperationCanceledException ex)
+        {
+            ClickHouseActivitySource.SetError(activity, ex);
+            // Cancellation on a wire that is NOT indeterminate: a nested
+            // cancel-drain already proved a clean boundary, or the connection is
+            // already protocol-fatal. Rethrow without MarkProtocolFatal so a
+            // drain-certified-clean connection isn't churned; _completeStarted is
+            // already set, so DisposeAsync stays off the wire either way.
             throw;
         }
         catch (Exception ex)

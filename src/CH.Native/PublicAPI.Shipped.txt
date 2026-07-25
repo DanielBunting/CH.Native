@@ -442,6 +442,7 @@ CH.Native.Data.DictionaryEncodedColumn<T>.Dispose() -> void
 CH.Native.Data.DictionaryEncodedColumn<T>.ElementType.get -> System.Type!
 CH.Native.Data.DictionaryEncodedColumn<T>.GetValue(int index) -> object?
 CH.Native.Data.DictionaryEncodedColumn<T>.Indices.get -> System.ReadOnlySpan<int>
+CH.Native.Data.DictionaryEncodedColumn<T>.IsNull(int index) -> bool
 CH.Native.Data.DictionaryEncodedColumn<T>.this[int index].get -> T
 CH.Native.Data.Dynamic.ClickHouseDynamic
 CH.Native.Data.Dynamic.ClickHouseDynamic.ClickHouseDynamic() -> void

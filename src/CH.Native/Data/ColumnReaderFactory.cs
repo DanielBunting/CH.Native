@@ -258,6 +258,20 @@ public sealed class ColumnReaderFactory
             innerReader = CreateReaderForType(innerType);
         }
 
+        // For LowCardinality(Nullable(value-type)), use a reader that is genuinely
+        // IColumnReader<T?> so composites (Array/Map/Nested) carry the nullable
+        // element type and preserve NULLs — a base LowCardinalityColumnReader<T>
+        // would collapse the null sentinel to default(T) on their generic read
+        // path. The IsValueType guard is required: the nullable reader is
+        // `where T : struct`, so MakeGenericType with a reference type (e.g.
+        // LowCardinality(Nullable(String))) would throw — those fall through to
+        // the base reader, which already represents null as default(string)=null.
+        if (isNullable && innerReader.ClrType.IsValueType)
+        {
+            var nullableReaderType = typeof(LowCardinalityNullableColumnReader<>).MakeGenericType(innerReader.ClrType);
+            return (IColumnReader)Activator.CreateInstance(nullableReaderType, innerReader)!;
+        }
+
         var readerType = typeof(LowCardinalityColumnReader<>).MakeGenericType(innerReader.ClrType);
         return (IColumnReader)Activator.CreateInstance(readerType, innerReader, isNullable)!;
     }

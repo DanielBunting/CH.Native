@@ -71,13 +71,25 @@ public class ScannerFuzzSmokeTests
 
     private static byte[] BuildProgressPlusEos()
     {
+        // Mirrors ProgressMessage.Read field-for-field at the mock's pinned
+        // revision — keep in sync so the Progress-parsing arm is actually
+        // exercised (this builder was previously a copy of the empty-block
+        // stream and never emitted a Progress message at all).
         var bw = new ArrayBufferWriter<byte>();
         var w = new ProtocolWriter(bw);
-        w.WriteVarInt((ulong)ServerMessageType.Data);
-        w.WriteString(string.Empty);
-        BlockInfo.Default.Write(ref w);
-        w.WriteVarInt(0);
-        w.WriteVarInt(0);
+        w.WriteVarInt((ulong)ServerMessageType.Progress);
+        w.WriteVarInt(120);           // rows read
+        w.WriteVarInt(4096);          // bytes read
+        w.WriteVarInt(1000);          // total rows to read (estimate)
+        if (MockClickHouseServer.PinnedProtocolRevision >= ProtocolVersion.WithTotalBytesInProgress)
+            w.WriteVarInt(65536);     // total_bytes_to_read
+        if (MockClickHouseServer.PinnedProtocolRevision >= ProtocolVersion.WithClientWriteInfo)
+        {
+            w.WriteVarInt(0);         // written rows
+            w.WriteVarInt(0);         // written bytes
+        }
+        if (MockClickHouseServer.PinnedProtocolRevision >= ProtocolVersion.WithServerQueryTimeInProgress)
+            w.WriteVarInt(1_000_000); // elapsed_ns
         w.WriteVarInt((ulong)ServerMessageType.EndOfStream);
         return bw.WrittenMemory.ToArray();
     }

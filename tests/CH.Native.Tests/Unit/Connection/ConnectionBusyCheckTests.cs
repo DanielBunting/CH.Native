@@ -232,7 +232,7 @@ public class ConnectionBusyCheckTests
         SetField(conn, "_currentQueryId", null);
 
         var enterBusy = conn.GetType().GetMethod("EnterBusy", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var exitBusy = conn.GetType().GetMethod("ExitBusyResolve", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var exitBusy = conn.GetType().GetMethod("ExitBusyResolve", BindingFlags.Instance | BindingFlags.NonPublic, new[] { typeof(string) })!;
 
         enterBusy.Invoke(conn, new object?[] { "owner-q" });
         Assert.True(GetField<bool>(conn, "_busy"));
@@ -298,7 +298,7 @@ public class ConnectionBusyCheckTests
         SetField(conn, "_currentQueryId", null);
 
         var enterBusy = conn.GetType().GetMethod("EnterBusy", BindingFlags.Instance | BindingFlags.NonPublic)!;
-        var exitBusy = conn.GetType().GetMethod("ExitBusyResolve", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var exitBusy = conn.GetType().GetMethod("ExitBusyResolve", BindingFlags.Instance | BindingFlags.NonPublic, new[] { typeof(string) })!;
 
         // Deterministic contention: all 32 tasks block on a barrier and
         // attempt EnterBusy in lockstep. Exactly one wins; the other 31 must

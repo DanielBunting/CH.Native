@@ -264,18 +264,9 @@ public sealed class Block
         }
 
         // Sanity-gate the wire-declared counts against the bytes actually
-        // available BEFORE any count-sized allocation. Each column costs at
-        // least 2 bytes (name + type length prefixes); each value at least
-        // 1 byte per row per column. A 5-byte varint can otherwise declare
-        // ~2^31 and force multi-GB array allocations from a handful of wire
-        // bytes. This is the compressed path's only defense (no pre-scan).
-        ProtocolGuards.ValidateCountAgainstRemaining(
-            columnCount, minBytesPerItem: 2, reader.Remaining, "block column count");
-        if (rowCount > 0)
-        {
-            ProtocolGuards.ValidateCountAgainstRemaining(
-                rowCount, minBytesPerItem: columnCount, reader.Remaining, "block rowCount");
-        }
+        // available BEFORE any count-sized allocation; the cost model lives in
+        // ProtocolGuards.ValidateBlockHeaderCounts, shared by both read paths.
+        ProtocolGuards.ValidateBlockHeaderCounts(columnCount, rowCount, reader.Remaining);
 
         var columnNames = new string[columnCount];
         var columnTypes = new string[columnCount];
@@ -355,7 +346,8 @@ public sealed class Block
         ColumnReaderRegistry registry,
         string tableName,
         int protocolVersion,
-        MapShapeHint? mapShapeHint)
+        MapShapeHint? mapShapeHint,
+        bool countGuardIsRetryable = false)
     {
         var info = BlockInfo.Read(ref reader);
         var columnCount = reader.ReadVarIntAsInt32("block column count");
@@ -373,18 +365,11 @@ public sealed class Block
         }
 
         // Sanity-gate the wire-declared counts against the bytes actually
-        // available BEFORE any count-sized allocation. Each column costs at
-        // least 2 bytes (name + type length prefixes); each value at least
-        // 1 byte per row per column. A 5-byte varint can otherwise declare
-        // ~2^31 and force multi-GB array allocations from a handful of wire
-        // bytes. This is the compressed path's only defense (no pre-scan).
-        ProtocolGuards.ValidateCountAgainstRemaining(
-            columnCount, minBytesPerItem: 2, reader.Remaining, "block column count");
-        if (rowCount > 0)
-        {
-            ProtocolGuards.ValidateCountAgainstRemaining(
-                rowCount, minBytesPerItem: columnCount, reader.Remaining, "block rowCount");
-        }
+        // available BEFORE any count-sized allocation; the cost model lives in
+        // ProtocolGuards.ValidateBlockHeaderCounts, shared by both read paths.
+        // Only the compressed accumulate loops pass countGuardIsRetryable —
+        // everywhere else a violation is terminal.
+        ProtocolGuards.ValidateBlockHeaderCounts(columnCount, rowCount, reader.Remaining, countGuardIsRetryable);
 
         var columnNames = new string[columnCount];
         var columnTypes = new string[columnCount];

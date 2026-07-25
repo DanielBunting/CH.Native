@@ -425,4 +425,81 @@ public class ComplexTypeMatrixProbeTests
             Assert.IsNotType<AccessViolationException>(caught);
         }
     }
+
+    [Theory]
+    [MemberData(nameof(SupportedImages.All), MemberType = typeof(SupportedImages))]
+    public async Task Array_Of_LowCardinalityNullableInt64_PreservesNulls(string image)
+    {
+        // Regression: LowCardinality(Nullable(value-type)) nested in Array previously
+        // read NULLs as default(long)=0 (the composite generic path collapsed the
+        // index-0 null sentinel). A NULL must come back as null AND a genuine 0 must
+        // stay 0 — they must be distinguishable. (The nullable element CLR type is
+        // pinned by SchemaDispatchTests.Reader_LowCardinalityNullableValue_*.)
+        await using var conn = await OpenAsync(image);
+        var table = $"arr_lcn_{Guid.NewGuid():N}";
+        // LowCardinality over numeric/Date/Enum is prohibited by default.
+        await conn.ExecuteNonQueryAsync("SET allow_suspicious_low_cardinality_types = 1");
+        await conn.ExecuteNonQueryAsync(
+            $"CREATE TABLE {table} (id Int32, v Array(LowCardinality(Nullable(Int64)))) ENGINE = Memory");
+        try
+        {
+            await conn.ExecuteNonQueryAsync(
+                $"INSERT INTO {table} VALUES (1, [42, NULL, 7, NULL, 0])");
+
+            long?[]? got = null;
+            await foreach (var r in conn.QueryStreamAsync($"SELECT v FROM {table}"))
+                got = r.GetFieldValue<long?[]>(0);
+
+            Assert.NotNull(got);
+            Assert.Equal(new long?[] { 42, null, 7, null, 0 }, got);
+            Assert.Null(got![1]);      // genuine NULL
+            Assert.Equal(0L, got[4]);  // genuine 0, NOT a lost null
+        }
+        finally
+        {
+            await conn.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(SupportedImages.All), MemberType = typeof(SupportedImages))]
+    public async Task Map_Of_LowCardinalityNullableDate_PreservesNulls(string image)
+    {
+        await using var conn = await OpenAsync(image);
+        var table = $"map_lcn_{Guid.NewGuid():N}";
+        await conn.ExecuteNonQueryAsync("SET allow_suspicious_low_cardinality_types = 1");
+        await conn.ExecuteNonQueryAsync(
+            $"CREATE TABLE {table} (id Int32, m Map(String, LowCardinality(Nullable(Date)))) ENGINE = Memory");
+        try
+        {
+            // Non-null dates only. This pins that Map(String, LowCardinality(Nullable(Date)))
+            // dispatches its value to the nullable reader and round-trips real values
+            // across all versions. (Null-inside-a-composite is proven universally by
+            // Array_Of_LowCardinalityNullableInt64_PreservesNulls; a NULL map *value*
+            // is unusable here because older ClickHouse drops/empties Map entries whose
+            // value is NULL — a server-side quirk, not a reader issue.)
+            await conn.ExecuteNonQueryAsync(
+                $"INSERT INTO {table} VALUES (1, map('k1', toDate('2023-01-01'), 'k2', toDate('2023-06-15')))");
+
+            // ClickHouse Date maps to DateOnly, so the value element is DateOnly?.
+            Dictionary<string, DateOnly?>? got = null;
+            await foreach (var r in conn.QueryStreamAsync($"SELECT m FROM {table}"))
+                got = r.GetFieldValue<Dictionary<string, DateOnly?>>(0);
+
+            Assert.NotNull(got);
+            Assert.Equal(new DateOnly(2023, 1, 1), got!["k1"]!.Value);
+            Assert.Equal(new DateOnly(2023, 6, 15), got["k2"]!.Value);
+        }
+        finally
+        {
+            await conn.ExecuteNonQueryAsync($"DROP TABLE IF EXISTS {table}");
+        }
+    }
+
+    // NOTE: LowCardinality(Nullable(Enum8)) is intentionally NOT covered end-to-end.
+    // ClickHouse rejects it at CREATE ("DataTypeLowCardinality is supported only for
+    // numbers, strings, Date or DateTime"), so no real server ever emits it. The
+    // client-side sbyte? handling for that type name is still pinned by the unit
+    // tests LowCardinalityColumnReaderTests.NullableValue_Enum8_PreservesNulls and
+    // SchemaDispatchTests.Reader_LowCardinalityNullableValue_ExposesNullableClrType.
 }
