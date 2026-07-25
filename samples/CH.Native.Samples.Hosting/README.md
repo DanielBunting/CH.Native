@@ -37,15 +37,25 @@ Then exercise the endpoints:
 | `GET /auth/jwt` | Keyed `primary` + `IClickHouseJwtProvider` (OSS rejects JWT; demonstrates wire shape) |
 | `GET /auth/ssh?role=admin_role` | Keyed `ssh` + `IClickHouseSshKeyProvider` reading docker SSH key |
 | `GET /auth/cert?role=analyst` | Keyed `mtls` + `IClickHouseCertificateProvider` reading docker `client.pfx` |
-| `GET /events/count` | `ClickHouseDataSource.OpenConnectionAsync` + scalar query. A fixed `SELECT count() FROM numbers(10)` connectivity probe — always 10, unrelated to `POST /events/bulk` |
-| `GET /events/dapper` | Dapper `ExecuteScalarAsync<T>` over a pooled, DI-resolved connection |
-| `GET /events/dapper-typed` | Dapper `QueryAsync<T>` — column→property mapping plus named parameter binding |
+| `GET /probe/scalar` | `ClickHouseDataSource.OpenConnectionAsync` + native scalar query |
+| `GET /probe/dapper-scalar` | Dapper `ExecuteScalarAsync<T>` over a pooled, DI-resolved connection |
+| `GET /probe/dapper-typed` | Dapper `QueryAsync<T>` — column→property mapping plus named parameter binding |
 | `GET /replica/server` | Resolving a keyed DataSource (`replica`) inline |
 | `POST /events/bulk` (JSON `[{ "id": "...", "timestamp": "...", "payload": "..." }]`) | `BulkInserter<EventRow>` rented from the pool |
 | `GET /diag/pool` | `ClickHouseDataSource.GetStatistics()` |
 | `GET /ping/{key}` | `PingAsync()` against any keyed DataSource (`default`, `primary`, `replica`, `mtls`, `ssh`, `adhoc`) |
 | `GET /health` | All health checks — **503 against this OSS overlay, by design** (see below) |
 | `GET /health/ready` | Health checks tagged `ready` (i.e. `primary` + `replica`) — also 503, same reason |
+
+The `/probe/*` endpoints are read-path demos and return **constant** results: they
+query the `numbers()` table function, which needs no SELECT grant, so `demo_user`
+can read it with default role NONE. They deliberately do not touch the
+`sample_events` table — `POST /events/bulk` is the only endpoint that writes rows,
+and you read those back from the server directly:
+
+```bash
+docker exec ch-native-auth-sample clickhouse-client -q "SELECT count() FROM sample_events"
+```
 
 ### Why the health endpoints report 503 here
 
