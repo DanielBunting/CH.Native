@@ -12,6 +12,15 @@ namespace CH.Native.Protocol;
 /// </summary>
 internal static class ProtocolGuards
 {
+    /// <summary>
+    /// Largest column count accepted in a block header. Deliberately far above
+    /// any real result set (ClickHouse's own wide-table guidance tops out three
+    /// orders of magnitude below this) so it can never reject a legitimate
+    /// block, while still bounding a corrupt header to a count whose minimum
+    /// footprint a genuine stream can actually deliver.
+    /// </summary>
+    internal const int MaxPlausibleColumnCount = 65_536;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int ToInt32(ulong value, string fieldName)
     {
@@ -74,11 +83,18 @@ internal static class ProtocolGuards
     {
         if (count > 0 && (long)count * minBytesPerItem > remaining)
         {
+            var required = (long)count * minBytesPerItem;
             var message =
-                $"Wire value {fieldName} = {count} requires at least {(long)count * minBytesPerItem} bytes " +
+                $"Wire value {fieldName} = {count} requires at least {required} bytes " +
                 $"but only {remaining} are available; protocol stream is malformed or hostile.";
-            if (retryable)
-                throw new ClickHouseCountGuardException(message, deficitBytes: (long)count * minBytesPerItem - remaining);
+
+            // Retryable only while the shortfall could still be made up. The
+            // compressed accumulate loop assembles chunks into a single
+            // int-indexed buffer, so a count needing >= 2 GiB can never be
+            // satisfied no matter how many chunks follow — staying "retryable"
+            // there would park the read pump waiting for bytes that cannot help.
+            if (retryable && required <= int.MaxValue)
+                throw new ClickHouseCountGuardException(message, deficitBytes: required - remaining);
             throw new ClickHouseProtocolException(message);
         }
     }
@@ -100,6 +116,21 @@ internal static class ProtocolGuards
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static void ValidateBlockHeaderCounts(int columnCount, int rowCount, long remaining, bool retryable = false)
     {
+        // Structural ceiling, checked before the bytes-available gate and never
+        // retryable: a block's column count is the projection width of the query
+        // that produced it — real schemas run to tens of columns, pathological
+        // ones to low thousands. Unlike the bytes-available gate, this verdict
+        // cannot be changed by more data arriving, which is exactly why the
+        // compressed accumulate loop needs it: that loop cannot otherwise
+        // distinguish "the declared counts are bogus" from "the rest of the
+        // block is still in flight", so without a count-independent ceiling a
+        // corrupt or hostile header parks the read pump in its need-more-data
+        // retry until the caller's timeout fires.
+        if (columnCount > MaxPlausibleColumnCount)
+            throw new ClickHouseProtocolException(
+                $"Wire value block column count = {columnCount} exceeds the structural maximum of " +
+                $"{MaxPlausibleColumnCount}; protocol stream is malformed or hostile.");
+
         ValidateCountAgainstRemaining(columnCount, minBytesPerItem: 2, remaining, "block column count", retryable);
         if (rowCount > 0)
             ValidateCountAgainstRemaining(rowCount, minBytesPerItem: columnCount, remaining, "block rowCount", retryable);
