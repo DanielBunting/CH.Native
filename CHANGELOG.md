@@ -173,6 +173,22 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`QueryStreamAsync<T>` / `QueryTypedAsync<T>` now return values for scalar
+  `T`.** Both APIs silently yielded `default(T)` for every row when `T` was a
+  scalar rather than a POCO — `int`, `long`, `ulong`, `double`, `decimal`,
+  `bool`, `Guid`, `DateTime` and `Nullable` variants all came back as zero,
+  and `string` threw `InvalidOperationException` ("constructor parameter
+  'value' does not match any column") instead. Both row mappers bind *writable
+  properties* to columns and a scalar has none, so no binding was produced and
+  the decoded column value was never read; `string`, having no parameterless
+  constructor, fell through to the args-constructor path and tried to bind
+  `String`'s own `value` parameter. A scalar `T` now binds to the row's first
+  column, matching `ExecuteScalarAsync`, with SQL NULL yielding `default(T)`
+  as the property-setter path already did. Fixed in both mappers —
+  `TypeMapper<T>` (behind `QueryStreamAsync`) and `ReflectionTypedRowMapper<T>`
+  (behind `QueryTypedAsync`, via `TypedRowMapperFactory`). Enum and
+  `Nullable<enum>` targets are included. POCO, record and anonymous-type
+  mapping is unchanged.
 - **`LowCardinality(Nullable(value-type))` no longer drops NULLs.** A NULL in a
   `LowCardinality(Nullable(Int64 / Date / Enum8 / …))` column read back as
   `default(T)` (`0`, epoch) with `IsDBNull` returning false — so a `long?`
@@ -210,6 +226,22 @@ and this project follows [Semantic Versioning](https://semver.org/).
   need-more-data (retried once more bytes arrive); only a proven non-chunk tail
   is terminal. Both compressed read paths were deduplicated into a single
   `ReadCompressedTypedBlock` helper so the retry contract lives in one place.
+- **An unsatisfiable block header no longer hangs the read pump.** Treating a
+  sub-chunk tail as need-more-data (above) removed the last terminal exit for a
+  block that *cannot* be parsed: after the final Data block the tail is the
+  one-byte EndOfStream, always under the 17 bytes needed to recognise a chunk
+  header, so a corrupt or hostile header was reported as "more chunks are
+  coming". The server had already sent everything, so the pump waited on bytes
+  that never arrived — re-decompressing every accumulated chunk per retry — until
+  the caller's timeout fired, where previously it failed fast. The accumulate
+  loop cannot distinguish "the counts are bogus" from "the rest is still in
+  flight" by inspecting the tail (a chunk header opens with checksum bytes, so
+  byte-sniffing for a message boundary would misread ~1 in 256 legitimate
+  truncations), so `ProtocolGuards` now applies two verdicts that no amount of
+  further data can overturn: a declared column count above 65,536 is terminal
+  regardless of `retryable`, and a shortfall stays retryable only while the
+  required byte count is one the int-indexed accumulator could ever hold
+  (≤ 2 GiB). Legitimate multi-chunk blocks are unaffected.
 - **Cancellation no longer drains against a server that owes nothing.** The
   post-`OperationCanceledException` drain gates checked only "did this
   conversation write" — a cancel landing after a nested role-sync round trip
