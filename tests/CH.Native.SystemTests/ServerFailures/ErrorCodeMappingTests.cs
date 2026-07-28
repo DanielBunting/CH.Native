@@ -2,6 +2,7 @@ using CH.Native.Connection;
 using CH.Native.Exceptions;
 using CH.Native.Resilience;
 using CH.Native.SystemTests.Fixtures;
+using CH.Native.SystemTests.Helpers;
 using Xunit;
 
 namespace CH.Native.SystemTests.ServerFailures;
@@ -135,6 +136,7 @@ public class ErrorCodeMappingTests
     }
 
     [Fact]
+    [Trait(Categories.Name, Categories.RaceSensitive)]
     public async Task TooManyConcurrentQueriesForUser_SurfacesAsServerException()
     {
         // Build a user with concurrency=1 and verify the second concurrent query fails
@@ -164,7 +166,11 @@ public class ErrorCodeMappingTests
             await using var c2 = new ClickHouseConnection(userSettings);
             await c2.OpenAsync();
 
-            var slow = c1.ExecuteScalarAsync<ulong>("SELECT count() FROM numbers(2000000000)");
+            // Wall-clock bound, so it is guaranteed to still be occupying the user's
+            // single concurrency slot when c2 arrives — a big scan can finish inside
+            // the start-up delay on fast hardware, leaving nothing to collide with.
+            using var slowCts = new CancellationTokenSource();
+            var slow = c1.ExecuteScalarAsync<ulong>(SlowQuery.Indefinite(), cancellationToken: slowCts.Token);
             await Task.Delay(200); // give the slow query time to start
 
             var second = await Assert.ThrowsAnyAsync<Exception>(async () =>
@@ -178,6 +184,10 @@ public class ErrorCodeMappingTests
             Assert.True(server!.ErrorCode is 202 or 242,
                 $"Expected concurrency error code 202 or 242, got {server.ErrorCode}: {server.Message}");
 
+            // The query now outlasts the test by design, so it must be cancelled
+            // rather than awaited to completion — and it must be released before
+            // DROP USER, which cannot run while the user holds an active session.
+            slowCts.Cancel();
             try { await slow; } catch { }
         }
         finally
