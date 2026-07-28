@@ -263,6 +263,11 @@ public sealed class Block
             };
         }
 
+        // Sanity-gate the wire-declared counts against the bytes actually
+        // available BEFORE any count-sized allocation; the cost model lives in
+        // ProtocolGuards.ValidateBlockHeaderCounts, shared by both read paths.
+        ProtocolGuards.ValidateBlockHeaderCounts(columnCount, rowCount, reader.Remaining);
+
         var columnNames = new string[columnCount];
         var columnTypes = new string[columnCount];
         var columns = new ITypedColumn[columnCount];
@@ -341,7 +346,8 @@ public sealed class Block
         ColumnReaderRegistry registry,
         string tableName,
         int protocolVersion,
-        MapShapeHint? mapShapeHint)
+        MapShapeHint? mapShapeHint,
+        bool countGuardIsRetryable = false)
     {
         var info = BlockInfo.Read(ref reader);
         var columnCount = reader.ReadVarIntAsInt32("block column count");
@@ -357,6 +363,13 @@ public sealed class Block
                 Columns = Array.Empty<ITypedColumn>()
             };
         }
+
+        // Sanity-gate the wire-declared counts against the bytes actually
+        // available BEFORE any count-sized allocation; the cost model lives in
+        // ProtocolGuards.ValidateBlockHeaderCounts, shared by both read paths.
+        // Only the compressed accumulate loops pass countGuardIsRetryable —
+        // everywhere else a violation is terminal.
+        ProtocolGuards.ValidateBlockHeaderCounts(columnCount, rowCount, reader.Remaining, countGuardIsRetryable);
 
         var columnNames = new string[columnCount];
         var columnTypes = new string[columnCount];

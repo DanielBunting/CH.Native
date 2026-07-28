@@ -13,6 +13,7 @@ namespace CH.Native.SystemTests.Resilience;
 /// </summary>
 [Collection("RestartableSingleNode")]
 [Trait(Categories.Name, Categories.Resilience)]
+[Trait(Categories.Name, Categories.RaceSensitive)]
 public class PingAsyncContractTests
 {
     private readonly RestartableSingleNodeFixture _fx;
@@ -44,7 +45,7 @@ public class PingAsyncContractTests
         Assert.Equal(0, statsAfter.Busy);
 
         await using var conn = await ds.OpenConnectionAsync();
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
     }
 
     [Fact]

@@ -133,10 +133,21 @@ public class TimeoutPrecedenceTests
     {
         // ClickHouse caps any single sleep call at 3 seconds. We use a
         // 2-second `sleep(2)` so the query is unambiguously in-flight when
-        // our 300ms cancellation token fires. The cancel packet must reach
-        // the server before sleep returns, and the caller must observe
-        // OperationCanceledException — not the (eventual, naturally-arriving)
-        // result.
+        // our 300ms cancellation token fires. The caller must observe
+        // OperationCanceledException — never the naturally-arriving result.
+        //
+        // CONTRACT (wire-state-machine step 2): cancellation drains the wire to
+        // the server's response terminator BEFORE the OCE propagates — the same
+        // synchronous drain-before-throw the scalar paths have always done. For
+        // queries the server aborts promptly (the normal case) this adds
+        // milliseconds; sleep() is the pathological non-interruptible case, so
+        // the OCE here surfaces only once the 2s sleep response arrives. The
+        // pre-fix "fast OCE" on this path existed only because the drain was
+        // skipped — which left the response bytes in the pipe and the NEXT
+        // query on the connection read them as its own result (silent wrong
+        // answers). The contract pinned now: OCE observed, latency bounded by
+        // server abort time (not the 30s drain cap), and the connection is
+        // genuinely reusable with a CORRECT follow-up result.
         await using var conn = new ClickHouseConnection(_fx.BuildSettings());
         await conn.OpenAsync();
 
@@ -148,10 +159,15 @@ public class TimeoutPrecedenceTests
         });
         sw.Stop();
 
-        _output.WriteLine($"Query cancellation fired in {sw.ElapsedMilliseconds} ms");
-        // Must fire before the natural 2s completion; allow some scheduling slack.
-        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(2),
-            $"Cancellation should fire before the 2s sleep completes; took {sw.Elapsed}");
+        _output.WriteLine($"Query cancellation surfaced in {sw.ElapsedMilliseconds} ms");
+        // Bounded by the sleep's natural completion (+scheduling slack) — NOT by
+        // the 30s drain cap. A hang here means the drain failed to terminate.
+        Assert.True(sw.Elapsed < TimeSpan.FromSeconds(10),
+            $"Cancellation should surface promptly after the server responds; took {sw.Elapsed}");
+
+        // The wire was realigned by the drain: the follow-up query returns ITS
+        // OWN result, not the abandoned sleep response.
+        Assert.Equal(42, await conn.ExecuteScalarAsync<int>("SELECT 42"));
     }
 
     [Fact]

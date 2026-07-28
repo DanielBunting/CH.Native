@@ -14,6 +14,7 @@ namespace CH.Native.SystemTests.Cancellation;
 /// </summary>
 [Collection("Toxiproxy")]
 [Trait(Categories.Name, Categories.Cancellation)]
+[Trait(Categories.Name, Categories.RaceSensitive)]
 public class CancelDuringRoundTripTests : IAsyncLifetime
 {
     private readonly ToxiproxyFixture _proxy;
@@ -91,7 +92,7 @@ public class CancelDuringRoundTripTests : IAsyncLifetime
             // was ever sent), and no orphaned query lingers in system.processes.
             await using var fresh = new ClickHouseConnection(_proxy.BuildSettings());
             await fresh.OpenAsync();
-            Assert.Equal(1, await fresh.ExecuteScalarAsync<int>("SELECT 1"));
+            Assert.Equal(4242, await fresh.ExecuteScalarAsync<int>("SELECT 4242"));
 
             var rows = await fresh.ExecuteScalarAsync<ulong>($"SELECT count() FROM {table}");
             Assert.Equal(0UL, rows);
@@ -170,7 +171,7 @@ public class CancelDuringRoundTripTests : IAsyncLifetime
             // server committed before honouring the cancel.
             await using var fresh = new ClickHouseConnection(_proxy.BuildSettings());
             await fresh.OpenAsync();
-            Assert.Equal(1, await fresh.ExecuteScalarAsync<int>("SELECT 1"));
+            Assert.Equal(4242, await fresh.ExecuteScalarAsync<int>("SELECT 4242"));
 
             // Allow the server a brief window to clear any in-flight query state
             // (cancel handling can race with insert finalisation). Match only the

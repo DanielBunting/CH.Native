@@ -57,7 +57,7 @@ public class PasswordRotationProbeTests
             // Rent + return to populate the pool with a live socket.
             await using (var c = await ds.OpenConnectionAsync())
             {
-                Assert.Equal(1, await c.ExecuteScalarAsync<int>("SELECT 1"));
+                Assert.Equal(4242, await c.ExecuteScalarAsync<int>("SELECT 4242"));
             }
 
             // Server-side password change.
@@ -130,7 +130,7 @@ public class PasswordRotationProbeTests
             await using var freshConn = new ClickHouseConnection(
                 _fx.BuildSettings(b => b.WithCredentials(user, newPwd)));
             await freshConn.OpenAsync();
-            Assert.Equal(1, await freshConn.ExecuteScalarAsync<int>("SELECT 1"));
+            Assert.Equal(4242, await freshConn.ExecuteScalarAsync<int>("SELECT 4242"));
         }
         finally
         {
@@ -184,7 +184,7 @@ public class PasswordRotationProbeTests
                 var conns = await Task.WhenAll(
                     Enumerable.Range(0, 3).Select(_ => ds.OpenConnectionAsync().AsTask()));
                 foreach (var c in conns)
-                    Assert.Equal(1, await c.ExecuteScalarAsync<int>("SELECT 1"));
+                    Assert.Equal(4242, await c.ExecuteScalarAsync<int>("SELECT 4242"));
                 foreach (var c in conns)
                     await c.DisposeAsync();
 
@@ -213,7 +213,7 @@ public class PasswordRotationProbeTests
                 for (int i = 0; i < 4; i++)
                     rented.Add(await ds.OpenConnectionAsync());
                 foreach (var c in rented)
-                    Assert.Equal(1, await c.ExecuteScalarAsync<int>("SELECT 1"));
+                    Assert.Equal(4242, await c.ExecuteScalarAsync<int>("SELECT 4242"));
                 foreach (var c in rented)
                     await c.DisposeAsync();
 

@@ -93,7 +93,7 @@ public class ExternalKillQueryTests
 
         await Assert.ThrowsAnyAsync<Exception>(() => queryTask);
 
-        Assert.Equal(1, await connA.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await connA.ExecuteScalarAsync<int>("SELECT 4242"));
     }
 
     [Fact]

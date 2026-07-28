@@ -27,7 +27,7 @@ using CH.Native.Samples.Hosting;
 
 // One-time process-global setup for Dapper integration: installs ClickHouse
 // array type handlers and flips snake_case → PascalCase mapping. Required for
-// the /events/dapper endpoint to map columns and bind array parameters.
+// the /probe/dapper-* endpoints to map columns and bind array parameters.
 ClickHouseDapperIntegration.Register();
 
 var builder = WebApplication.CreateBuilder(args);

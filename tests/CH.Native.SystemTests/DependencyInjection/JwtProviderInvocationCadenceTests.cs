@@ -170,7 +170,7 @@ public sealed class JwtProviderInvocationCadenceTests
 
         // Pool consistent: next open should succeed (provider returns valid pwd).
         await using var second = await ds.OpenConnectionAsync();
-        Assert.Equal(1, await second.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await second.ExecuteScalarAsync<int>("SELECT 4242"));
     }
 
     [Fact]

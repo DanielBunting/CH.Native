@@ -74,7 +74,37 @@ public sealed class DictionaryEncodedColumn<T> : ITypedColumn
     }
 
     /// <inheritdoc />
-    public object? GetValue(int index) => this[index];
+    public object? GetValue(int index)
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(DictionaryEncodedColumn<T>));
+        if ((uint)index >= (uint)_count)
+            throw new ArgumentOutOfRangeException(nameof(index));
+
+        // Nullable LowCardinality reserves dictionary index 0 for null. Return a
+        // real null instead of the boxed default(T) the typed indexer yields —
+        // for a value-type T (long, DateTime, Enum) default(T) is 0/epoch, which
+        // would otherwise masquerade as a present value and make IsDBNull / the
+        // typed mapper read 0 for a genuine NULL.
+        if (_isNullable && _indices[index] == 0)
+            return null;
+
+        return this[index];
+    }
+
+    /// <inheritdoc />
+    public bool IsNull(int index)
+    {
+        if (_disposed)
+            throw new ObjectDisposedException(nameof(DictionaryEncodedColumn<T>));
+        if ((uint)index >= (uint)_count)
+            throw new ArgumentOutOfRangeException(nameof(index));
+
+        // Without this override ITypedColumn.IsNull falls back to
+        // `GetValue(index) is null`; for value-type T the boxed default(T) is
+        // never null, so a genuine NULL (dictionary index 0) would report false.
+        return _isNullable && _indices[index] == 0;
+    }
 
     /// <summary>
     /// Gets the dictionary of unique values for advanced consumers.

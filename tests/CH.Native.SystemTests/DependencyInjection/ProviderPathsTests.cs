@@ -71,7 +71,7 @@ public sealed class ProviderPathsTests
             // Open a connection with the initial password — it goes into the pool when returned.
             await using (var conn = await ds.OpenConnectionAsync())
             {
-                Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+                Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
             }
 
             // Rotate: change the server-side password AND the provider's mutable state.

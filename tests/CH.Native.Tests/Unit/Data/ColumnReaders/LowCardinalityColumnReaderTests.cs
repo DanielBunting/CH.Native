@@ -144,4 +144,184 @@ public class LowCardinalityColumnReaderTests
         Assert.Throws<ArgumentException>(() =>
             new LowCardinalityColumnReader<string>((IColumnReader)new Int32ColumnReader()));
     }
+
+    // ── LowCardinality(Nullable(value-type)) via LowCardinalityNullableColumnReader ──
+    // The base LowCardinalityColumnReader<long> collapses the index-0 null sentinel
+    // to default(long)=0 on its generic path; the nullable-value reader must surface
+    // a genuine long? null so composites (Array/Map/Nested) preserve NULLs.
+
+    private static byte[] BuildLcInt64Column(long[] dictionary, int[] indices)
+    {
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+        writer.WriteUInt64(0);                        // flags: UInt8 index width
+        writer.WriteUInt64((ulong)dictionary.Length);
+        foreach (var v in dictionary) writer.WriteInt64(v);
+        writer.WriteUInt64((ulong)indices.Length);
+        foreach (var idx in indices) writer.WriteByte((byte)idx);
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    [Fact]
+    public void NullableValue_Int64_GenericPath_PreservesNulls()
+    {
+        // dict slot 0 = null placeholder (value irrelevant), slot 1 = 42, slot 2 = 7.
+        var dict = new long[] { 0, 42, 7 };
+        var indices = new[] { 0, 1, 0, 2 };
+        var bytes = BuildLcInt64Column(dict, indices);
+
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+        var sut = new LowCardinalityNullableColumnReader<long>(new Int64ColumnReader());
+        using TypedColumn<long?> column = sut.ReadTypedColumn(ref reader, indices.Length);
+
+        Assert.Null(column[0]);
+        Assert.Equal(42L, column[1]);
+        Assert.Null(column[2]);
+        Assert.Equal(7L, column[3]);
+
+        Assert.True(column.IsNull(0));
+        Assert.False(column.IsNull(1));
+        Assert.True(column.IsNull(2));
+    }
+
+    [Fact]
+    public void NullableValue_Int64_ReportsNullableMetadata()
+    {
+        var sut = new LowCardinalityNullableColumnReader<long>(new Int64ColumnReader());
+
+        Assert.Equal(typeof(long?), sut.ClrType);
+        Assert.Equal("LowCardinality(Nullable(Int64))", sut.TypeName);
+
+        // Non-generic path must report the nullable element type (drives GetFieldType).
+        var bytes = BuildLcInt64Column(new long[] { 0, 5 }, new[] { 0, 1 });
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+        using var column = ((IColumnReader)sut).ReadTypedColumn(ref reader, 2);
+        Assert.Equal(typeof(long?), column.ElementType);
+        Assert.True(column.IsNull(0));
+        Assert.Equal(5L, column.GetValue(1));
+    }
+
+    [Fact]
+    public void NullableValue_ReadPrefix_DelegatesToInnerVersionCheck()
+    {
+        // The reader owns no frame parsing of its own — ReadPrefix must reach the
+        // inner LowCardinality reader's version gate, or an unknown
+        // KeysSerializationVersion would be accepted and misparsed downstream.
+        var bytes = new byte[8];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes, 99);
+        var bad = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+        var sut = new LowCardinalityNullableColumnReader<long>(new Int64ColumnReader());
+
+        // ProtocolReader is a ref struct, so the assertion can't capture it in a
+        // lambda — catch explicitly, as the other tests here do.
+        InvalidDataException? caught = null;
+        try { sut.ReadPrefix(ref bad); }
+        catch (InvalidDataException ex) { caught = ex; }
+        Assert.NotNull(caught);
+
+        // Version 1 is accepted and consumes exactly the 8-byte prefix.
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes, 1);
+        var good = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+        sut.ReadPrefix(ref good);
+        Assert.Equal(0, good.Remaining);
+    }
+
+    [Fact]
+    public void NullableValue_ReadValue_ReturnsFirstRow()
+    {
+        // ReadValue is the single-row entry point (composite element readers that
+        // walk row-at-a-time use it); it must agree with the bulk path on both a
+        // present value and the index-0 null sentinel.
+        var sut = new LowCardinalityNullableColumnReader<long>(new Int64ColumnReader());
+
+        var present = new ProtocolReader(new ReadOnlySequence<byte>(
+            BuildLcInt64Column(new long[] { 0, 42 }, new[] { 1 })));
+        Assert.Equal(42L, sut.ReadValue(ref present));
+
+        var absent = new ProtocolReader(new ReadOnlySequence<byte>(
+            BuildLcInt64Column(new long[] { 0, 42 }, new[] { 0 })));
+        Assert.Null(sut.ReadValue(ref absent));
+    }
+
+    [Fact]
+    public void NullableValue_ZeroRows_ReturnsEmptyWithoutReadingBytes()
+    {
+        var sut = new LowCardinalityNullableColumnReader<long>(new Int64ColumnReader());
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(Array.Empty<byte>()));
+
+        using var column = sut.ReadTypedColumn(ref reader, 0);
+
+        Assert.Equal(0, column.Count);
+        Assert.Equal(0, reader.Remaining);
+    }
+
+    [Fact]
+    public void NullableValue_NullResultPool_Rejected()
+    {
+        Assert.Throws<ArgumentNullException>(() =>
+            new LowCardinalityNullableColumnReader<long>(new Int64ColumnReader(), resultPool: null!));
+    }
+
+    /// <summary>
+    /// Pool that records rent/return counts so a leak on the exception path is
+    /// observable. Hands back fresh arrays so nothing reaches ArrayPool.Shared's
+    /// foreign-buffer ledger.
+    /// </summary>
+    private sealed class CountingPool<T> : ArrayPool<T>
+    {
+        public int Rented;
+        public int Returned;
+        public override T[] Rent(int minimumLength) { Rented++; return new T[minimumLength]; }
+        public override void Return(T[] array, bool clearArray = false) => Returned++;
+    }
+
+    [Fact]
+    public void NullableValue_ThrowDuringProjection_ReturnsRentedBufferToPool()
+    {
+        // The result buffer is rented BEFORE the projection loop. A malformed
+        // dictionary index throws mid-loop; without the catch/Return the rental
+        // is silently dropped and the pool's ledger drifts — a leak that only
+        // shows up as degraded throughput much later, never as a failing read.
+        var pool = new CountingPool<long?>();
+        var sut = new LowCardinalityNullableColumnReader<long>(new Int64ColumnReader(), pool);
+
+        // dict has 2 entries; row 1 references index 5.
+        var bytes = BuildLcInt64Column(new long[] { 0, 42 }, new[] { 1, 5 });
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+
+        InvalidDataException? caught = null;
+        try { _ = sut.ReadTypedColumn(ref reader, 2); }
+        catch (InvalidDataException ex) { caught = ex; }
+        Assert.NotNull(caught);
+
+        Assert.Equal(1, pool.Rented);
+        Assert.Equal(1, pool.Returned);
+    }
+
+    [Fact]
+    public void NullableValue_Enum8_PreservesNulls()
+    {
+        // Enum8 reads as sbyte, so LC(Nullable(Enum8)) → sbyte?.
+        var buffer = new ArrayBufferWriter<byte>();
+        var writer = new ProtocolWriter(buffer);
+        writer.WriteUInt64(0);                 // flags: UInt8 index width
+        writer.WriteUInt64(3);                 // dict size
+        writer.WriteByte(0);                   // slot 0: null placeholder
+        writer.WriteByte(1);                   // slot 1: enum value 1
+        writer.WriteByte(2);                   // slot 2: enum value 2
+        writer.WriteUInt64(3);                 // index count
+        writer.WriteByte(0);                   // null
+        writer.WriteByte(2);                   // 2
+        writer.WriteByte(1);                   // 1
+        var bytes = buffer.WrittenSpan.ToArray();
+
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+        var sut = new LowCardinalityNullableColumnReader<sbyte>(new Enum8ColumnReader());
+        Assert.Equal(typeof(sbyte?), sut.ClrType);
+        using TypedColumn<sbyte?> column = sut.ReadTypedColumn(ref reader, 3);
+
+        Assert.Null(column[0]);
+        Assert.Equal((sbyte)2, column[1]);
+        Assert.Equal((sbyte)1, column[2]);
+    }
 }

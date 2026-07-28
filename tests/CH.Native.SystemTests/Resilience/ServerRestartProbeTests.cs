@@ -20,6 +20,7 @@ namespace CH.Native.SystemTests.Resilience;
 /// </summary>
 [Collection("RestartableSingleNode")]
 [Trait(Categories.Name, Categories.Resilience)]
+[Trait(Categories.Name, Categories.RaceSensitive)]
 public sealed class ServerRestartProbeTests : IAsyncLifetime
 {
     private readonly RestartableSingleNodeFixture _fixture;

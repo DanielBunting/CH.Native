@@ -13,6 +13,7 @@ namespace CH.Native.SystemTests.Cancellation;
 /// </summary>
 [Collection("SingleNode")]
 [Trait(Categories.Name, Categories.Cancellation)]
+[Trait(Categories.Name, Categories.RaceSensitive)]
 public class CancelRecoveryTests
 {
     private readonly SingleNodeFixture _fixture;
@@ -252,7 +253,7 @@ public class CancelRecoveryTests
 
             await using var fresh = new ClickHouseConnection(_fixture.BuildSettings());
             await fresh.OpenAsync();
-            Assert.Equal(1, await fresh.ExecuteScalarAsync<int>("SELECT 1"));
+            Assert.Equal(4242, await fresh.ExecuteScalarAsync<int>("SELECT 4242"));
 
             var rows = await fresh.ExecuteScalarAsync<ulong>($"SELECT count() FROM {table}");
             _output.WriteLine($"Post-flush cancel: observedCancel={observedCancel}, reachedComplete={reachedComplete}, rows committed={rows}");
@@ -322,7 +323,7 @@ public class CancelRecoveryTests
 
             await using var fresh = new ClickHouseConnection(_fixture.BuildSettings());
             await fresh.OpenAsync();
-            Assert.Equal(1, await fresh.ExecuteScalarAsync<int>("SELECT 1"));
+            Assert.Equal(4242, await fresh.ExecuteScalarAsync<int>("SELECT 4242"));
 
             var rows = await fresh.ExecuteScalarAsync<ulong>($"SELECT count() FROM {table}");
             _output.WriteLine($"Mid-batch cancel: observedCancel={observedCancel}, reachedComplete={reachedComplete}, buffered at cancel={bufferAtCancel}, rows committed={rows}");
@@ -463,7 +464,7 @@ public class CancelRecoveryTests
                 () => inserter.InitAsync(cts.Token));
 
             // Same connection: scalar still works.
-            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+            Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
 
             // No INSERT query should have been registered server-side. Match only
             // INSERT INTO {table} (avoid the self-referential LIKE pattern from

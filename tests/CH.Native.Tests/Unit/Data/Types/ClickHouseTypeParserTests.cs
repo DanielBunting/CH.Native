@@ -626,4 +626,22 @@ public class ClickHouseTypeParserTests
         const string typeName = "AggregateFunction(count)";
         Assert.Equal(typeName, ClickHouseTypeParser.Parse(typeName).ToString());
     }
+
+    [Fact]
+    public void Parse_PathologicallyNestedType_ThrowsInsteadOfStackOverflow()
+    {
+        // A column type name is read from the server and is only length-capped.
+        // A pathologically nested type — Array(Array(...Int32...)) thousands deep —
+        // must NOT recurse unbounded: a StackOverflowException is uncatchable and
+        // crashes the whole process. Depth-bounded parsing rejects it with a
+        // catchable FormatException instead. (Pre-fix, this test crashes the host.)
+        const int depth = 20_000;
+        var sb = new System.Text.StringBuilder(depth * 7 + 16);
+        for (int i = 0; i < depth; i++)
+            sb.Append("Array(");
+        sb.Append("Int32");
+        sb.Append(')', depth);
+
+        Assert.Throws<FormatException>(() => ClickHouseTypeParser.Parse(sb.ToString()));
+    }
 }

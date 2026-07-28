@@ -35,6 +35,12 @@ internal sealed class TypeMapper<T>
     private readonly Type[] _argsCtorParamTypes;
 
     /// <summary>
+    /// Set when T is a scalar rather than a POCO — see the scalar branch in the
+    /// constructor. Non-null means the property/ctor machinery is bypassed entirely.
+    /// </summary>
+    private readonly Func<ClickHouseDataReader, T>? _scalarMap;
+
+    /// <summary>
     /// Creates a new TypeMapper for the specified reader schema.
     /// </summary>
     /// <param name="reader">The data reader to map from.</param>
@@ -46,6 +52,30 @@ internal sealed class TypeMapper<T>
         // because they're cheaper at map time (no per-row Activator.CreateInstance
         // followed by reflection.Invoke).
         var t = typeof(T);
+
+        // Scalar T (int, ulong, Guid, DateTime, string, an enum, or a Nullable of
+        // one) binds to the first column, matching ExecuteScalarAsync. This must
+        // be decided BEFORE the ctor strategies below: a scalar has no writable
+        // properties, so the setter path would produce zero bindings and return
+        // default(T) for every row — the decoded value never read. Reference
+        // scalars are worse still: string has no parameterless ctor, so it would
+        // reach the args-ctor path and try to bind String's own 'value' parameter
+        // to a column of that name, throwing instead.
+        if (IsScalarTarget(t))
+        {
+            if (reader.FieldCount == 0)
+                throw new InvalidOperationException(
+                    $"Cannot map a scalar '{t.Name}' from a result set with no columns.");
+
+            _scalarMap = BuildScalarMap();
+            _useArgsCtor = false;
+            _accessors = Array.Empty<Action<T, ClickHouseDataReader>>();
+            _argsCtor = null;
+            _argsCtorOrdinals = Array.Empty<int>();
+            _argsCtorParamTypes = Array.Empty<Type>();
+            return;
+        }
+
         var parameterlessCtor = t.GetConstructor(
             BindingFlags.Public | BindingFlags.Instance,
             binder: null,
@@ -111,6 +141,9 @@ internal sealed class TypeMapper<T>
     /// <returns>A new instance of T with mapped values.</returns>
     public T Map(ClickHouseDataReader reader)
     {
+        if (_scalarMap is not null)
+            return _scalarMap(reader);
+
         if (_useArgsCtor)
             return MapViaArgsCtor(reader);
 
@@ -173,6 +206,40 @@ internal sealed class TypeMapper<T>
             return paramAttr.Name;
 
         return param.Name ?? string.Empty;
+    }
+
+    /// <summary>
+    /// True when T is a value the reader can produce for a single column, rather
+    /// than a POCO built from one. Mirrors <see cref="IsTypedAccessorEligible"/>
+    /// (primitives, string, Guid, the date/time types, and Nullable wrappers)
+    /// plus enums, which reach the column value through <see cref="ConvertValue"/>.
+    /// </summary>
+    private static bool IsScalarTarget(Type t)
+    {
+        if (IsTypedAccessorEligible(t))
+            return true;
+
+        var underlying = Nullable.GetUnderlyingType(t) ?? t;
+        return underlying.IsEnum;
+    }
+
+    /// <summary>
+    /// Builds the ordinal-0 reader for a scalar T. A SQL NULL yields
+    /// <c>default(T)</c> — null for reference and Nullable targets, zero for a
+    /// non-nullable value type — matching the null-handling the property
+    /// accessors already apply (see <see cref="CreateTypedAccessor"/>).
+    /// </summary>
+    private static Func<ClickHouseDataReader, T> BuildScalarMap()
+    {
+        if (IsTypedAccessorEligible(typeof(T)))
+        {
+            // Typed getter: no boxing on the per-row path.
+            return static r => r.IsDBNull(0) ? default! : r.GetFieldValue<T>(0);
+        }
+
+        // Enums and anything else conversion-dependent: go through the shared
+        // converter, which already handles string/numeric enum representations.
+        return static r => (T)ConvertValue(r.GetValueInternal(0), typeof(T))!;
     }
 
     private static Action<T, ClickHouseDataReader>[] BuildAccessors(ClickHouseDataReader reader)

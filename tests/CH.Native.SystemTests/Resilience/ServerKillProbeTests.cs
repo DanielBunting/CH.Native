@@ -14,6 +14,7 @@ namespace CH.Native.SystemTests.Resilience;
 /// </summary>
 [Collection("RestartableSingleNode")]
 [Trait(Categories.Name, Categories.Resilience)]
+[Trait(Categories.Name, Categories.RaceSensitive)]
 public sealed class ServerKillProbeTests : IAsyncLifetime
 {
     private readonly RestartableSingleNodeFixture _fixture;
@@ -74,7 +75,7 @@ public sealed class ServerKillProbeTests : IAsyncLifetime
         // Next rent must produce a fresh physical connection.
         await using (var fresh = await ds.OpenConnectionAsync())
         {
-            Assert.Equal(1, await fresh.ExecuteScalarAsync<int>("SELECT 1"));
+            Assert.Equal(4242, await fresh.ExecuteScalarAsync<int>("SELECT 4242"));
         }
 
         var post = ds.GetStatistics();

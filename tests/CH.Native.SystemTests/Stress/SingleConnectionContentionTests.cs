@@ -19,6 +19,7 @@ namespace CH.Native.SystemTests.Stress;
 /// </summary>
 [Collection("SingleNode")]
 [Trait(Categories.Name, Categories.Stress)]
+[Trait(Categories.Name, Categories.RaceSensitive)]
 public class SingleConnectionContentionTests
 {
     private readonly SingleNodeFixture _fixture;

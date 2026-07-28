@@ -15,16 +15,19 @@ internal static class DataEndpoints
     {
         app.MapGet("/", () =>
             "CH.Native Hosting sample — try /auth/{password|jwt|ssh|cert} (optionally ?role=admin_role), " +
-            "/events/count, /events/dapper, /events/dapper-typed, /replica/server, POST /events/bulk, " +
+            "/probe/scalar, /probe/dapper-scalar, /probe/dapper-typed, /replica/server, POST /events/bulk, " +
             "/diag/pool, /ping/{key}, /health, /health/ready.");
 
-        app.MapGet("/events/count", async (ClickHouseDataSource ds, CancellationToken ct) =>
+        // The /probe/* endpoints are read-path connectivity demos, deliberately
+        // decoupled from the /events/* table: they query the numbers() table
+        // *function*, which — unlike the system.numbers table — needs no SELECT
+        // grant, so the default DataSource's demo_user (default role NONE, see the
+        // RBAC notes in README) can read it without activating a role. Their
+        // results are constant by construction; POST /events/bulk is the endpoint
+        // that actually writes rows.
+        app.MapGet("/probe/scalar", async (ClickHouseDataSource ds, CancellationToken ct) =>
         {
             await using var conn = await ds.OpenConnectionAsync(ct);
-            // numbers(N) is the bounded table *function* — unlike the system.numbers
-            // table it needs no SELECT grant, so the default DataSource's demo_user
-            // (default role NONE — see the RBAC notes in README) can read it without
-            // activating a role.
             var count = await conn.ExecuteScalarAsync<ulong>(
                 "SELECT count() FROM numbers(10)",
                 cancellationToken: ct);
@@ -36,7 +39,7 @@ internal static class DataEndpoints
         // IDbConnection-bound extension methods bind directly. Pool, credential
         // providers, keyed services — all the things you get from DI continue to
         // work; you just call .QueryAsync<T> / .ExecuteScalarAsync<T> on the rent.
-        app.MapGet("/events/dapper", async (ClickHouseDataSource ds, CancellationToken ct) =>
+        app.MapGet("/probe/dapper-scalar", async (ClickHouseDataSource ds, CancellationToken ct) =>
         {
             await using var conn = await ds.OpenConnectionAsync(ct);
             var n = await conn.ExecuteScalarAsync<ulong>(new CommandDefinition(
@@ -45,8 +48,8 @@ internal static class DataEndpoints
             return Http.Ok(new { count = n, via = "dapper" });
         });
 
-        // Dapper QueryAsync<T> against a system table — exercises column→property
-        // mapping and parameter binding on a pooled, DI-resolved connection.
+        // Dapper QueryAsync<T> — exercises column→property mapping and parameter
+        // binding on a pooled, DI-resolved connection.
         // The same call shape works for the keyed DataSources above; see
         // /replica/server for the keyed-injection pattern.
         //
@@ -54,7 +57,7 @@ internal static class DataEndpoints
         // misinterprets `{limit:Type}` / `{offset:Type}` as the start of a
         // LIMIT/OFFSET clause and rejects the query with CANNOT_PARSE_QUOTED_STRING.
         // CH.Native fails fast with a clear error if you try to use either name.
-        app.MapGet("/events/dapper-typed", async (ClickHouseDataSource ds, CancellationToken ct) =>
+        app.MapGet("/probe/dapper-typed", async (ClickHouseDataSource ds, CancellationToken ct) =>
         {
             await using var conn = await ds.OpenConnectionAsync(ct);
             var rows = await conn.QueryAsync<NumberRow>(new CommandDefinition(

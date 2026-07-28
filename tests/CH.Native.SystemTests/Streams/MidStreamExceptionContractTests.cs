@@ -66,6 +66,6 @@ public class MidStreamExceptionContractTests
         }
 
         // Connection still usable end-to-end.
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
     }
 }

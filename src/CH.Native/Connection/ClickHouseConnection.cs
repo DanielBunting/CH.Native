@@ -100,13 +100,79 @@ public sealed class ClickHouseConnection : DbConnection
     // real owner — never the inner SET ROLE id and never <handshake> just
     // because the inner role-sync finally cleared the slot a microsecond ago.
     private string? _busyOwnerQueryId;
+    // Monotonic conversation identity, incremented by EnterBusy under
+    // _queryLock. Query-id STRINGS are caller-supplied and legally reusable
+    // across sequential conversations, so id equality cannot distinguish "my
+    // conversation" from "a successor that reused my id". Long-lived slot
+    // owners (data readers, bulk inserters) capture the epoch at EnterBusy and
+    // pass it to ExitBusyResolve, whose epoch gate no-ops on mismatch — a
+    // stale dispose can then never release (or poison) a successor's
+    // in-flight conversation.
+    private long _busyEpoch;
     private string? _currentQueryId;
     private string? _lastQueryId;
-    private volatile bool _cancellationRequested;
     // Set when a ClickHouseProtocolException escapes the read path. The protocol
     // stream is at an unknown offset, so the connection must be discarded — not
     // returned to the pool, not reused for the next query. Read by CanBePooled.
     private volatile bool _protocolFatal;
+
+    // ── Wire-conversation evidence ─────────────────────────────────────────────
+    // Together these derive "is the wire at a protocol boundary?" instead of
+    // trusting method-exit bookkeeping:
+    //   _conversationWrote  — this conversation put non-cancel bytes on the wire.
+    //   _boundaryProven     — since the last non-cancel byte we sent, a full
+    //                         response terminator (EndOfStream, or a completely
+    //                         consumed server-exception envelope) was consumed.
+    // Set/cleared in WriteAndFlushAsync; proven only at terminator-consumption
+    // sites; reset at EnterBusy. Consumed by ExitBusyResolve's pessimistic gate.
+    private volatile bool _conversationWrote;
+    private volatile bool _boundaryProven;
+
+    /// <summary>
+    /// True when the current conversation has put non-cancel bytes on the wire.
+    /// Consumed by the cancellation-drain gate and (from the pessimism step)
+    /// ExitBusyResolve; internal for test assertions.
+    /// </summary>
+    internal bool ConversationWrote => _conversationWrote;
+
+    /// <summary>
+    /// True when a full response terminator has been consumed since the last
+    /// non-cancel write — i.e., the server owes us nothing. Internal for test
+    /// assertions until ExitBusyResolve consumes it.
+    /// </summary>
+    internal bool BoundaryProven => _boundaryProven;
+
+    /// <summary>
+    /// THE evidence predicate: the wire position is genuinely unknown. This
+    /// conversation put non-cancel bytes out, no response terminator has been
+    /// consumed since, and the connection hasn't already been classified
+    /// (closed or condemned). Every decision that hangs on wire position —
+    /// the post-OCE drain gates, the typed-stream realignment finally, the
+    /// reader-dispose fallback drain, and ExitBusyResolve's pessimistic
+    /// conviction — consumes this single definition so they can never diverge.
+    /// Notably NOT true when the boundary is already proven (e.g. cancellation
+    /// landing after a nested role-sync round trip completed, or after EOS was
+    /// consumed): draining there would read against a server that owes nothing,
+    /// stalling until the drain cap and wrongly poisoning a healthy connection.
+    /// </summary>
+    internal bool WireIndeterminate => _isOpen && _conversationWrote && !_boundaryProven && !_protocolFatal;
+
+    /// <summary>
+    /// True when this conversation put bytes on the wire and has since neither
+    /// proven a clean boundary nor been closed — so a cancellation must run the
+    /// caller's abort cleanup (discard buffered rows, mark the conversation
+    /// finished) to keep <c>DisposeAsync</c> from ever touching the wire.
+    /// Deliberately WIDER than <see cref="WireIndeterminate"/>: it does NOT
+    /// exclude <c>_protocolFatal</c>. A write that faults/cancels mid-flush
+    /// condemns the connection, which makes <see cref="WireIndeterminate"/>
+    /// false — but the caller-side cleanup is exactly as necessary then, and
+    /// omitting it is what lets a buffered inserter's dispose write onto a
+    /// truncated wire (uncancellable read that stalls until the server times
+    /// out) and throw over the caller's cancellation. The paired
+    /// <see cref="DrainAfterCancellationAsync"/> is a safe no-op on a
+    /// protocol-fatal connection, so gate on this and drain unconditionally.
+    /// </summary>
+    internal bool WriteNeedsCancelCleanup => _isOpen && _conversationWrote && !_boundaryProven;
     private X509Certificate2? _customCaCertificate;
 
     // Role-sync state: tracks what we last sent via SET ROLE on this session.
@@ -209,7 +275,7 @@ public sealed class ClickHouseConnection : DbConnection
     /// (or the OpenAsync handshake) is already in flight; otherwise sets
     /// <see cref="_busy"/> = true and records the owner's query id for the
     /// exception message that any subsequent concurrent caller would see.
-    /// Pair every successful call with <see cref="ExitBusy"/> in a finally.
+    /// Pair every successful call with <see cref="ExitBusyResolve(string?)"/> in a finally.
     /// </summary>
     /// <param name="queryIdForOwner">
     /// The query id (or <see cref="ClickHouseConnectionBusyException.HandshakeSentinel"/>)
@@ -218,7 +284,14 @@ public sealed class ClickHouseConnection : DbConnection
     /// caller. Pre-resolve via <c>ResolveQueryId</c> at the public-method
     /// boundary so the message names the same id the server logs.
     /// </param>
-    private void EnterBusy(string queryIdForOwner)
+    /// <returns>
+    /// The fresh conversation epoch, incremented under the lock. Long-lived slot
+    /// owners (readers, bulk inserters) whose resolve can run after a successor
+    /// claimed the slot pass this back to <see cref="ExitBusyResolve(string?, long?)"/>
+    /// to identify their own conversation — captured here so no second lock
+    /// acquisition is needed to read it.
+    /// </returns>
+    private long EnterBusy(string queryIdForOwner)
     {
         lock (_queryLock)
         {
@@ -234,6 +307,16 @@ public sealed class ClickHouseConnection : DbConnection
             }
             _busy = true;
             _busyOwnerQueryId = queryIdForOwner;
+            _busyEpoch++;
+            // Fresh conversation, fresh evidence. Deliberately AFTER the reject
+            // guards: a losing contender (busy-collision) must not wipe the
+            // winning conversation's in-flight evidence. Belt-and-braces — the
+            // write-clears-proof rule in WriteAndFlushAsync is the load-bearing
+            // reset; this keeps a no-write conversation from inheriting stale
+            // "wrote" state from its predecessor.
+            _conversationWrote = false;
+            _boundaryProven = false;
+            return _busyEpoch;
         }
     }
 
@@ -271,12 +354,15 @@ public sealed class ClickHouseConnection : DbConnection
     /// still ours so we don't clobber a subsequent query that already
     /// installed its own id.
     /// </summary>
-    internal void ClearOwnedQueryId(string? ownedId)
+    internal void ClearOwnedQueryId(string? ownedId, long ownerEpoch)
     {
         if (ownedId is null) return;
         lock (_queryLock)
         {
-            if (_currentQueryId == ownedId)
+            // Epoch-gated like ExitBusyResolve: id strings are caller-supplied
+            // and reusable, so a matching id alone does not prove the slot is
+            // still ours to clear.
+            if (_currentQueryId == ownedId && _busyEpoch == ownerEpoch)
                 _currentQueryId = null;
         }
     }
@@ -288,12 +374,56 @@ public sealed class ClickHouseConnection : DbConnection
     /// Internal so <see cref="Results.ClickHouseDataReader"/> can release the
     /// slot when its enumerator naturally completes.
     /// </summary>
-    internal void ExitBusy()
+    /// <summary>
+    /// Ends the busy conversation owned by <paramref name="ownerQueryId"/> and
+    /// resolves the connection's health from the conversation evidence.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Owner-gated:</b> a no-op unless the slot is held AND (when an owner
+    /// id is supplied) held by that owner. This makes double-resolution safe and —
+    /// critically — stops a stale caller from resolving a SUCCESSOR's conversation:
+    /// the reader releases the slot at EOS (<c>MarkCompleted</c>) precisely so a new
+    /// query can start before the reader is disposed; the dispose safety-net must
+    /// not then evaluate (and poison) the new query's mid-flight evidence.</para>
+    /// <para><b>Pessimistic:</b> if this conversation put non-cancel bytes on the
+    /// wire and no response terminator was consumed since, the wire position is
+    /// unknown — the connection is marked protocol-fatal rather than being allowed
+    /// to look reusable. Every legitimate completion path ends at a proof site
+    /// (EOS, consumed server-exception envelope, drain success, handshake success),
+    /// so only genuinely indeterminate exits convict. The <c>_isOpen</c> gate keeps
+    /// failed handshakes and already-classified (closed) connections benign.</para>
+    /// <para>The query id is cleared here unconditionally on a matched exit: the id
+    /// lifecycle IS the conversation lifecycle, in both directions — a completed
+    /// conversation must never leave an id behind (that blocked pooling after bulk
+    /// inserts), and an abnormal exit needs no id latch because the pessimistic
+    /// gate carries the verdict.</para>
+    /// </remarks>
+    internal void ExitBusyResolve(string? ownerQueryId) => ExitBusyResolve(ownerQueryId, ownerEpoch: null);
+
+    /// <summary>
+    /// Epoch-gated overload for long-lived slot owners (readers, bulk
+    /// inserters) whose resolve can run AFTER a successor conversation has
+    /// claimed the slot. The epoch — returned by <see cref="EnterBusy"/> when
+    /// the owner's busy span opened — identifies the conversation itself, where
+    /// the owner id string cannot: caller-supplied
+    /// query ids are legally reusable, and a reused id would otherwise let a
+    /// stale dispose release and poison the successor's in-flight conversation.
+    /// </summary>
+    internal void ExitBusyResolve(string? ownerQueryId, long? ownerEpoch)
     {
         lock (_queryLock)
         {
+            if (!_busy)
+                return; // already resolved (e.g. MarkCompleted ran; safety-net no-ops)
+            if (ownerQueryId is not null && _busyOwnerQueryId is not null && _busyOwnerQueryId != ownerQueryId)
+                return; // slot belongs to a successor conversation — not ours to resolve
+            if (ownerEpoch is not null && ownerEpoch != _busyEpoch)
+                return; // same id string, different conversation — not ours to resolve
             _busy = false;
             _busyOwnerQueryId = null;
+            _currentQueryId = null;
+            if (WireIndeterminate)
+                _protocolFatal = true;
         }
     }
 
@@ -302,9 +432,10 @@ public sealed class ClickHouseConnection : DbConnection
     /// the wire from <c>InitAsync</c> through <c>CompleteAsync</c>/<c>DisposeAsync</c>,
     /// so the slot must persist across the inserter's lifetime. Internal so
     /// <see cref="BulkInsert.BulkInserter{T}"/> can call it; semantics identical
-    /// to <see cref="EnterBusy"/>.
+    /// to <see cref="EnterBusy"/>. Returns the conversation epoch the inserter
+    /// passes back to <see cref="ExitBusyResolve(string?, long?)"/>.
     /// </summary>
-    internal void EnterBusyForBulkInsert(string queryIdForOwner) => EnterBusy(queryIdForOwner);
+    internal long EnterBusyForBulkInsert(string queryIdForOwner) => EnterBusy(queryIdForOwner);
 
     /// <summary>
     /// Internal accessor for <see cref="ResolveQueryId"/>. Lets
@@ -324,15 +455,6 @@ public sealed class ClickHouseConnection : DbConnection
     /// </summary>
     private ProtocolReader CreateProtocolReader(System.Buffers.ReadOnlySequence<byte> buffer)
         => new(buffer) { MaxStringLengthBytes = Settings.MaxStringLengthBytes };
-
-    /// <summary>
-    /// True between the moment <see cref="SendCancelAsync"/> writes a Cancel packet
-    /// and the next query (which resets the flag). Bulk-insert / read-path catch
-    /// blocks read this to gate the post-OCE drain — without the gate, an OCE
-    /// thrown synchronously before any Cancel was sent would trigger a drain
-    /// against a server that has nothing to drain, hanging until the 5s timeout.
-    /// </summary>
-    internal bool WasCancellationRequested => _cancellationRequested;
 
     /// <summary>
     /// Gets the server information received during handshake.
@@ -648,13 +770,50 @@ public sealed class ClickHouseConnection : DbConnection
     /// detached cancellation callback — from racing with an in-flight query or
     /// bulk-insert write and corrupting the wire.
     /// </summary>
-    private async Task WriteAndFlushAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken)
+    /// <param name="data">The bytes to write.</param>
+    /// <param name="cancellationToken">Cancellation token; a cancellation during the
+    /// lock wait leaves no conversation evidence (nothing was sent).</param>
+    /// <param name="isCancelPacket">
+    /// True only for <see cref="SendCancelAsync"/>. A Cancel packet must not touch
+    /// the conversation evidence: it can race in from the detached cancellation
+    /// callback AFTER the response terminator was already consumed, and un-proving
+    /// a clean boundary there would spuriously poison a healthy connection. The
+    /// server ignores Cancel packets received in the idle state, so a proven
+    /// boundary stays valid. Excluding cancel also keeps all evidence transitions
+    /// conversation-sequential (no concurrent writers).
+    /// </param>
+    private async Task WriteAndFlushAsync(ReadOnlyMemory<byte> data, CancellationToken cancellationToken, bool isCancelPacket = false)
     {
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await _pipeWriter!.WriteAsync(data, cancellationToken).ConfigureAwait(false);
-            await _pipeWriter.FlushAsync(cancellationToken).ConfigureAwait(false);
+            // Evidence is stamped after the lock wait succeeds but BEFORE the
+            // write: once we attempt WriteAsync, bytes may be on the wire even if
+            // the flush later faults — the conversation must count as "wrote".
+            // A write invalidates any prior boundary proof: from this point the
+            // server owes us a response again (this also correctly handles nested
+            // conversations, e.g. role-sync running inside an outer busy span).
+            if (!isCancelPacket)
+            {
+                _conversationWrote = true;
+                _boundaryProven = false;
+            }
+            try
+            {
+                await _pipeWriter!.WriteAsync(data, cancellationToken).ConfigureAwait(false);
+                await _pipeWriter.FlushAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception) when (!isCancelPacket && _isOpen)
+            {
+                // A faulted or cancelled write leaves an unknowable number of
+                // bytes on the wire, and the server may never see a complete
+                // message — so it may never respond. Draining cannot salvage
+                // this conversation; convict immediately so the abnormal-exit
+                // gates (WireIndeterminate) fail fast instead of reading
+                // against a silent server until the drain cap.
+                _protocolFatal = true;
+                throw;
+            }
         }
         finally
         {
@@ -730,7 +889,17 @@ public sealed class ClickHouseConnection : DbConnection
                 await ConnectTcpAsync(cancellationToken);
                 await PerformHandshakeAsync(cancellationToken);
             }
-            lock (_queryLock) { _isOpen = true; }
+            lock (_queryLock)
+            {
+                _isOpen = true;
+                // Handshake boundary proof is set EXPLICITLY (the handshake does
+                // not run through the query pumps, and its final action is a
+                // response-less addendum write, so terminator-site rules alone can
+                // never prove it). Placed with _isOpen inside the lock, BEFORE
+                // OnStateChange/telemetry — those can throw after the connection
+                // is nominally open, and the failure path closes (benign).
+                _boundaryProven = true;
+            }
             OnStateChange(new System.Data.StateChangeEventArgs(
                 System.Data.ConnectionState.Connecting, System.Data.ConnectionState.Open));
 
@@ -763,7 +932,10 @@ public sealed class ClickHouseConnection : DbConnection
                 if (_currentQueryId == ClickHouseConnectionBusyException.HandshakeSentinel)
                     _currentQueryId = null;
             }
-            ExitBusy();
+            // Handshake conversation: success set boundary proof next to
+            // _isOpen = true; failure paths run with _isOpen still false, so the
+            // pessimistic gate stays benign for them.
+            ExitBusyResolve(ClickHouseConnectionBusyException.HandshakeSentinel);
         }
     }
 
@@ -1177,11 +1349,25 @@ public sealed class ClickHouseConnection : DbConnection
 
         // Defensive copy so callers can't mutate the pinned reference after pinning.
         IReadOnlyList<string>? toPin = roles is null ? null : roles.ToArray();
-        await EnsureRolesResolvedAsync(toPin, cancellationToken);
 
-        // Commit the sticky override only after the server accepted the change.
-        _pinnedRoles = toPin;
-        _pinnedRolesSet = true;
+        // This runs a full wire conversation (SET ROLE), so it must hold the busy
+        // slot like every other public entry point — previously it ran outside the
+        // busy pairing entirely, able to interleave with a running query and, on
+        // failure, leave the wire indeterminate with nobody to convict.
+        var effectiveQueryId = ResolveQueryId(null);
+        EnterBusy(effectiveQueryId);
+        try
+        {
+            await EnsureRolesResolvedAsync(toPin, cancellationToken);
+
+            // Commit the sticky override only after the server accepted the change.
+            _pinnedRoles = toPin;
+            _pinnedRolesSet = true;
+        }
+        finally
+        {
+            ExitBusyResolve(effectiveQueryId);
+        }
     }
 
     /// <summary>
@@ -1900,7 +2086,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            ExitBusy();
+            ExitBusyResolve(effectiveQueryId);
         }
     }
 
@@ -1959,7 +2145,13 @@ public sealed class ClickHouseConnection : DbConnection
 
             return default;
         }
-        catch (OperationCanceledException ex) when (_cancellationRequested)
+        // Drain only when the wire is genuinely indeterminate (see
+        // WireIndeterminate): bytes went out and no terminator has been consumed
+        // since. If the boundary is already proven (e.g. the cancel landed after
+        // a nested role-sync round trip) — or the write itself faulted
+        // (protocol-fatal) — the server owes nothing readable and draining
+        // would hang against a silent server until the cap.
+        catch (OperationCanceledException ex) when (WireIndeterminate)
         {
             ClickHouseActivitySource.SetError(activity, ex);
             // Server cancellation was requested - drain remaining messages to reset connection state
@@ -2013,7 +2205,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            ExitBusy();
+            ExitBusyResolve(effectiveQueryId);
         }
     }
 
@@ -2065,7 +2257,13 @@ public sealed class ClickHouseConnection : DbConnection
 
             return totalRows;
         }
-        catch (OperationCanceledException ex) when (_cancellationRequested)
+        // Drain only when the wire is genuinely indeterminate (see
+        // WireIndeterminate): bytes went out and no terminator has been consumed
+        // since. If the boundary is already proven (e.g. the cancel landed after
+        // a nested role-sync round trip) — or the write itself faulted
+        // (protocol-fatal) — the server owes nothing readable and draining
+        // would hang against a silent server until the cap.
+        catch (OperationCanceledException ex) when (WireIndeterminate)
         {
             ClickHouseActivitySource.SetError(activity, ex);
             // Server cancellation was requested - drain remaining messages to reset connection state
@@ -2106,7 +2304,7 @@ public sealed class ClickHouseConnection : DbConnection
             ThrowNotOpen();
 
         var effectiveQueryId = ResolveQueryId(queryId);
-        EnterBusy(effectiveQueryId);
+        var conversationEpoch = EnterBusy(effectiveQueryId);
         var slotReleased = false;
         try
         {
@@ -2126,7 +2324,7 @@ public sealed class ClickHouseConnection : DbConnection
                 // Slot is owned by the returned reader from this point on — it
                 // releases via ExitBusy on natural completion or DisposeAsync.
                 slotReleased = true;
-                return new ClickHouseDataReader(enumerator, this, activity, effectiveQueryId, stopwatch);
+                return new ClickHouseDataReader(enumerator, this, activity, effectiveQueryId, stopwatch, conversationEpoch);
             }
             catch (Exception ex)
             {
@@ -2142,7 +2340,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            if (!slotReleased) ExitBusy();
+            if (!slotReleased) ExitBusyResolve(effectiveQueryId);
         }
     }
 
@@ -2305,6 +2503,27 @@ public sealed class ClickHouseConnection : DbConnection
             }
             finally
             {
+                // Wire realignment for EVERY abnormal exit of the typed stream.
+                // This lives in a finally (not a catch) because `yield return`
+                // forbids an enclosing catch, and because iterator ABANDONMENT
+                // (caller breaks out of `await foreach`) runs only finallys —
+                // a catch would miss it entirely. Covers: cancellation (OCE from
+                // the pump), consumer exceptions between yields, and early break.
+                // Without this, the un-consumed response bytes are read by the
+                // next query on this connection as its own response — silent
+                // wrong results. Skipped when the terminator was already consumed
+                // (boundary proven), nothing was written, or the connection is
+                // already classified (see WireIndeterminate).
+                if (!success && WireIndeterminate)
+                {
+                    // Tell the server to stop producing before draining what's
+                    // in flight (mirrors ClickHouseDataReader.DisposeAsync). A
+                    // duplicate Cancel (token registration may have already sent
+                    // one) is tolerated by the server.
+                    try { await SendCancelAsync(); } catch { /* best effort */ }
+                    try { await DrainAfterCancellationAsync(); } catch { /* drain marks fatal on failure */ }
+                }
+
                 stopwatch.Stop();
                 ClickHouseMeter.RecordQuery(Settings.Database, stopwatch.Elapsed, totalRows, success);
                 if (success)
@@ -2315,7 +2534,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            ExitBusy();
+            ExitBusyResolve(effectiveQueryId);
         }
     }
 
@@ -2338,7 +2557,16 @@ public sealed class ClickHouseConnection : DbConnection
                     throw new OperationCanceledException(cancellationToken);
 
                 if (buffer.IsEmpty && result.IsCompleted)
+                {
+                    // Server closed the socket mid-response — the connection is dead.
+                    // Mark it fatal so the finally below tears it down and the pool's
+                    // CanBePooled gate discards it. Without this, a connection with no
+                    // dirty session state to reset passes every pool health check
+                    // (_isOpen stays true, ResetSessionStateAsync does no I/O) and is
+                    // re-pooled dead — wedging recovery until idle/lifetime timeout.
+                    _protocolFatal = true;
                     throw new ClickHouseConnectionException("Server closed connection unexpectedly");
+                }
 
                 bool messageRead = false;
                 bool advancedInLoop = false;
@@ -2348,7 +2576,21 @@ public sealed class ClickHouseConnection : DbConnection
 
                     if (message is EndOfStreamMessage)
                     {
+                        // Parity with the untyped pump: EndOfStream must be the
+                        // last byte of this read. Trailing bytes in the SAME
+                        // segment mean the stream is out of sync — pin the
+                        // failure here rather than blessing a corrupt boundary.
+                        if (!buffer.IsEmpty)
+                        {
+                            var trailingLength = buffer.Length;
+                            _pipeReader.AdvanceTo(buffer.End);
+                            _protocolFatal = true;
+                            throw new ClickHouseProtocolException(
+                                $"Server sent {trailingLength} byte(s) after EndOfStream; protocol stream is out of sync.");
+                        }
                         _pipeReader.AdvanceTo(buffer.Start);
+                        // Terminator consumed cleanly — boundary proven.
+                        _boundaryProven = true;
                         yield break;
                     }
 
@@ -2369,7 +2611,13 @@ public sealed class ClickHouseConnection : DbConnection
                 }
 
                 if (result.IsCompleted && !messageRead)
+                {
+                    // Truncated response (socket EOF mid-stream) — connection is dead.
+                    // Mark fatal so the pool discards it rather than re-pooling it (see
+                    // the server-closed case above).
+                    _protocolFatal = true;
                     throw new ClickHouseConnectionException("Incomplete response from server");
+                }
             }
         }
         finally
@@ -2407,11 +2655,16 @@ public sealed class ClickHouseConnection : DbConnection
         message = null;
         typedBlock = null;
 
-        if (buffer.IsEmpty)
-            return false;
-
         try
         {
+            // Iterate rather than tail-recurse on skip-and-continue message types
+            // (ProfileInfo / ProfileEvents). A single response can carry many
+            // consecutive profiling blocks; recursing once per block overflowed
+            // the stack and crashed the process.
+        restart:
+            if (buffer.IsEmpty)
+                return false;
+
             var reader = CreateProtocolReader(buffer);
             var messageType = (ServerMessageType)reader.ReadVarInt();
 
@@ -2479,6 +2732,10 @@ public sealed class ClickHouseConnection : DbConnection
                     var exceptionMessage = ExceptionMessage.Read(ref parseReader);
                     buffer = bodyBuffer.Slice(parseReader.Consumed);
                     _pipeReader!.AdvanceTo(buffer.Start);
+                    // Envelope fully consumed and advanced past: the server-side
+                    // exception IS this response's terminator — boundary proven.
+                    // Proof must stay colocated with the AdvanceTo above.
+                    _boundaryProven = true;
                     throw ClickHouseServerException.FromExceptionMessage(exceptionMessage);
                 }
 
@@ -2513,7 +2770,7 @@ public sealed class ClickHouseConnection : DbConnection
                     var parseReader = CreateProtocolReader(bodyBuffer);
                     SkipProfileInfo(ref parseReader);
                     buffer = bodyBuffer.Slice(parseReader.Consumed);
-                    return TryReadTypedMessage(ref buffer, registry, out message, out typedBlock);
+                    goto restart; // continue reading; iterative to avoid stack overflow
                 }
 
                 case ServerMessageType.ProfileEvents:
@@ -2534,7 +2791,7 @@ public sealed class ClickHouseConnection : DbConnection
                     var profileEventsMsg = ReadDataMessage(ref reader, registry);
                     profileEventsMsg.Block.Dispose();
                     buffer = buffer.Slice(reader.Consumed);
-                    return TryReadTypedMessage(ref buffer, registry, out message, out typedBlock);
+                    goto restart; // continue reading; iterative to avoid stack overflow
 
                 case ServerMessageType.Totals:
                 case ServerMessageType.Extremes:
@@ -2717,33 +2974,75 @@ public sealed class ClickHouseConnection : DbConnection
             return Block.ReadTypedBlockWithTableName(ref reader, registry, tableNameFromCompressed, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull());
         }
 
-        // ClickHouse sends block data in multiple compressed chunks (typically 1MB each).
-        // Read and decompress all chunks, concatenate, then parse the complete block.
+        return ReadCompressedTypedBlock(ref reader, registry, tableNameFromCompressed);
+    }
+
+    /// <summary>
+    /// Reads a block that arrives as one or more compressed chunks (typically
+    /// ~1MB each): decompresses and accumulates chunks, re-attempting the block
+    /// parse as data grows. Shared by <see cref="ReadTypedDataMessage"/> and
+    /// <see cref="ReadDataMessage"/> so the retry contract lives in one place.
+    /// </summary>
+    private TypedBlock ReadCompressedTypedBlock(ref ProtocolReader reader, ColumnReaderRegistry registry, string tableName)
+    {
         using var accumulator = new PooledBufferWriter(1024 * 1024);
+
+        // Set by a count-guard failure: total accumulated bytes needed before
+        // the failing guard can pass. Parse re-attempts are skipped until the
+        // accumulator reaches it, avoiding a full re-parse (and a thrown
+        // exception) per chunk of a routine large block.
+        long minBytesForNextAttempt = 0;
 
         do
         {
-            using var compressedData = CompressedBlock.ReadFromProtocol(ref reader);
-            using var decompressed = CompressedBlock.DecompressPooled(compressedData.Span);
+            using (var compressedData = CompressedBlock.ReadFromProtocol(ref reader))
+            using (var decompressed = CompressedBlock.DecompressPooled(compressedData.Span))
+            {
+                var span = accumulator.GetSpan(decompressed.Length);
+                decompressed.Span.CopyTo(span);
+                accumulator.Advance(decompressed.Length);
+            }
 
-            var span = accumulator.GetSpan(decompressed.Length);
-            decompressed.Span.CopyTo(span);
-            accumulator.Advance(decompressed.Length);
+            if (accumulator.WrittenCount < minBytesForNextAttempt)
+                continue;
 
             // Try to parse the accumulated decompressed data
             try
             {
                 var seq = new ReadOnlySequence<byte>(accumulator.WrittenMemory);
                 var blockReader = CreateProtocolReader(seq);
-                return Block.ReadTypedBlockWithTableName(ref blockReader, registry, tableNameFromCompressed, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull());
+                return Block.ReadTypedBlockWithTableName(ref blockReader, registry, tableName, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull(), countGuardIsRetryable: true);
             }
             catch (InvalidOperationException)
             {
                 // Not enough decompressed data yet — read next compressed chunk
             }
+            catch (ClickHouseCountGuardException ex)
+            {
+                // The header's declared counts exceed the bytes decompressed SO
+                // FAR. For a legitimate block spanning multiple ~1MB chunks this
+                // is the expected first-pass state, not hostility — keep
+                // accumulating. The count-sized allocation the guard defends
+                // against stays deferred until real bytes back the count; if the
+                // chunks run out first, the declared counts were genuinely bogus
+                // and the terminal throw below fires.
+                minBytesForNextAttempt = accumulator.WrittenCount + ex.DeficitBytes;
+            }
         } while (IsNextBlockCompressed(ref reader));
 
-        throw new InvalidDataException(
+        // The pre-scan only guarantees the FIRST chunk is fully buffered, so
+        // the pipe buffer can legitimately end anywhere inside a later chunk.
+        // IsNextBlockCompressed needs 17 bytes to recognize a chunk header —
+        // with fewer than that we cannot distinguish "next chunk partially
+        // arrived" from "message ended and the block is malformed". Treat it
+        // as need-more-data (InvalidOperationException → the caller's scan
+        // loop returns false and retries once more bytes arrive); only a
+        // proven non-chunk tail is terminal.
+        if (reader.Remaining < 17)
+            throw new InvalidOperationException(
+                "Compressed block incomplete: buffer ends before the next chunk header is available.");
+
+        throw new ClickHouseProtocolException(
             $"Failed to parse block after decompressing all available compressed chunks ({accumulator.WrittenCount} bytes decompressed).");
     }
 
@@ -2816,7 +3115,11 @@ public sealed class ClickHouseConnection : DbConnection
 
                 return default;
             }
-            catch (OperationCanceledException ex) when (_cancellationRequested)
+            // Drain only when the wire is genuinely indeterminate (see
+            // WireIndeterminate): bytes went out and no terminator has been
+            // consumed since. A proven boundary or a faulted write means the
+            // server owes nothing readable — draining would hang until the cap.
+            catch (OperationCanceledException ex) when (WireIndeterminate)
             {
                 ClickHouseActivitySource.SetError(activity, ex);
                 await DrainAfterCancellationAsync();
@@ -2840,7 +3143,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            ExitBusy();
+            ExitBusyResolve(effectiveQueryId);
         }
     }
 
@@ -2901,7 +3204,11 @@ public sealed class ClickHouseConnection : DbConnection
 
                 return totalRows;
             }
-            catch (OperationCanceledException ex) when (_cancellationRequested)
+            // Drain only when the wire is genuinely indeterminate (see
+            // WireIndeterminate): bytes went out and no terminator has been
+            // consumed since. A proven boundary or a faulted write means the
+            // server owes nothing readable — draining would hang until the cap.
+            catch (OperationCanceledException ex) when (WireIndeterminate)
             {
                 ClickHouseActivitySource.SetError(activity, ex);
                 await DrainAfterCancellationAsync();
@@ -2925,7 +3232,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            ExitBusy();
+            ExitBusyResolve(effectiveQueryId);
         }
     }
 
@@ -2945,7 +3252,7 @@ public sealed class ClickHouseConnection : DbConnection
             ThrowNotOpen();
 
         var effectiveQueryId = ResolveQueryId(queryId);
-        EnterBusy(effectiveQueryId);
+        var conversationEpoch = EnterBusy(effectiveQueryId);
         var slotReleased = false;
         try
         {
@@ -2963,7 +3270,7 @@ public sealed class ClickHouseConnection : DbConnection
 
                 // Reader owns the busy slot from this point on.
                 slotReleased = true;
-                return new ClickHouseDataReader(enumerator, this, activity, effectiveQueryId, stopwatch);
+                return new ClickHouseDataReader(enumerator, this, activity, effectiveQueryId, stopwatch, conversationEpoch);
             }
             catch (Exception ex)
             {
@@ -2979,7 +3286,7 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            if (!slotReleased) ExitBusy();
+            if (!slotReleased) ExitBusyResolve(effectiveQueryId);
         }
     }
 
@@ -3010,7 +3317,6 @@ public sealed class ClickHouseConnection : DbConnection
 
         // Set compression state for response handling
         _compressionEnabled = Settings.Compress;
-        _cancellationRequested = false;
 
         // Build settings dictionary for JSON/Dynamic serialization on CH 25.6+.
         // write_json_as_string keeps JSON columns on the simple String path; the FLATTENED
@@ -3182,9 +3488,10 @@ public sealed class ClickHouseConnection : DbConnection
             var writer = new ProtocolWriter(bufferWriter);
             CancelMessage.Write(ref writer);
 
-            await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
+            // isCancelPacket: this write must not touch conversation evidence —
+            // see WriteAndFlushAsync's parameter doc.
+            await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken, isCancelPacket: true);
 
-            _cancellationRequested = true;
         }
         catch
         {
@@ -3204,13 +3511,17 @@ public sealed class ClickHouseConnection : DbConnection
     /// </remarks>
     internal async Task DrainAfterCancellationAsync()
     {
-        if (_pipeReader == null || !_isOpen)
+        // A protocol-fatal connection has nothing salvageable to drain toward —
+        // the gates all check WireIndeterminate, but keep the invariant local too.
+        if (_pipeReader == null || !_isOpen || _protocolFatal)
             return;
 
         string? ownedQueryId;
+        long entryEpoch;
         lock (_queryLock)
         {
             ownedQueryId = _currentQueryId;
+            entryEpoch = _busyEpoch;
         }
 
         var registry = _columnReaderRegistry;
@@ -3237,7 +3548,20 @@ public sealed class ClickHouseConnection : DbConnection
                 {
                     if (message is EndOfStreamMessage)
                     {
+                        // Same trailing-bytes discipline as the pumps: the drain
+                        // is the path that CERTIFIES a connection as salvageable
+                        // after cancellation, so trailing garbage after its EOS
+                        // must poison, not be blessed as a clean boundary.
+                        if (!buffer.IsEmpty)
+                        {
+                            _pipeReader.AdvanceTo(buffer.End);
+                            _protocolFatal = true;
+                            return;
+                        }
                         _pipeReader.AdvanceTo(buffer.Start);
+                        // Drain reached the terminator — boundary proven; the
+                        // connection is salvageable after the cancellation.
+                        _boundaryProven = true;
                         return;
                     }
                 }
@@ -3246,12 +3570,17 @@ public sealed class ClickHouseConnection : DbConnection
 
                 if (result.IsCompleted)
                     break;
+                // NOTE (intentional): the two `break` exits above fall through
+                // WITHOUT boundary proof — the socket died mid-drain, so under
+                // the pessimistic resolve the conversation correctly classifies
+                // as broken. Do not "fix" them by adding proof here.
             }
         }
         catch (ClickHouseServerException)
         {
-            // Expected - server sends exception for cancelled query
-            // Connection is now in clean state
+            // Expected - server sends exception for cancelled query.
+            // TryReadMessage's exception arm consumed the envelope (and set
+            // boundary proof) before throwing — connection is in a clean state.
         }
         catch
         {
@@ -3262,14 +3591,12 @@ public sealed class ClickHouseConnection : DbConnection
         }
         finally
         {
-            lock (_queryLock)
-            {
-                // Only clear the slot we were draining for. A subsequent query
-                // may have installed its own id while we were mid-drain; we
-                // must not clobber it.
-                if (_currentQueryId == ownedQueryId)
-                    _currentQueryId = null;
-            }
+            // Only clear the slot we were draining for. A subsequent query may
+            // have installed its own id while we were mid-drain; ClearOwnedQueryId
+            // is epoch-gated so a successor conversation (even one that reused the
+            // same caller-supplied id) is left untouched. Same gate as this
+            // method — kept in one place so the two can never drift.
+            ClearOwnedQueryId(ownedQueryId, entryEpoch);
         }
     }
 
@@ -3289,7 +3616,16 @@ public sealed class ClickHouseConnection : DbConnection
                     throw new OperationCanceledException(cancellationToken);
 
                 if (buffer.IsEmpty && result.IsCompleted)
+                {
+                    // Server closed the socket mid-response — the connection is dead.
+                    // Mark it fatal so the finally below tears it down and the pool's
+                    // CanBePooled gate discards it. Without this, a connection with no
+                    // dirty session state to reset passes every pool health check
+                    // (_isOpen stays true, ResetSessionStateAsync does no I/O) and is
+                    // re-pooled dead — wedging recovery until idle/lifetime timeout.
+                    _protocolFatal = true;
                     throw new ClickHouseConnectionException("Server closed connection unexpectedly");
+                }
 
                 bool messageRead = false;
                 bool advancedInLoop = false;
@@ -3324,6 +3660,9 @@ public sealed class ClickHouseConnection : DbConnection
                         }
 
                         _pipeReader.AdvanceTo(buffer.Start);
+                        // Terminator consumed cleanly (trailing-bytes check above
+                        // passed): the server owes us nothing — boundary proven.
+                        _boundaryProven = true;
                         yield return message;
                         yield break;
                     }
@@ -3345,7 +3684,13 @@ public sealed class ClickHouseConnection : DbConnection
                 }
 
                 if (result.IsCompleted && !messageRead)
+                {
+                    // Truncated response (socket EOF mid-stream) — connection is dead.
+                    // Mark fatal so the pool discards it rather than re-pooling it (see
+                    // the server-closed case above).
+                    _protocolFatal = true;
                     throw new ClickHouseConnectionException("Incomplete response from server");
+                }
             }
         }
         finally
@@ -3382,11 +3727,16 @@ public sealed class ClickHouseConnection : DbConnection
     {
         message = null!;
 
-        if (buffer.IsEmpty)
-            return false;
-
         try
         {
+            // Iterate rather than tail-recurse on skip-and-continue message types
+            // (ProfileInfo / ProfileEvents). A single response — or a cancellation
+            // drain — can carry many consecutive profiling blocks; recursing once
+            // per block overflowed the stack and crashed the process.
+        restart:
+            if (buffer.IsEmpty)
+                return false;
+
             var reader = CreateProtocolReader(buffer);
             var messageType = (ServerMessageType)reader.ReadVarInt();
 
@@ -3456,6 +3806,10 @@ public sealed class ClickHouseConnection : DbConnection
                     var exceptionMessage = ExceptionMessage.Read(ref parseReader);
                     buffer = bodyBuffer.Slice(parseReader.Consumed);
                     _pipeReader!.AdvanceTo(buffer.Start);
+                    // Envelope fully consumed and advanced past: the server-side
+                    // exception IS this response's terminator — boundary proven.
+                    // Proof must stay colocated with the AdvanceTo above.
+                    _boundaryProven = true;
                     throw ClickHouseServerException.FromExceptionMessage(exceptionMessage);
                 }
 
@@ -3491,8 +3845,7 @@ public sealed class ClickHouseConnection : DbConnection
                     var parseReader = CreateProtocolReader(bodyBuffer);
                     SkipProfileInfo(ref parseReader);
                     buffer = bodyBuffer.Slice(parseReader.Consumed);
-                    // Continue reading next message
-                    return TryReadMessage(ref buffer, registry, out message);
+                    goto restart; // continue reading; iterative to avoid stack overflow
                 }
 
                 case ServerMessageType.ProfileEvents:
@@ -3514,8 +3867,7 @@ public sealed class ClickHouseConnection : DbConnection
                     var profileEventsBlock = ReadDataMessage(ref reader, registry);
                     profileEventsBlock.Block.Dispose();
                     buffer = buffer.Slice(reader.Consumed);
-                    // Continue reading next message
-                    return TryReadMessage(ref buffer, registry, out message);
+                    goto restart; // continue reading; iterative to avoid stack overflow
 
                 case ServerMessageType.Totals:
                 case ServerMessageType.Extremes:
@@ -3686,34 +4038,7 @@ public sealed class ClickHouseConnection : DbConnection
             return new DataMessage { Block = Block.ReadTypedBlockWithTableName(ref reader, registry, compressedTableName, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull()) };
         }
 
-        // ClickHouse sends block data in multiple compressed chunks (typically 1MB each).
-        // Read and decompress all chunks, concatenate, then parse the complete block.
-        using var accumulator = new PooledBufferWriter(1024 * 1024);
-
-        do
-        {
-            using var compressedData = CompressedBlock.ReadFromProtocol(ref reader);
-            using var decompressed = CompressedBlock.DecompressPooled(compressedData.Span);
-
-            var span = accumulator.GetSpan(decompressed.Length);
-            decompressed.Span.CopyTo(span);
-            accumulator.Advance(decompressed.Length);
-
-            // Try to parse the accumulated decompressed data
-            try
-            {
-                var seq = new ReadOnlySequence<byte>(accumulator.WrittenMemory);
-                var blockReader = CreateProtocolReader(seq);
-                return new DataMessage { Block = Block.ReadTypedBlockWithTableName(ref blockReader, registry, compressedTableName, NegotiatedProtocolVersion, EffectiveMapShapeHintOrNull()) };
-            }
-            catch (InvalidOperationException)
-            {
-                // Not enough decompressed data yet — read next compressed chunk
-            }
-        } while (IsNextBlockCompressed(ref reader));
-
-        throw new InvalidDataException(
-            $"Failed to parse block after decompressing all available compressed chunks ({accumulator.WrittenCount} bytes decompressed).");
+        return new DataMessage { Block = ReadCompressedTypedBlock(ref reader, registry, compressedTableName) };
     }
 
     /// <summary>
@@ -3950,9 +4275,6 @@ public sealed class ClickHouseConnection : DbConnection
 
         // Set compression state for response handling
         _compressionEnabled = Settings.Compress;
-        // Mirror SendQueryAsync (line 1661) — clear stale cancel state from a
-        // prior query so the bulk-path drain gate does not mis-trigger.
-        _cancellationRequested = false;
 
         var effectiveQueryId = ResolveQueryId(queryId);
         var queryMessage = QueryMessage.Create(
@@ -3988,14 +4310,6 @@ public sealed class ClickHouseConnection : DbConnection
             Block.WriteEmpty(ref writer);
         }
 
-        // Wire dump for debugging protocol issues
-        var wireDump = Environment.GetEnvironmentVariable("CH_WIRE_DUMP");
-        if (wireDump == "1")
-        {
-            var logPath = "/tmp/ch_wire_dump.log";
-            File.AppendAllText(logPath, $"[CH] INSERT QUERY + INITIAL EMPTY: {bufferWriter.WrittenCount} bytes\n");
-        }
-
         await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
 
@@ -4009,22 +4323,10 @@ public sealed class ClickHouseConnection : DbConnection
     {
         var registry = _columnReaderRegistry;
 
-        // Wire dump for debugging
-        var wireDump = Environment.GetEnvironmentVariable("CH_WIRE_DUMP");
-        if (wireDump == "1")
-        {
-            File.AppendAllText("/tmp/ch_wire_dump.log", "[CH] ReceiveSchemaBlockAsync: waiting for schema...\n");
-        }
-
         while (true)
         {
             var result = await _pipeReader!.ReadAsync(cancellationToken);
             var buffer = result.Buffer;
-
-            if (wireDump == "1")
-            {
-                File.AppendAllText("/tmp/ch_wire_dump.log", $"[CH] ReceiveSchemaBlockAsync: received {buffer.Length} bytes, IsCompleted={result.IsCompleted}\n");
-            }
 
             if (result.IsCanceled)
                 throw new OperationCanceledException(cancellationToken);
@@ -4037,15 +4339,14 @@ public sealed class ClickHouseConnection : DbConnection
                 var reader = CreateProtocolReader(buffer);
                 var messageType = (ServerMessageType)reader.ReadVarInt();
 
-                if (wireDump == "1")
-                {
-                    File.AppendAllText("/tmp/ch_wire_dump.log", $"[CH] ReceiveSchemaBlockAsync: messageType={messageType}\n");
-                }
-
                 if (messageType == ServerMessageType.Exception)
                 {
                     var exceptionMessage = ExceptionMessage.Read(ref reader);
                     _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
+                    // Bulk-init failure (e.g. table missing): envelope consumed —
+                    // boundary proven, so the connection stays reusable/retryable
+                    // (pinned by BulkInserterInitFailureCleanupTests).
+                    _boundaryProven = true;
                     throw ClickHouseServerException.FromExceptionMessage(exceptionMessage);
                 }
 
@@ -4076,10 +4377,6 @@ public sealed class ClickHouseConnection : DbConnection
                     reader.ReadString(); // columns metadata
                     _pipeReader.AdvanceTo(buffer.GetPosition(reader.Consumed));
 
-                    if (wireDump == "1")
-                    {
-                        File.AppendAllText("/tmp/ch_wire_dump.log", "[CH] ReceiveSchemaBlockAsync: skipped TableColumns, waiting for Data...\n");
-                    }
                     continue;
                 }
 
@@ -4151,15 +4448,6 @@ public sealed class ClickHouseConnection : DbConnection
                 NegotiatedProtocolVersion);
         }
 
-        // Wire dump for debugging protocol issues
-        var wireDump = Environment.GetEnvironmentVariable("CH_WIRE_DUMP");
-        if (wireDump == "1")
-        {
-            var logPath = "/tmp/ch_wire_dump.log";
-            File.AppendAllText(logPath, $"[CH] DATA BLOCK: {bufferWriter.WrittenCount} bytes, protocol={NegotiatedProtocolVersion}\n");
-            File.AppendAllText(logPath, $"[CH] HEX: {BitConverter.ToString(bufferWriter.WrittenSpan.ToArray())}\n");
-        }
-
         await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
     }
 
@@ -4184,15 +4472,6 @@ public sealed class ClickHouseConnection : DbConnection
         else
         {
             Block.WriteEmpty(ref writer);
-        }
-
-        // Wire dump for debugging protocol issues
-        var wireDump = Environment.GetEnvironmentVariable("CH_WIRE_DUMP");
-        if (wireDump == "1")
-        {
-            var logPath = "/tmp/ch_wire_dump.log";
-            File.AppendAllText(logPath, $"[CH] EMPTY BLOCK: {bufferWriter.WrittenCount} bytes\n");
-            File.AppendAllText(logPath, $"[CH] HEX: {BitConverter.ToString(bufferWriter.WrittenSpan.ToArray())}\n");
         }
 
         await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
@@ -4248,15 +4527,6 @@ public sealed class ClickHouseConnection : DbConnection
             if (rows is TRow[] rowArray)
             {
                 Array.Clear(rowArray, 0, rowCount);
-            }
-
-            // Wire dump for debugging protocol issues
-            var wireDump = Environment.GetEnvironmentVariable("CH_WIRE_DUMP");
-            if (wireDump == "1")
-            {
-                var logPath = "/tmp/ch_wire_dump.log";
-                File.AppendAllText(logPath, $"[CH] DATA BLOCK DIRECT: {bufferWriter.WrittenCount} bytes, protocol={NegotiatedProtocolVersion}\n");
-                File.AppendAllText(logPath, $"[CH] HEX: {BitConverter.ToString(bufferWriter.WrittenSpan.ToArray())}\n");
             }
 
             await WriteAndFlushAsync(bufferWriter.WrittenMemory, cancellationToken);
@@ -4365,22 +4635,10 @@ public sealed class ClickHouseConnection : DbConnection
     {
         var registry = _columnReaderRegistry;
 
-        // Wire dump for debugging
-        var wireDump = Environment.GetEnvironmentVariable("CH_WIRE_DUMP");
-        if (wireDump == "1")
-        {
-            File.AppendAllText("/tmp/ch_wire_dump.log", "[CH] ReceiveEndOfStreamAsync: waiting for EndOfStream...\n");
-        }
-
         while (true)
         {
             var result = await _pipeReader!.ReadAsync(cancellationToken);
             var buffer = result.Buffer;
-
-            if (wireDump == "1")
-            {
-                File.AppendAllText("/tmp/ch_wire_dump.log", $"[CH] ReceiveEndOfStreamAsync: received {buffer.Length} bytes, IsCompleted={result.IsCompleted}\n");
-            }
 
             if (result.IsCanceled)
                 throw new OperationCanceledException(cancellationToken);
@@ -4392,11 +4650,6 @@ public sealed class ClickHouseConnection : DbConnection
             {
                 var reader = CreateProtocolReader(buffer);
                 var messageType = (ServerMessageType)reader.ReadVarInt();
-
-                if (wireDump == "1")
-                {
-                    File.AppendAllText("/tmp/ch_wire_dump.log", $"[CH] ReceiveEndOfStreamAsync: messageType={messageType}\n");
-                }
 
                 switch (messageType)
                 {
@@ -4418,6 +4671,12 @@ public sealed class ClickHouseConnection : DbConnection
                                 $"Server sent {trailingLength} byte(s) after EndOfStream during INSERT; protocol stream is out of sync.");
                         }
                         _pipeReader.AdvanceTo(afterEos);
+                        // No query-id teardown here: the id lifecycle IS the
+                        // conversation lifecycle, owned by ExitBusyResolve, and
+                        // every bulk path reaches it via ReleaseSlotIfClaimed.
+                        // Terminator consumed cleanly (trailing check above passed)
+                        // — boundary proven.
+                        _boundaryProven = true;
                         return;
                     }
 
@@ -4440,6 +4699,8 @@ public sealed class ClickHouseConnection : DbConnection
                         var parseReader = CreateProtocolReader(bodyBuffer);
                         var exceptionMessage = ExceptionMessage.Read(ref parseReader);
                         _pipeReader.AdvanceTo(bodyBuffer.GetPosition(parseReader.Consumed));
+                        // INSERT rejected: envelope consumed — boundary proven.
+                        _boundaryProven = true;
                         throw ClickHouseServerException.FromExceptionMessage(exceptionMessage);
                     }
 

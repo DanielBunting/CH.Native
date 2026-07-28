@@ -70,6 +70,58 @@ public class DataSourcePrewarmFailureTests
         Assert.NotEmpty(prewarmEntries);
     }
 
+    /// <summary>
+    /// Repro for wire-state-machine review finding #5: PrewarmAsync's
+    /// <c>catch (ObjectDisposedException)</c> is not gated on pool disposal, so an
+    /// ObjectDisposedException thrown by user-supplied open-path code (a disposed
+    /// certificate, a faulty ConnectionFactory) while the pool is NOT disposing
+    /// aborts the whole prewarm loop with no PrewarmFailed log — unlike every
+    /// other failure type, which lands in the generic catch and is logged.
+    /// </summary>
+    [Fact]
+    public async Task FactoryThrowingObjectDisposed_PrewarmFailure_IsLogged()
+    {
+        var sink = new CapturingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(b =>
+        {
+            b.AddProvider(sink);
+            b.SetMinimumLevel(LogLevel.Trace);
+        });
+
+        var settings = ClickHouseConnectionSettings.CreateBuilder()
+            .WithHost("localhost")
+            .WithPort(9000)
+            .WithCredentials("default", "ignored")
+            .WithTelemetry(new TelemetrySettings { LoggerFactory = loggerFactory })
+            .Build();
+
+        var options = new ClickHouseDataSourceOptions
+        {
+            Settings = settings,
+            // A user factory whose captured dependency was disposed. The POOL is
+            // not disposing — this is a genuine prewarm failure, not the
+            // clean-shutdown case the ODE catch was written for.
+            ConnectionFactory = _ => throw new ObjectDisposedException("X509Certificate2"),
+            MinPoolSize = 1,
+            MaxPoolSize = 2,
+            PrewarmOnStart = true,
+        };
+
+        await using var ds = new ClickHouseDataSource(options);
+        await ds.PrewarmTask;
+
+        var prewarmEntries = sink.Entries
+            .Where(e => e.Level >= LogLevel.Warning &&
+                        (e.Message.Contains("prewarm", StringComparison.OrdinalIgnoreCase) ||
+                         e.EventId.Name?.Contains("Prewarm", StringComparison.OrdinalIgnoreCase) == true))
+            .ToList();
+
+        foreach (var e in prewarmEntries)
+            _output.WriteLine($"[{e.Level}] {e.EventId.Name}: {e.Message}");
+
+        Assert.NotEmpty(prewarmEntries);
+    }
+
     private sealed class CapturingLoggerProvider : ILoggerProvider
     {
         public List<LogEntry> Entries { get; } = new();

@@ -15,6 +15,7 @@ namespace CH.Native.SystemTests.BulkInsertFailures;
 /// </summary>
 [Collection("Toxiproxy")]
 [Trait(Categories.Name, Categories.Chaos)]
+[Trait(Categories.Name, Categories.RaceSensitive)]
 public class BulkInsertDisposalRaceTests : IAsyncLifetime
 {
     private readonly ToxiproxyFixture _proxy;
@@ -47,7 +48,7 @@ public class BulkInsertDisposalRaceTests : IAsyncLifetime
             Assert.True(InserterStateInspector.Disposed(inserter));
 
             // Connection still usable.
-            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+            Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
         }
 
         Assert.Equal(0UL, await harness.CountAsync());
@@ -164,6 +165,6 @@ public class BulkInsertDisposalRaceTests : IAsyncLifetime
         // Server is not stuck — fresh connection works.
         await using var fresh = new ClickHouseConnection(_proxy.BuildSettings());
         await fresh.OpenAsync();
-        Assert.Equal(1, await fresh.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await fresh.ExecuteScalarAsync<int>("SELECT 4242"));
     }
 }

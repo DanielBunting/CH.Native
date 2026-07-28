@@ -26,6 +26,7 @@ namespace CH.Native.SystemTests.Resilience;
 /// </summary>
 [Collection("RestartableSingleNode")]
 [Trait(Categories.Name, Categories.Resilience)]
+[Trait(Categories.Name, Categories.RaceSensitive)]
 public sealed class PoolRestartRecoveryTests : IAsyncLifetime
 {
     private readonly RestartableSingleNodeFixture _fixture;
@@ -71,7 +72,7 @@ public sealed class PoolRestartRecoveryTests : IAsyncLifetime
         // Establish at least one physical connection in the idle pool.
         await using (var conn = await ds.OpenConnectionAsync())
         {
-            Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+            Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
         }
 
         var preStats = ds.GetStatistics();

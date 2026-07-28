@@ -52,7 +52,7 @@ public class TlsAndMtlsAuthProbeTests
         await using var conn = new ClickHouseConnection(settings);
         await conn.OpenAsync();
 
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
     }
 
     [Fact]
@@ -271,7 +271,7 @@ public class TlsAndMtlsAuthProbeTests
 
         await using var conn = new ClickHouseConnection(settings);
         await conn.OpenAsync();
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
         // .NET 8's default SslClientAuthenticationOptions enables only TLS 1.2/1.3.
         // A successful handshake therefore implies one of those was negotiated.
     }
@@ -293,6 +293,6 @@ public class TlsAndMtlsAuthProbeTests
         await using var conn = new ClickHouseConnection(settings);
         await conn.OpenAsync();
 
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
     }
 }

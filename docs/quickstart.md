@@ -66,10 +66,12 @@ await foreach (var user in connection.QueryStreamAsync<User>("SELECT id, name, c
 }
 
 // Query with parameters
-var activeUsers = await connection.QueryStreamAsync<User>(
+await foreach (var user in connection.QueryStreamAsync<User>(
     "SELECT * FROM users WHERE created > @since",
-    new { since = DateTime.UtcNow.AddDays(-7) }
-).ToListAsync();
+    new { since = DateTime.UtcNow.AddDays(-7) }))
+{
+    Console.WriteLine(user.Name);
+}
 ```
 
 ### Bulk Insert Data

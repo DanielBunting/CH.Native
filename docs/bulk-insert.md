@@ -384,7 +384,9 @@ For very large imports, stream data instead of collecting:
 await connection.BulkInsertAsync("events", ReadEventsFromFile(path));
 
 // Avoid - loads all into memory first
-var allEvents = await ReadEventsFromFile(path).ToListAsync();
+var allEvents = new List<Event>();
+await foreach (var e in ReadEventsFromFile(path))
+    allEvents.Add(e);
 await connection.BulkInsertAsync("events", allEvents);
 ```
 

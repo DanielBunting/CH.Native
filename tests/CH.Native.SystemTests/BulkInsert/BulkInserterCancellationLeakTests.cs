@@ -69,7 +69,7 @@ public class BulkInserterCancellationLeakTests
         // Functional contract: connection still usable end-to-end.
         await using var conn = new ClickHouseConnection(_fx.BuildSettings());
         await conn.OpenAsync();
-        Assert.Equal(1, await conn.ExecuteScalarAsync<int>("SELECT 1"));
+        Assert.Equal(4242, await conn.ExecuteScalarAsync<int>("SELECT 4242"));
     }
 
     private async Task RunCycle(BulkInsertTableHarness harness, bool cancelEarly)

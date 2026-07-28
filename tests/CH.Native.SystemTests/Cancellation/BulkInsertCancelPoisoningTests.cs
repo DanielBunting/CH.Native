@@ -117,7 +117,7 @@ public class BulkInsertCancelPoisoningTests
 
             await using var fresh = new ClickHouseConnection(_fixture.BuildSettings());
             await fresh.OpenAsync();
-            Assert.Equal(1, await fresh.ExecuteScalarAsync<int>("SELECT 1"));
+            Assert.Equal(4242, await fresh.ExecuteScalarAsync<int>("SELECT 4242"));
         }
         finally
         {

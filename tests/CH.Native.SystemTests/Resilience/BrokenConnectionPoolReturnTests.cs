@@ -129,7 +129,7 @@ public class BrokenConnectionPoolReturnTests
         var stats = ds.GetStatistics();
         await using (var rent2 = await ds.OpenConnectionAsync())
         {
-            Assert.Equal(1, await rent2.ExecuteScalarAsync<int>("SELECT 1"));
+            Assert.Equal(4242, await rent2.ExecuteScalarAsync<int>("SELECT 4242"));
         }
         var afterStats = ds.GetStatistics();
         // No new physical connections created.
