@@ -346,6 +346,16 @@ and this project follows [Semantic Versioning](https://semver.org/).
   discards the connection rather than re-renting it. Previously the
   connection lingered open-but-broken until its next use, which failed with
   a message that didn't name the cause.
+- **Pooled bulk inserters no longer leak their rented connection.**
+  `ClickHouseDataSource.CreateBulkInserterAsync` (both the typed
+  `BulkInserter<T>` and the `DynamicBulkInserter` overloads) rented a pooled
+  connection but nothing ever returned it: neither inserter's `DisposeAsync`
+  disposed the connection, so the pool slot stayed `Busy` for the lifetime of
+  the data source and a loop of create/dispose exhausted the pool. Pooled
+  inserters now take explicit ownership of the connection and dispose it on
+  `DisposeAsync`, firing the pool-return hook. Inserters built through the
+  public constructors are unchanged — the caller still owns the connection
+  and it is left open.
 
 ### Performance
 
