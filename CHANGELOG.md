@@ -31,24 +31,28 @@ and this project follows [Semantic Versioning](https://semver.org/).
   result projection) and the ADO.NET reader's `GetFieldValue<T>()` when `T`
   is a rectangular array type. Jagged `T[][]` / `T[][][]` continues to work
   unchanged for ragged data.
-- `CH.Native.Dapper.ClickHouseDbConnectionDapperExtensions` — Dapper-shaped
-  fast-path methods on `ClickHouseDbConnection`: `QueryAsync<T>`,
-  `QueryStreamAsync<T>`, `QueryFirstAsync<T>`, `QueryFirstOrDefaultAsync<T>`,
-  `QuerySingleAsync<T>`, `QuerySingleOrDefaultAsync<T>`. Bypasses Dapper's
-  compiled row mapper and routes through CH.Native's typed-accessor
-  `TypeMapper<T>` instead. Variables typed as `ClickHouseDbConnection`
-  automatically pick this path via C# extension-method resolution.
-- `CH.Native.Dapper.IDbConnectionDapperExtensions` — namespace-swap drop-in
-  for the standard Dapper surface. Replace `using Dapper;` with
-  `using CH.Native.Dapper;` and the fast path resolves automatically for
-  ClickHouse connections when typed as `IDbConnection` (e.g. in DI). Row-
-  mapping methods dispatch to the fast path for `ClickHouseDbConnection`
-  receivers and delegate to `Dapper.SqlMapper` for everything else.
-  Non-mapping methods (`ExecuteAsync`, `ExecuteScalarAsync`,
-  `QueryMultipleAsync`, dynamic `QueryAsync`, all sync variants) are thin
-  delegates to Dapper. Import only one of `using Dapper;` /
-  `using CH.Native.Dapper;` to avoid compile-time ambiguity on
-  `IDbConnection`-typed calls.
+- `CH.Native.Dapper.ClickHouseConnectionDapperExtensions` — Dapper-shaped
+  fast-path methods on `ClickHouseConnection`: `QueryAsync<T>`,
+  `QueryFirstAsync<T>`, `QueryFirstOrDefaultAsync<T>`, `QuerySingleAsync<T>`,
+  `QuerySingleOrDefaultAsync<T>`. Bypasses Dapper's compiled row mapper and
+  routes through CH.Native's typed-accessor `TypeMapper<T>` instead. Variables
+  typed as `ClickHouseConnection` automatically pick this path via C#
+  extension-method resolution — the more-derived receiver wins over Dapper's
+  `IDbConnection` extension. A DI registration that only hands out
+  `IDbConnection` must assign to a concrete-typed local first to become
+  fast-path-eligible.
+- `CH.Native.Dapper.IDbConnectionDapperExtensions` — execute-style
+  pass-throughs on `IDbConnection` (`ExecuteAsync`, `ExecuteScalarAsync`,
+  `QueryMultipleAsync`, and the sync variants) so that `using
+  CH.Native.Dapper;` alone is enough to bind those calls. They are thin
+  delegates to `Dapper.SqlMapper` and carry no fast path of their own — none
+  is possible at the `IDbConnection` receiver type without colliding with
+  Dapper. Row-shaped methods (`QueryAsync<T>`, `QueryFirstAsync<T>`, …) are
+  deliberately **not** extended on `IDbConnection`, which is what lets
+  `using Dapper;` and `using CH.Native.Dapper;` coexist in the same file
+  without ambiguity. `QueryMultipleAsync` throws `NotSupportedException`:
+  ClickHouse has no multiple-result-set concept, so failing at the call site
+  beats an opaque server-side syntax error.
 - `ITypedColumn.IsNull(int index)` — new default-interface method for
   null-checking without materialising the value. `TypedColumn<T>` overrides
   with a JIT-folded short-circuit (`return false` for non-nullable value

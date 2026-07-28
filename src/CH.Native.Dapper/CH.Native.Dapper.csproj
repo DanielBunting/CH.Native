@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Description>Dapper integration for CH.Native. Registers type handlers for array-typed parameters (int[], string[], long[], Guid[], etc.) so `new { ids = arr }` binds as a ClickHouse Array(T) on the wire instead of being expanded into a Tuple by Dapper's default list-expansion behaviour.</Description>
+    <Description>Dapper integration for CH.Native, the high-performance ClickHouse client for .NET. Provides a faster QueryAsync&lt;T&gt; family (QueryFirstAsync, QueryFirstOrDefaultAsync, QuerySingleAsync, QuerySingleOrDefaultAsync) on ClickHouseConnection that keeps Dapper's call shape but routes through CH.Native's typed-accessor read path instead of Dapper's compiled row mapper, avoiding the per-value boxing tax on value-type columns (typically 30-40% lower allocations on large reads). Resolution is automatic via C# extension-method lookup — no API change at the call site, and it coexists with `using Dapper;`. Also registers type handlers for array-typed parameters (int[], string[], long[], Guid[], etc.) so `new { ids = arr }` binds as a ClickHouse Array(T) on the wire instead of being expanded into a Tuple by Dapper's default list-expansion behaviour.</Description>
   </PropertyGroup>
 
   <ItemGroup>
