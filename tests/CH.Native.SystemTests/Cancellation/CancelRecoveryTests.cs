@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using CH.Native.Connection;
 using CH.Native.SystemTests.Fixtures;
+using CH.Native.SystemTests.Helpers;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -41,7 +42,7 @@ public class CancelRecoveryTests
             try
             {
                 _ = await conn.ExecuteScalarAsync<ulong>(
-                    "SELECT count() FROM numbers(1000000000)",
+                    SlowQuery.Indefinite(),
                     cancellationToken: cts.Token);
             }
             catch (OperationCanceledException) { threw = true; }
@@ -60,10 +61,11 @@ public class CancelRecoveryTests
         sw.Stop();
         _output.WriteLine($"{cycles} cancel/reuse cycles in {sw.Elapsed.TotalSeconds:F1}s; actually cancelled = {actuallyCancelled}");
 
-        // The 100 ms CT against a 1B-row count must trigger cancellation in the vast
-        // majority of cycles; if 0 cycles cancelled we aren't testing what we claim.
-        Assert.True(actuallyCancelled >= cycles / 2,
-            $"Expected ≥ {cycles / 2} cancellations, observed {actuallyCancelled} — server may be too fast or token not honoured.");
+        // The query is wall-clock bound and far longer than the 100 ms token, so
+        // it cannot outrun cancellation on any hardware: EVERY cycle must cancel.
+        // A shortfall now means the token was not honoured, not that CI was fast.
+        Assert.True(actuallyCancelled == cycles,
+            $"Expected {cycles} cancellations, observed {actuallyCancelled} — token not honoured.");
     }
 
     [Fact]

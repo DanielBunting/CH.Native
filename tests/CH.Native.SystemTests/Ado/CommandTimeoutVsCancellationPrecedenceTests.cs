@@ -3,6 +3,7 @@ using CH.Native.Connection;
 using CH.Native.Commands;
 using CH.Native.Results;
 using CH.Native.SystemTests.Fixtures;
+using CH.Native.SystemTests.Helpers;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -16,6 +17,7 @@ namespace CH.Native.SystemTests.Ado;
 /// </summary>
 [Collection("SingleNode")]
 [Trait(Categories.Name, Categories.Suite)]
+[Trait(Categories.Name, Categories.RaceSensitive)]
 public class CommandTimeoutVsCancellationPrecedenceTests
 {
     private readonly SingleNodeFixture _fx;
@@ -34,7 +36,7 @@ public class CommandTimeoutVsCancellationPrecedenceTests
         await conn.OpenAsync();
 
         using var cmd = (ClickHouseCommand)conn.CreateCommand();
-        cmd.CommandText = "SELECT count() FROM numbers(10000000000)";
+        cmd.CommandText = SlowQuery.Indefinite();
         cmd.CommandTimeout = 30;
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
@@ -50,7 +52,7 @@ public class CommandTimeoutVsCancellationPrecedenceTests
         await conn.OpenAsync();
 
         using var cmd = (ClickHouseCommand)conn.CreateCommand();
-        cmd.CommandText = "SELECT count() FROM numbers(10000000000)";
+        cmd.CommandText = SlowQuery.Indefinite();
         cmd.CommandTimeout = 0; // disabled
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
@@ -67,7 +69,7 @@ public class CommandTimeoutVsCancellationPrecedenceTests
         // First command times out (CommandTimeout in seconds).
         using (var slow = (ClickHouseCommand)conn.CreateCommand())
         {
-            slow.CommandText = "SELECT count() FROM numbers(10000000000)";
+            slow.CommandText = SlowQuery.Indefinite();
             slow.CommandTimeout = 1;
             await Assert.ThrowsAnyAsync<Exception>(() => slow.ExecuteScalarAsync());
         }
