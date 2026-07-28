@@ -53,7 +53,6 @@ internal static class MapColumnSample
             Console.WriteLine("\nWriting routine evaluations as Dictionary<string, string>...");
             await using (var inserter = connection.CreateBulkInserter<RoutineEvaluation>(tableName))
             {
-                await inserter.InitAsync();
                 await inserter.AddAsync(new RoutineEvaluation
                 {
                     OccurredAt = DateTime.UtcNow,
@@ -82,7 +81,6 @@ internal static class MapColumnSample
             Console.WriteLine("Writing override-sequence events as ClickHouseMap<string, string>...");
             await using (var inserter = connection.CreateBulkInserter<OverrideSequenceEvent>(tableName))
             {
-                await inserter.InitAsync();
                 await inserter.AddAsync(new OverrideSequenceEvent
                 {
                     OccurredAt = DateTime.UtcNow.AddSeconds(1),

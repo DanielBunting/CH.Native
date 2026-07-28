@@ -6,7 +6,7 @@ namespace CH.Native.Samples.Insert;
 
 /// <summary>
 /// <c>DynamicBulkInserter</c> — POCO-less bulk insert. Demonstrates three flavors:
-/// (1) one-shot, (2) granular Init/Add/Complete, (3) pre-supplied <c>ColumnTypes</c>
+/// (1) one-shot, (2) granular Add/Complete, (3) pre-supplied <c>ColumnTypes</c>
 /// to skip the server schema-probe round-trip.
 /// </summary>
 /// <remarks>
@@ -74,8 +74,6 @@ internal static class DynamicBulkInsertSample
             await using (var inserter = connection.CreateBulkInserter(
                 tableName, columns, new BulkInsertOptions { BatchSize = 1_000 }))
             {
-                await inserter.InitAsync();
-
                 var rng = new Random(7);
                 var eventTypes = new[] { "click", "view", "purchase", "scroll" };
                 for (var i = 0; i < 5_000; i++)

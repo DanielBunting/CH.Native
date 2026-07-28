@@ -60,7 +60,8 @@ public sealed class BulkInsertOptions
     /// Gets or sets the query ID to send with the INSERT query. When non-null and non-empty,
     /// the supplied value is used; otherwise the driver generates a GUID. Max length 128
     /// characters. The resolved ID is observable via
-    /// <see cref="Connection.ClickHouseConnection.CurrentQueryId"/> after <c>InitAsync</c>.
+    /// <see cref="Connection.ClickHouseConnection.CurrentQueryId"/> after
+    /// initialization (explicit <c>InitAsync</c> or lazy first-use).
     /// </summary>
     public string? QueryId { get; set; }
 
@@ -87,7 +88,8 @@ public sealed class BulkInsertOptions
     /// </para>
     /// <para>
     /// Partial coverage (some but not all column names present) throws an
-    /// <see cref="InvalidOperationException"/> at <c>InitAsync</c> time:
+    /// <see cref="InvalidOperationException"/> at initialization time
+    /// (explicit <c>InitAsync</c> or the first add):
     /// partial types is treated as a programming error, not a fallback
     /// condition. Mismatched types vs. the server's actual schema surface as
     /// a <see cref="Exceptions.ClickHouseServerException"/> at

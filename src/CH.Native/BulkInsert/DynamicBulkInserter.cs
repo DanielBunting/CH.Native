@@ -16,10 +16,11 @@ namespace CH.Native.BulkInsert;
 /// <para>
 /// Use this when the row shape isn't a static POCO — runtime-defined columns, ETL
 /// pipelines reading from <c>IDataReader</c>, dictionaries-of-values, etc. The
-/// public lifecycle (<see cref="InitAsync"/> / <see cref="AddAsync"/> /
+/// public lifecycle (optional <see cref="InitAsync"/> / <see cref="AddAsync"/> /
 /// <see cref="FlushAsync"/> / <see cref="CompleteAsync"/>) mirrors
-/// <see cref="BulkInserter{T}"/>; the connection-ownership, busy-slot and
-/// cancellation-drain semantics are identical.
+/// <see cref="BulkInserter{T}"/>: initialization happens lazily on first use, and
+/// the connection-ownership, busy-slot and cancellation-drain semantics are
+/// identical.
 /// </para>
 /// <para>
 /// When <see cref="BulkInsertOptions.ColumnTypes"/> covers every column being
@@ -49,6 +50,10 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
     private bool _completeStarted;
     private bool _disposed;
     private bool _slotClaimed;
+    // When true, this inserter owns the connection's lifetime and disposes it in
+    // DisposeAsync (returning it to the pool). Set only for pooled inserters
+    // (DataSource.CreateBulkInserterAsync); false for the public constructors.
+    private bool _ownsConnection;
     private int _totalRowsInserted;
     private bool _usedCachedSchema;
     private SchemaKey _schemaCacheKey;
@@ -170,6 +175,14 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
     public int BufferedCount => _bufferedRows;
 
     /// <summary>
+    /// Transfers ownership of the underlying connection to this inserter, so that
+    /// <see cref="DisposeAsync"/> disposes it (returning it to the pool). Called by
+    /// the pooled <c>DataSource.CreateBulkInserterAsync</c> factory; the public
+    /// constructors leave the caller-owned connection alone.
+    /// </summary>
+    internal void OwnConnection() => _ownsConnection = true;
+
+    /// <summary>
     /// Suppresses the dispose-time "unflushed rows" failure for callers that
     /// already know the wire is being torn down (e.g. cancellation).
     /// </summary>
@@ -216,13 +229,27 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
 
     /// <summary>
     /// Initializes the bulk inserter by sending the INSERT query and resolving the schema.
+    /// Calling this is optional: the inserter initializes itself lazily on first use
+    /// (<see cref="AddAsync"/> and the other add/flush methods). Call it explicitly to
+    /// surface table/schema errors eagerly, before any rows are produced.
+    /// Idempotent — calling it on an already-initialized inserter is a no-op.
     /// </summary>
     public async Task InitAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_initialized)
-            throw new InvalidOperationException("DynamicBulkInserter is already initialized.");
+            return;
 
+        await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The initialization core shared by <see cref="InitAsync"/> and the lazy first-use
+    /// path in the add/flush methods. On failure <c>_initialized</c> stays false and the
+    /// busy slot is released, so a subsequent call may retry initialization.
+    /// </summary>
+    private async Task EnsureInitializedAsync(CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
 
         // Validate caller-supplied column types BEFORE any wire activity. Partial
@@ -290,7 +317,13 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
         }
         catch (OperationCanceledException) when (_connection.WireIndeterminate)
         {
-            Abort();
+            // Do NOT call Abort() here. Cancellation *during initialization*
+            // (before _initialized flips) must leave the inserter retryable —
+            // that is the documented lazy-init contract, and the next
+            // AddAsync/InitAsync re-attempts init. Abort() sets _completeStarted,
+            // which would make every subsequent AddAsync throw "cannot accept
+            // more rows after a cancelled or failed CompleteAsync" instead. The
+            // buffer is provably empty pre-init, so there is nothing to clear.
             await _connection.DrainAfterCancellationAsync();
             ReleaseSlotIfClaimed();
             throw;
@@ -381,8 +414,6 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
     public async ValueTask AddAsync(object?[] row, CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_initialized)
-            throw new InvalidOperationException("DynamicBulkInserter must be initialized before adding rows.");
         if (_completed)
             throw new InvalidOperationException("DynamicBulkInserter has been completed and cannot accept more rows.");
         if (_completeStarted)
@@ -390,11 +421,20 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
                 "DynamicBulkInserter cannot accept more rows after a cancelled or failed CompleteAsync. " +
                 "Create a new DynamicBulkInserter to retry.");
 
+        // Row validation runs BEFORE lazy init — a malformed row is a caller
+        // bug and must not open a wire INSERT.
         ArgumentNullException.ThrowIfNull(row);
         if (row.Length != _columnNames.Length)
             throw new ArgumentException(
                 $"Row arity mismatch: expected {_columnNames.Length} values to match column count, but got {row.Length}.",
                 nameof(row));
+
+        // Lazy init MUST run before ObserveCancellationAsync: pre-init there is
+        // no query on the wire, so a cancelled token must be a plain throw
+        // (EnsureInitializedAsync's entry check handles it) — Observe's
+        // Cancel-packet-plus-drain would poison an idle wire.
+        if (!_initialized)
+            await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
 
@@ -420,14 +460,16 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(rows);
-        if (!_initialized)
-            throw new InvalidOperationException("DynamicBulkInserter must be initialized before adding rows.");
         if (_completed)
             throw new InvalidOperationException("DynamicBulkInserter has been completed and cannot accept more rows.");
         if (_completeStarted)
             throw new InvalidOperationException(
                 "DynamicBulkInserter cannot accept more rows after a cancelled or failed CompleteAsync. " +
                 "Create a new DynamicBulkInserter to retry.");
+
+        // Lazy init before ObserveCancellationAsync — ordering rationale in AddAsync.
+        if (!_initialized)
+            await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
 
@@ -444,14 +486,16 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(rows);
-        if (!_initialized)
-            throw new InvalidOperationException("DynamicBulkInserter must be initialized before adding rows.");
         if (_completed)
             throw new InvalidOperationException("DynamicBulkInserter has been completed and cannot accept more rows.");
         if (_completeStarted)
             throw new InvalidOperationException(
                 "DynamicBulkInserter cannot accept more rows after a cancelled or failed CompleteAsync. " +
                 "Create a new DynamicBulkInserter to retry.");
+
+        // Lazy init before ObserveCancellationAsync — ordering rationale in AddAsync.
+        if (!_initialized)
+            await EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
 
@@ -469,7 +513,16 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_initialized)
-            throw new InvalidOperationException("DynamicBulkInserter must be initialized before flushing.");
+        {
+            // Never initialized: nothing is on the wire, so there is nothing to
+            // flush. The Add methods always initialize before buffering a row, so
+            // an un-initialized inserter's buffer is provably empty — assert that
+            // invariant rather than carry a dead "initialize then flush" path.
+            cancellationToken.ThrowIfCancellationRequested();
+            Debug.Assert(_bufferedRows == 0,
+                "Un-initialized DynamicBulkInserter must have an empty buffer (Add initializes before buffering).");
+            return;
+        }
 
         await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
 
@@ -538,10 +591,20 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
     public async Task CompleteAsync(CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        if (!_initialized)
-            throw new InvalidOperationException("DynamicBulkInserter must be initialized before completing.");
         if (_completed || _completeStarted)
             return;
+        if (!_initialized)
+        {
+            // Never initialized: no INSERT was sent, so there is nothing to
+            // flush or terminate — the server was never contacted (no table
+            // validation happens on this path). Mark completed so a later Add
+            // throws the standard "has been completed" error instead of lazily
+            // opening a fresh INSERT after the caller believes this insert is
+            // finished.
+            cancellationToken.ThrowIfCancellationRequested();
+            _completed = true;
+            return;
+        }
 
         await ObserveCancellationAsync(cancellationToken).ConfigureAwait(false);
 
@@ -635,6 +698,13 @@ public sealed class DynamicBulkInserter : IAsyncDisposable
             ReturnPooledArrays();
             _bufferedRows = 0;
             ReleaseSlotIfClaimed();
+            // Pooled inserters own the connection: disposing it returns it to the
+            // pool instead of leaking it as permanently "busy". Best-effort.
+            if (_ownsConnection)
+            {
+                try { await _connection.DisposeAsync().ConfigureAwait(false); }
+                catch { /* pool-return best-effort */ }
+            }
         }
     }
 

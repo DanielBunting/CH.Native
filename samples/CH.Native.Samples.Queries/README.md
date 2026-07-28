@@ -39,10 +39,13 @@ docker run -d --rm -p 9000:9000 --name ch-sample \
 | `linq-sample` | Approximate analytics over 100k events + custom query id for tracing | `Table<T>(name).Sample(0.1).WithQueryId("rev-rollup-…")` |
 | `adonet` | Standard-tooling-compatible read flow | `ClickHouseDbConnection` / `ClickHouseDbCommand` / `DbDataReader` with `DbParameter` |
 | `dapper` | App-style read — `IN @ids` arrays, snake_case → PascalCase | `dbConnection.QueryAsync<T>(sql, params)` after `ClickHouseDapperIntegration.Register()` |
+| `dapper-di` | Same read flow resolved through the DI container | `AddClickHouse(...)` service registration + Dapper over an injected pooled connection |
 | `pooled` | Service code — 8 concurrent reads through a shared pool | `dataSource.Table<T>(name)` + rented `connection.QueryAsync<T>`; pool stats |
 | `resilient` | Multi-host failover with retry policy | `ResilientConnection` over `ClickHouseConnectionSettingsBuilder.WithServers(...).WithResilience(...)` |
 | `progress` | Long-running scan with progress reporting and cancellation | `IProgress<QueryProgress>` + `CancellationToken` — graceful mid-query cancel |
 | `log-analytics` | Oncall log dashboard — volume by level, latency by service, error rate by hour, top slowest | `connection.QueryAsync(sql)` → `IAsyncEnumerable<ClickHouseRow>` over a partitioned `MergeTree` log table |
+| `map` | Reading `Map(K, V)` columns | `Dictionary<K,V>` (last-wins) vs `ClickHouseMap<K,V>` (lossless order + duplicates) on the reader side |
+| `aggregate-function` | `AggregatingMergeTree` states — reading finalized aggregate values | `finalizeAggregation()` / `-Merge` over `AggregateFunction(...)` columns; `SimpleAggregateFunction` reads as plain values |
 
 ## Picking a path
 

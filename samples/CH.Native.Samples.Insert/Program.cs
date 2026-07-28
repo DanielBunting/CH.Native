@@ -53,7 +53,7 @@ static void PrintUsage()
             collection   connection.Table<T>(name).InsertAsync(IEnumerable<T>)
             async        connection.Table<T>(name).InsertAsync(IAsyncEnumerable<T>)
             oneshot      connection.BulkInsertAsync<T>(name, rows, ...)
-            long-lived   connection.CreateBulkInserter<T>(...) — Init/Add/Complete
+            long-lived   connection.CreateBulkInserter<T>(...) — Add/Complete
             dynamic      DynamicBulkInserter — POCO-less, object?[] rows
             pooled       dataSource.Table<T>(name).InsertAsync(rows)
             parallel     dataSource.BulkInsertAsync(...) / ParallelBulkInserter<T> — fan out across N pipes

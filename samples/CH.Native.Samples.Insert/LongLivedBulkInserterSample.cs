@@ -6,13 +6,16 @@ using CH.Native.Mapping;
 namespace CH.Native.Samples.Insert;
 
 /// <summary>
-/// <c>BulkInserter&lt;T&gt;</c> — explicit Init / Add / Complete lifecycle. Models a
+/// <c>BulkInserter&lt;T&gt;</c> — explicit Add / Complete lifecycle. Models a
 /// long-running ingestion process that holds the wire across many flushes,
 /// amortising the INSERT handshake.
 /// </summary>
 /// <remarks>
 /// Pick this when rows arrive over time and you want to keep one INSERT context
-/// open across many batches. <c>AddAsync</c> auto-flushes when the in-memory
+/// open across many batches. The inserter initializes itself on the first
+/// <c>AddAsync</c> — no <c>InitAsync</c> call is needed (call it explicitly only
+/// to surface table/schema errors before the row source starts producing).
+/// <c>AddAsync</c> auto-flushes when the in-memory
 /// buffer reaches <c>BatchSize</c>; you can also call <c>FlushAsync</c> explicitly.
 /// <c>CompleteAsync</c> sends the empty terminator block that finalises the INSERT
 /// — without it the rows in the unflushed buffer are lost (DisposeAsync surfaces
@@ -53,8 +56,6 @@ internal static class LongLivedBulkInserterSample
             await using var inserter = connection.CreateBulkInserter<LogLine>(
                 tableName,
                 new BulkInsertOptions { BatchSize = batchSize });
-            await inserter.InitAsync();
-
             // Simulate batches arriving over time. AddAsync auto-flushes at BatchSize,
             // so each iteration ends with a single network flush. The wire stays
             // open across iterations — only one INSERT handshake total.
