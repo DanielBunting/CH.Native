@@ -202,6 +202,103 @@ public class LowCardinalityColumnReaderTests
     }
 
     [Fact]
+    public void NullableValue_ReadPrefix_DelegatesToInnerVersionCheck()
+    {
+        // The reader owns no frame parsing of its own — ReadPrefix must reach the
+        // inner LowCardinality reader's version gate, or an unknown
+        // KeysSerializationVersion would be accepted and misparsed downstream.
+        var bytes = new byte[8];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes, 99);
+        var bad = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+        var sut = new LowCardinalityNullableColumnReader<long>(new Int64ColumnReader());
+
+        // ProtocolReader is a ref struct, so the assertion can't capture it in a
+        // lambda — catch explicitly, as the other tests here do.
+        InvalidDataException? caught = null;
+        try { sut.ReadPrefix(ref bad); }
+        catch (InvalidDataException ex) { caught = ex; }
+        Assert.NotNull(caught);
+
+        // Version 1 is accepted and consumes exactly the 8-byte prefix.
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bytes, 1);
+        var good = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+        sut.ReadPrefix(ref good);
+        Assert.Equal(0, good.Remaining);
+    }
+
+    [Fact]
+    public void NullableValue_ReadValue_ReturnsFirstRow()
+    {
+        // ReadValue is the single-row entry point (composite element readers that
+        // walk row-at-a-time use it); it must agree with the bulk path on both a
+        // present value and the index-0 null sentinel.
+        var sut = new LowCardinalityNullableColumnReader<long>(new Int64ColumnReader());
+
+        var present = new ProtocolReader(new ReadOnlySequence<byte>(
+            BuildLcInt64Column(new long[] { 0, 42 }, new[] { 1 })));
+        Assert.Equal(42L, sut.ReadValue(ref present));
+
+        var absent = new ProtocolReader(new ReadOnlySequence<byte>(
+            BuildLcInt64Column(new long[] { 0, 42 }, new[] { 0 })));
+        Assert.Null(sut.ReadValue(ref absent));
+    }
+
+    [Fact]
+    public void NullableValue_ZeroRows_ReturnsEmptyWithoutReadingBytes()
+    {
+        var sut = new LowCardinalityNullableColumnReader<long>(new Int64ColumnReader());
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(Array.Empty<byte>()));
+
+        using var column = sut.ReadTypedColumn(ref reader, 0);
+
+        Assert.Equal(0, column.Count);
+        Assert.Equal(0, reader.Remaining);
+    }
+
+    [Fact]
+    public void NullableValue_NullResultPool_Rejected()
+    {
+        Assert.Throws<ArgumentNullException>(() =>
+            new LowCardinalityNullableColumnReader<long>(new Int64ColumnReader(), resultPool: null!));
+    }
+
+    /// <summary>
+    /// Pool that records rent/return counts so a leak on the exception path is
+    /// observable. Hands back fresh arrays so nothing reaches ArrayPool.Shared's
+    /// foreign-buffer ledger.
+    /// </summary>
+    private sealed class CountingPool<T> : ArrayPool<T>
+    {
+        public int Rented;
+        public int Returned;
+        public override T[] Rent(int minimumLength) { Rented++; return new T[minimumLength]; }
+        public override void Return(T[] array, bool clearArray = false) => Returned++;
+    }
+
+    [Fact]
+    public void NullableValue_ThrowDuringProjection_ReturnsRentedBufferToPool()
+    {
+        // The result buffer is rented BEFORE the projection loop. A malformed
+        // dictionary index throws mid-loop; without the catch/Return the rental
+        // is silently dropped and the pool's ledger drifts — a leak that only
+        // shows up as degraded throughput much later, never as a failing read.
+        var pool = new CountingPool<long?>();
+        var sut = new LowCardinalityNullableColumnReader<long>(new Int64ColumnReader(), pool);
+
+        // dict has 2 entries; row 1 references index 5.
+        var bytes = BuildLcInt64Column(new long[] { 0, 42 }, new[] { 1, 5 });
+        var reader = new ProtocolReader(new ReadOnlySequence<byte>(bytes));
+
+        InvalidDataException? caught = null;
+        try { _ = sut.ReadTypedColumn(ref reader, 2); }
+        catch (InvalidDataException ex) { caught = ex; }
+        Assert.NotNull(caught);
+
+        Assert.Equal(1, pool.Rented);
+        Assert.Equal(1, pool.Returned);
+    }
+
+    [Fact]
     public void NullableValue_Enum8_PreservesNulls()
     {
         // Enum8 reads as sbyte, so LC(Nullable(Enum8)) → sbyte?.

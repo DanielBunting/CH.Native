@@ -372,4 +372,168 @@ public class ConnectionBusyCheckTests
     {
         public long Value { get; set; }
     }
+
+    // ── ExitBusyResolve owner gates ─────────────────────────────────────────
+    // The release side of the same gate the tests above claim. Two early returns
+    // make a STALE resolve a no-op instead of letting it release a SUCCESSOR
+    // conversation's slot. The window is real and deliberate: a data reader
+    // releases the slot at end-of-stream (MarkCompleted) precisely so the next
+    // query can start before the reader is disposed, so the reader's dispose
+    // safety-net fires with the OLD conversation's identity while a NEW
+    // conversation holds the slot. Without the gates that late call releases the
+    // successor's slot — and worse, evaluates the successor's mid-flight
+    // evidence through the pessimistic branch, marking a healthy connection
+    // protocol-fatal.
+    //
+    // Two gates, because two things go stale independently: the ID (a different
+    // owner holds the slot) and the EPOCH (the same id string holds the slot but
+    // it's a different conversation). Caller-supplied query ids are legally
+    // reusable, so id equality alone cannot prove ownership — the epoch gate is
+    // the one an id-only implementation silently fails.
+    //
+    // Unlike the tests above these use the real internal API rather than
+    // reflected state, and need no server: a never-opened connection keeps the
+    // pessimistic branch benign (it is gated on _isOpen), which isolates the
+    // gates from wire evidence. The wire-evidence half is covered end-to-end in
+    // CH.Native.SystemTests/Streams/ConversationResolveEvidenceTests.
+
+    private static ClickHouseConnection NewConnection()
+        => new("Host=127.0.0.1;Port=9000;Database=default;User=default;Password=");
+
+    /// <summary>
+    /// The slot is not directly observable, so probe it the way a real concurrent
+    /// caller would: a second claim throws only while the slot is still held.
+    /// </summary>
+    private static bool SlotIsHeld(ClickHouseConnection conn)
+    {
+        try
+        {
+            conn.EnterBusyForBulkInsert("probe");
+        }
+        catch (ClickHouseConnectionBusyException)
+        {
+            return true;
+        }
+
+        // The probe claimed the slot — undo so the test can keep observing.
+        conn.ExitBusyResolve("probe");
+        return false;
+    }
+
+    [Fact]
+    public void MismatchedOwnerId_DoesNotReleaseSuccessorsSlot()
+    {
+        using var conn = NewConnection();
+        conn.EnterBusyForBulkInsert("owner-A");
+
+        // A stale owner-B resolve must not touch owner-A's slot.
+        conn.ExitBusyResolve("owner-B");
+
+        Assert.True(SlotIsHeld(conn), "a foreign owner id must not release the slot");
+    }
+
+    [Fact]
+    public void MismatchedEpoch_SameOwnerId_DoesNotReleaseSuccessorsSlot()
+    {
+        // THE case the epoch exists for. Both conversations use the identical
+        // caller-supplied query id, so the id gate above passes; only the epoch
+        // distinguishes them.
+        using var conn = NewConnection();
+
+        var firstEpoch = conn.EnterBusyForBulkInsert("reused-id");
+        conn.ExitBusyResolve("reused-id", firstEpoch);          // first conversation ends
+
+        var secondEpoch = conn.EnterBusyForBulkInsert("reused-id"); // successor claims the slot
+        Assert.NotEqual(firstEpoch, secondEpoch);
+
+        // The first conversation's late dispose safety-net fires here.
+        conn.ExitBusyResolve("reused-id", firstEpoch);
+
+        Assert.True(SlotIsHeld(conn),
+            "a stale epoch must not release a successor that reused the same query id");
+
+        // And the rightful owner can still resolve normally afterwards.
+        conn.ExitBusyResolve("reused-id", secondEpoch);
+        Assert.False(SlotIsHeld(conn));
+    }
+
+    [Fact]
+    public void MatchingIdAndEpoch_ReleasesSlot()
+    {
+        using var conn = NewConnection();
+        var epoch = conn.EnterBusyForBulkInsert("owner-A");
+
+        conn.ExitBusyResolve("owner-A", epoch);
+
+        Assert.False(SlotIsHeld(conn));
+    }
+
+    [Fact]
+    public void NullEpoch_SkipsTheEpochGate()
+    {
+        // The non-epoch overload is what short-lived callers use — passing no
+        // epoch must not become an accidental "never matches".
+        using var conn = NewConnection();
+        conn.EnterBusyForBulkInsert("owner-A");
+
+        conn.ExitBusyResolve("owner-A", ownerEpoch: null);
+
+        Assert.False(SlotIsHeld(conn));
+    }
+
+    [Fact]
+    public void NullOwnerId_SkipsTheIdGate()
+    {
+        using var conn = NewConnection();
+        conn.EnterBusyForBulkInsert("owner-A");
+
+        conn.ExitBusyResolve(ownerQueryId: null);
+
+        Assert.False(SlotIsHeld(conn));
+    }
+
+    [Fact]
+    public void DoubleResolve_IsIdempotent()
+    {
+        // Both the natural-completion path and the dispose safety-net call this;
+        // the second must be a no-op rather than releasing whatever holds the slot.
+        using var conn = NewConnection();
+        var epoch = conn.EnterBusyForBulkInsert("owner-A");
+
+        conn.ExitBusyResolve("owner-A", epoch);
+        conn.ExitBusyResolve("owner-A", epoch);
+
+        Assert.False(SlotIsHeld(conn));
+    }
+
+    [Fact]
+    public void EpochIsMonotonicAcrossConversations()
+    {
+        // The gates are only as good as the epoch being unique per conversation.
+        using var conn = NewConnection();
+
+        var epochs = new List<long>();
+        for (int i = 0; i < 5; i++)
+        {
+            var e = conn.EnterBusyForBulkInsert("id");
+            epochs.Add(e);
+            conn.ExitBusyResolve("id", e);
+        }
+
+        Assert.Equal(epochs.Count, epochs.Distinct().Count());
+        Assert.Equal(epochs.OrderBy(x => x).ToList(), epochs);
+    }
+
+    [Fact]
+    public void NotOpenConnection_ResolveDoesNotConvict()
+    {
+        // The pessimistic branch is gated on _isOpen so a connection that never
+        // reached the wire (failed handshake, never opened) resolves benignly.
+        using var conn = NewConnection();
+        var epoch = conn.EnterBusyForBulkInsert("owner-A");
+
+        conn.ExitBusyResolve("owner-A", epoch);
+
+        Assert.False(conn.WireIndeterminate);
+    }
 }

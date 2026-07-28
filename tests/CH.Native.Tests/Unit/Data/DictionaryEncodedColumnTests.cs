@@ -154,6 +154,76 @@ public class DictionaryEncodedColumnTests
         Assert.Equal(0L, column.GetValue(0));
     }
 
+    /// <summary>
+    /// GetValue and IsNull are separate overrides from the typed indexer (added so a
+    /// value-type NULL isn't masked by the boxed default(T)), so they carry their own
+    /// copies of the disposed / bounds guards. Untested, a missing guard there means a
+    /// use-after-Dispose reads a returned pool buffer — another consumer's data,
+    /// silently, with no exception.
+    /// </summary>
+    [Fact]
+    public void GetValueAndIsNull_AfterDispose_ThrowObjectDisposed()
+    {
+        var indices = ArrayPool<int>.Shared.Rent(1);
+        indices[0] = 0;
+        var column = new DictionaryEncodedColumn<long>(
+            new long[] { 7L },
+            indices,
+            count: 1,
+            indicesPool: ArrayPool<int>.Shared);
+
+        column.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => column.GetValue(0));
+        Assert.Throws<ObjectDisposedException>(() => column.IsNull(0));
+        Assert.Throws<ObjectDisposedException>(() => _ = column[0]);
+
+        // Dispose is idempotent — a second call must not double-return the rental.
+        column.Dispose();
+    }
+
+    [Fact]
+    public void GetValueAndIsNull_OutOfRange_ThrowArgumentOutOfRange()
+    {
+        var indices = ArrayPool<int>.Shared.Rent(2);
+        indices[0] = 0;
+
+        using var column = new DictionaryEncodedColumn<long>(
+            new long[] { 7L },
+            indices,
+            // count is 1 even though the rental is 2 — the guard must key off count,
+            // not the (over-sized) pooled array's length, or a read past the row
+            // count returns pool slop as if it were data.
+            count: 1,
+            indicesPool: ArrayPool<int>.Shared);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => column.GetValue(1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => column.GetValue(-1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => column.IsNull(1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => column.IsNull(-1));
+    }
+
+    [Fact]
+    public void AdvancedConsumerSurface_ExposesDictionaryAndIndices()
+    {
+        var indices = ArrayPool<int>.Shared.Rent(4);
+        indices[0] = 1;
+        indices[1] = 0;
+
+        using var column = new DictionaryEncodedColumn<long>(
+            new long[] { 7L, 9L },
+            indices,
+            count: 2,
+            indicesPool: ArrayPool<int>.Shared);
+
+        Assert.Equal(typeof(long), column.ElementType);
+        Assert.Equal(2, column.Count);
+        Assert.Equal(2, column.DictionarySize);
+        Assert.Equal(new long[] { 7L, 9L }, column.Dictionary.ToArray());
+        // Indices is sliced to Count, not to the pooled array's length.
+        Assert.Equal(new[] { 1, 0 }, column.Indices.ToArray());
+    }
+
     [Fact]
     public void Indexer_OutOfRangeCount_ThrowsArgumentOutOfRange()
     {
