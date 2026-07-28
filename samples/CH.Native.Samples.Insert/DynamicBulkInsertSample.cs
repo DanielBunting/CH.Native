@@ -6,7 +6,7 @@ namespace CH.Native.Samples.Insert;
 
 /// <summary>
 /// <c>DynamicBulkInserter</c> — POCO-less bulk insert. Demonstrates three flavors:
-/// (1) one-shot, (2) granular Init/Add/Complete, (3) pre-supplied <c>ColumnTypes</c>
+/// (1) one-shot, (2) granular Add/Complete, (3) pre-supplied <c>ColumnTypes</c>
 /// to skip the server schema-probe round-trip.
 /// </summary>
 /// <remarks>
